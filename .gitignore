@@ -1,0 +1,11 @@
+.clojure/
+.nrepl-port
+target/
+.clj-kondo/
+.lsp/
+.idea/
+*.iml
+
+# Env
+.env
+.env.local
