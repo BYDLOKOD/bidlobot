@@ -28,20 +28,20 @@
 
 (deftest put-new-profile-test
   (testing "put a new profile document"
-    (let [doc    {:xt/id            :profile/294817365-(-1001987654321)
+    (let [doc    {:xt/id            :profile/294817365-1001987654321
                   :profile/user-id  294817365
                   :profile/chat-id  -1001987654321
                   :profile/username "veschin"
                   :profile/salary   "150k USD"}
           result (sut/put-doc *node* doc)]
       (is (:tx-committed? result))
-      (let [retrieved (sut/get-doc *node* :profile/294817365-(-1001987654321))]
+      (let [retrieved (sut/get-doc *node* :profile/294817365-1001987654321)]
         (is (= "veschin" (:profile/username retrieved)))
         (is (= "150k USD" (:profile/salary retrieved)))))))
 
 (deftest put-user-stats-test
   (testing "put user-stats document"
-    (let [doc    {:xt/id                    :user-stats/294817365-(-1001987654321)
+    (let [doc    {:xt/id                    :user-stats/294817365-1001987654321
                   :user-stats/user-id       294817365
                   :user-stats/chat-id       -1001987654321
                   :user-stats/message-count 1}
@@ -63,12 +63,12 @@
 
 (deftest put-overwrites-existing-test
   (testing "put overwrites existing document (last write wins)"
-    (sut/put-doc *node* {:xt/id           :profile/294817365-(-1001987654321)
+    (sut/put-doc *node* {:xt/id           :profile/294817365-1001987654321
                          :profile/salary  "150k USD"})
-    (let [result (sut/put-doc *node* {:xt/id           :profile/294817365-(-1001987654321)
+    (let [result (sut/put-doc *node* {:xt/id           :profile/294817365-1001987654321
                                       :profile/salary  "200k USD"})]
       (is (:tx-committed? result))
-      (let [doc (sut/get-doc *node* :profile/294817365-(-1001987654321))]
+      (let [doc (sut/get-doc *node* :profile/294817365-1001987654321)]
         (is (= "200k USD" (:profile/salary doc)))))))
 
 (deftest put-on-closed-node-test
@@ -81,7 +81,7 @@
 
 (deftest concurrent-puts-test
   (testing "concurrent puts to same :xt/id - last write wins"
-    (let [id  :profile/294817365-(-1001987654321)
+    (let [id  :profile/294817365-1001987654321
           f1  (future (sut/put-doc *node* {:xt/id id :profile/salary "150k USD"}))
           f2  (future (sut/put-doc *node* {:xt/id id :profile/salary "200k USD"}))]
       (is (:tx-committed? @f1))
@@ -99,16 +99,16 @@
 
 (deftest put-special-characters-test
   (testing "put document with special characters in username"
-    (let [result (sut/put-doc *node* {:xt/id            :profile/294817365-(-1001987654321)
+    (let [result (sut/put-doc *node* {:xt/id            :profile/294817365-1001987654321
                                       :profile/username "user.name-test_123"})]
       (is (:tx-committed? result))
-      (let [doc (sut/get-doc *node* :profile/294817365-(-1001987654321))]
+      (let [doc (sut/get-doc *node* :profile/294817365-1001987654321)]
         (is (= "user.name-test_123" (:profile/username doc)))))))
 
 (deftest put-large-bio-test
   (testing "put document with large bio field"
     (let [bio    (apply str (repeat 500 "A"))
-          result (sut/put-doc *node* {:xt/id        :profile/111222333-(-1001987654321)
+          result (sut/put-doc *node* {:xt/id        :profile/111222333-1001987654321
                                       :profile/bio  bio})]
       (is (:tx-committed? result)))))
 
@@ -118,21 +118,21 @@
 
 (deftest get-existing-profile-test
   (testing "get existing profile document"
-    (sut/put-doc *node* {:xt/id              :profile/294817365-(-1001987654321)
+    (sut/put-doc *node* {:xt/id              :profile/294817365-1001987654321
                          :profile/user-id    294817365
                          :profile/username   "veschin"
                          :profile/salary     "150k USD"})
-    (let [doc (sut/get-doc *node* :profile/294817365-(-1001987654321))]
+    (let [doc (sut/get-doc *node* :profile/294817365-1001987654321)]
       (is (map? doc))
       (is (= "veschin" (:profile/username doc)))
       (is (= "150k USD" (:profile/salary doc))))))
 
 (deftest get-nonexistent-document-test
   (testing "get non-existent document returns nil"
-    (is (nil? (sut/get-doc *node* :profile/999999999-(-1001987654321)))))
+    (is (nil? (sut/get-doc *node* :profile/999999999-1001987654321))))
 
   (testing "get non-existent document with arbitrary ID returns nil"
-    (is (nil? (sut/get-doc *node* :profile/000000000-(-1009999999999))))))
+    (is (nil? (sut/get-doc *node* :profile/000000000-1009999999999)))))
 
 (deftest get-warning-by-uuid-test
   (testing "get warning document by UUID"
@@ -147,18 +147,18 @@
 
 (deftest delete-existing-document-test
   (testing "delete existing document"
-    (sut/put-doc *node* {:xt/id :profile/294817365-(-1001987654321) :profile/salary "150k"})
-    (let [result (sut/delete-doc *node* :profile/294817365-(-1001987654321))]
+    (sut/put-doc *node* {:xt/id :profile/294817365-1001987654321 :profile/salary "150k"})
+    (let [result (sut/delete-doc *node* :profile/294817365-1001987654321)]
       (is (:tx-committed? result))
-      (is (nil? (sut/get-doc *node* :profile/294817365-(-1001987654321)))))))
+      (is (nil? (sut/get-doc *node* :profile/294817365-1001987654321))))))
 
 (deftest delete-nonexistent-document-test
   (testing "delete non-existent document is a no-op with tx receipt"
-    (let [result (sut/delete-doc *node* :profile/000000000-(-1001987654321))]
+    (let [result (sut/delete-doc *node* :profile/000000000-1001987654321)]
       (is (:tx-committed? result))))
 
   (testing "delete non-existent document with arbitrary ID returns tx receipt"
-    (let [result (sut/delete-doc *node* :profile/nonexistent-(-1001987654321))]
+    (let [result (sut/delete-doc *node* :profile/nonexistent-1001987654321)]
       (is (:tx-committed? result)))))
 
 ;; ============================================================
@@ -167,13 +167,13 @@
 
 (deftest query-all-profiles-in-chat-test
   (testing "query all profiles in a chat"
-    (doseq [doc [{:xt/id              :profile/294817365-(-1001987654321)
+    (doseq [doc [{:xt/id              :profile/294817365-1001987654321
                   :profile/chat-id    -1001987654321
                   :profile/username   "veschin"}
-                 {:xt/id              :profile/518293746-(-1001987654321)
+                 {:xt/id              :profile/518293746-1001987654321
                   :profile/chat-id    -1001987654321
                   :profile/username   "anna_dev"}
-                 {:xt/id              :profile/738192045-(-1001987654321)
+                 {:xt/id              :profile/738192045-1001987654321
                   :profile/chat-id    -1001987654321
                   :profile/username   "max_clj"}]]
       (sut/put-doc *node* doc))
@@ -190,29 +190,29 @@
 (deftest query-top-users-by-message-count-test
   (testing "query top users by message count"
     ;; Insert profiles
-    (doseq [doc [{:xt/id            :profile/294817365-(-1001987654321)
+    (doseq [doc [{:xt/id            :profile/294817365-1001987654321
                   :profile/user-id  294817365
                   :profile/chat-id  -1001987654321
                   :profile/username "veschin"}
-                 {:xt/id            :profile/518293746-(-1001987654321)
+                 {:xt/id            :profile/518293746-1001987654321
                   :profile/user-id  518293746
                   :profile/chat-id  -1001987654321
                   :profile/username "anna_dev"}
-                 {:xt/id            :profile/738192045-(-1001987654321)
+                 {:xt/id            :profile/738192045-1001987654321
                   :profile/user-id  738192045
                   :profile/chat-id  -1001987654321
                   :profile/username "max_clj"}]]
       (sut/put-doc *node* doc))
     ;; Insert user stats
-    (doseq [doc [{:xt/id                    :user-stats/294817365-(-1001987654321)
+    (doseq [doc [{:xt/id                    :user-stats/294817365-1001987654321
                   :user-stats/user-id       294817365
                   :user-stats/chat-id       -1001987654321
                   :user-stats/message-count 4827}
-                 {:xt/id                    :user-stats/518293746-(-1001987654321)
+                 {:xt/id                    :user-stats/518293746-1001987654321
                   :user-stats/user-id       518293746
                   :user-stats/chat-id       -1001987654321
                   :user-stats/message-count 1293}
-                 {:xt/id                    :user-stats/738192045-(-1001987654321)
+                 {:xt/id                    :user-stats/738192045-1001987654321
                   :user-stats/user-id       738192045
                   :user-stats/chat-id       -1001987654321
                   :user-stats/message-count 312}]]
@@ -282,10 +282,10 @@
         (is (some? (sut/get-doc *node* id))))
 
       ;; ID convention examples
-      :profile/294817365-(-1001987654321)
-      :user-stats/294817365-(-1001987654321)
-      :chat-stats/(-1001987654321)
-      :admin/294817365-(-1001987654321)
+      :profile/294817365-1001987654321
+      :user-stats/294817365-1001987654321
+      :chat-stats/1001987654321
+      :admin/294817365-1001987654321
       :warn/a1b2c3d4-e5f6-7890-abcd-ef1234567890
-      :mute/738192045-(-1001987654321)
-      :ban/901827364-(-1001987654321))))
+      :mute/738192045-1001987654321
+      :ban/901827364-1001987654321)))
