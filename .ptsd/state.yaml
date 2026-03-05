@@ -1,51 +1,111 @@
 features:
   bot-lifecycle:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.371130586+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.371724622+03:00"
   chat-admin:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.377302713+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.377924813+03:00"
   chat-stats:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.376023025+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.376643111+03:00"
   form-fsm:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.373638864+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.374252628+03:00"
   i18n:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.369941832+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.370533554+03:00"
   profiles:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.374874357+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.375411825+03:00"
   query-lang:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.372377982+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.373026012+03:00"
   xtdb:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.368744331+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.369356252+03:00"
   youtube-summary:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.378542935+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.379129677+03:00"
   zen-loader:
-    stage: 
+    stage: seed
     hashes:
-      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+      prd: 527f85fff727a32ae32aa2c696292f65f316a66773ff274b2a8fe8fb2a4798fc
     scores:
+      prd:
+        score: 8
+        at: "2026-03-05T11:58:02.367405771+03:00"
+      seed:
+        score: 8
+        at: "2026-03-05T11:58:02.36809028+03:00"

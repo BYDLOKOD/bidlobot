@@ -1,1 +1,51 @@
-features: {}
+features:
+  bot-lifecycle:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  chat-admin:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  chat-stats:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  form-fsm:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  i18n:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  profiles:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  query-lang:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  xtdb:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  youtube-summary:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
+  zen-loader:
+    stage: seed
+    tests: absent
+    review: passed
+    issues: 0
