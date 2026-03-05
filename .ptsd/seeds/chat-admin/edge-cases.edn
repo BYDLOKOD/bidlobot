@@ -1,0 +1,104 @@
+;; chat-admin/edge-cases.edn
+;; Edge cases: self-warn, warn non-member, ban admin, bot not admin, private chat.
+
+{:description "Edge cases for chat admin moderation commands"
+
+ :chat-id -1001234567890
+
+ :self-warn
+ {:scenario "Admin tries to warn themselves"
+  :command "/warn @alexey_dev \"Testing\""
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :target {:user-id 111222333 :username "alexey_dev"}
+  :expected {:success false
+             :error :cannot-warn-self
+             :response "Cannot warn yourself."}}
+
+ :warn-non-member
+ {:scenario "Admin warns a user who is not in the chat"
+  :command "/warn @ghost_user \"Some reason\""
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :target {:user-id nil :username "ghost_user"}
+  :expected {:success false
+             :error :user-not-in-chat
+             :response "User @ghost_user is not in this chat."}}
+
+ :ban-admin
+ {:scenario "Admin tries to ban another admin"
+  :command "/ban @marina_fp \"Disagreement\""
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :target {:user-id 222333444 :username "marina_fp" :role :admin}
+  :expected {:success false
+             :error :cannot-ban-admin
+             :response "Cannot ban an admin. Remove admin rights first."}}
+
+ :ban-creator
+ {:scenario "Admin tries to ban the creator"
+  :command "/ban @alexey_dev \"Coup attempt\""
+  :issuer {:user-id 222333444 :username "marina_fp" :role :admin}
+  :target {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :expected {:success false
+             :error :cannot-ban-admin
+             :response "Cannot ban an admin. Remove admin rights first."}}
+
+ :bot-not-admin
+ {:scenario "Bot does not have admin rights in the chat"
+  :command "/mute @troublemaker42 1h"
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :bot-is-admin false
+  :expected {:success false
+             :error :bot-not-admin
+             :response "Bot needs admin rights with 'Restrict Members' permission to perform this action."}}
+
+ :admin-commands-in-private
+ {:scenario "Admin commands issued in private (DM) chat"
+  :commands ["/warn @someone \"reason\""
+             "/mute @someone 1h"
+             "/ban @someone \"reason\""
+             "/admin :add @someone"]
+  :chat {:id 111222333 :type "private"}
+  :expected {:success false
+             :error :groups-only
+             :response "Admin commands are only available in group chats."}}
+
+ :mute-already-muted
+ {:scenario "Muting a user who is already muted (should extend/update)"
+  :command "/mute @troublemaker42 2h"
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :target {:user-id 666777888 :username "troublemaker42"}
+  :existing-mute {:xt/id "mute/666777888--1001234567890"
+                  :mute/duration-seconds 3600
+                  :mute/expires-at #inst "2026-03-05T11:00:00.000Z"
+                  :mute/active true}
+  :expected {:success true
+             :action :mute
+             :note "Extends duration; previous mute overwritten"
+             :duration-seconds 7200
+             :response "@troublemaker42 muted for 2 hours."}}
+
+ :warn-bot
+ {:scenario "Admin tries to warn the bot itself"
+  :command "/warn @doxme_bot \"Bad bot\""
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :target {:user-id 987654321 :username "doxme_bot" :is-bot true}
+  :expected {:success false
+             :error :cannot-warn-bot
+             :response "Cannot warn a bot."}}
+
+ :remove-creator
+ {:scenario "Creator tries to remove themselves from admin list"
+  :command "/admin :remove @alexey_dev"
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :expected {:success false
+             :error :cannot-remove-creator
+             :response "Cannot remove the chat creator from admins."}}
+
+ :warn-no-reason
+ {:scenario "Admin warns without providing a reason"
+  :command "/warn @troublemaker42"
+  :issuer {:user-id 111222333 :username "alexey_dev" :role :creator}
+  :target {:user-id 666777888 :username "troublemaker42"}
+  :expected {:success true
+             :action :warn
+             :reason nil
+             :response "@troublemaker42 warned: No reason given (warning 1/3)"}}}

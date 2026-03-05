@@ -1,0 +1,118 @@
+;; chat-stats/edge-cases.edn
+;; Edge case scenarios for chat statistics: empty chat, private chat, bot messages.
+
+{:description "Edge cases for chat stats collection and reporting"
+
+ :empty-chat
+ {:scenario "New chat with no messages recorded yet"
+  :chat-stats nil
+  :user-stats []
+  :command "/stats"
+  :chat-id -1009876543210
+  :chat {:id -1009876543210
+         :title "New Empty Chat"
+         :type "supergroup"}
+  :expected-output "No activity yet in this chat."
+  :expected-top-output "No activity yet in this chat."}
+
+ :private-chat
+ {:scenario "/stats command issued in a private (DM) chat"
+  :update {:update_id 200001
+           :message {:message_id 9001
+                     :from {:id 111222333
+                            :is_bot false
+                            :first_name "Alexey"
+                            :username "alexey_dev"
+                            :language_code "ru"}
+                     :chat {:id 111222333
+                            :type "private"}
+                     :date 1772582400
+                     :text "/stats"}}
+  :expected-output "Stats are only available in group chats."}
+
+ :bot-messages
+ {:scenario "Messages from bots should not be counted"
+  :updates
+  [{:update {:update_id 200010
+             :message {:message_id 9010
+                       :from {:id 987654321
+                              :is_bot true
+                              :first_name "DoxMe Bot"
+                              :username "doxme_bot"}
+                       :chat {:id -1001234567890
+                              :title "Clojure Russia"
+                              :type "supergroup"}
+                       :date 1772583000
+                       :text "Profile saved successfully!"}}
+    :expected {:count? false
+               :reason :bot-message}}
+
+   {:update {:update_id 200011
+             :message {:message_id 9011
+                       :from {:id 136817688
+                              :is_bot true
+                              :first_name "Group Help"
+                              :username "GroupHelpBot"}
+                       :chat {:id -1001234567890
+                              :title "Clojure Russia"
+                              :type "supergroup"}
+                       :date 1772583060
+                       :text "Welcome! Please read the rules."}}
+    :expected {:count? false
+               :reason :bot-message}}]
+
+  :before-count 4237
+  :expected-after-count 4237}
+
+ :chat-fewer-than-10-users
+ {:scenario "Top list when chat has fewer than 10 users"
+  :chat-id -1001234567890
+  :total-users 5
+  :expected-top-count 5
+  :note "Should show all 5 users, not pad to 10"}
+
+ :single-user-chat
+ {:scenario "Chat with only one active user"
+  :chat-stats {:xt/id "chat-stats/-1005550001234"
+               :chat-stats/chat-id -1005550001234
+               :chat-stats/total-messages 42
+               :chat-stats/created-at #inst "2026-02-20T08:00:00.000Z"}
+  :user-stats [{:xt/id "user-stats/111222333--1005550001234"
+                :user-stats/user-id 111222333
+                :user-stats/chat-id -1005550001234
+                :user-stats/username "lonely_coder"
+                :user-stats/first-name "Solo"
+                :user-stats/message-count 42
+                :user-stats/first-seen #inst "2026-02-20T08:05:00.000Z"
+                :user-stats/last-seen #inst "2026-03-05T09:00:00.000Z"}]
+  :expected-overview
+  "Chat Statistics: Solo Dev Chat
+
+Total messages: 42
+Total users: 1
+Avg messages/user: 42
+Most active: @lonely_coder (42 messages)
+
+Stats since: Feb 20, 2026"}
+
+ :forwarded-message
+ {:scenario "Forwarded messages should still count (they are regular messages)"
+  :update {:update_id 200020
+           :message {:message_id 9020
+                     :from {:id 111222333
+                            :is_bot false
+                            :first_name "Alexey"
+                            :username "alexey_dev"
+                            :language_code "ru"}
+                     :chat {:id -1001234567890
+                            :title "Clojure Russia"
+                            :type "supergroup"}
+                     :date 1772583200
+                     :forward_from {:id 999888777
+                                    :first_name "External User"}
+                     :forward_date 1772400000
+                     :text "Check out this interesting article"}}
+  :expected {:count? true
+             :user-id 111222333
+             :chat-id -1001234567890
+             :note "Counts for the forwarder, not the original sender"}}}

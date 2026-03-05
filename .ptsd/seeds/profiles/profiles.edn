@@ -1,0 +1,68 @@
+;; profiles.edn
+;; Sample profile documents in XTDB format with :profile/ namespace.
+;; 4 users across 2 chats. Profile ID format: :profile/{user-id}-{chat-id}
+;; Fields: salary, stack, role, location (optional), bio (optional)
+
+[;; === Chat -100200300: Clojure community ===
+
+ {:xt/id :profile/111222-100200300
+  :profile/user-id 111222
+  :profile/chat-id -100200300
+  :profile/username "veschin"
+  :profile/salary "150k USD"
+  :profile/stack "Clojure, ClojureScript, Datomic"
+  :profile/role "Senior Engineer"
+  :profile/location "Berlin, UTC+1"
+  :profile/bio "Functional programming enthusiast. 10 years in Clojure. Open source contributor."
+  :profile/created-at #inst "2026-01-15T10:30:00Z"
+  :profile/updated-at #inst "2026-02-20T14:00:00Z"}
+
+ {:xt/id :profile/333444-100200300
+  :profile/user-id 333444
+  :profile/chat-id -100200300
+  :profile/username "alex_dev"
+  :profile/salary "120k EUR"
+  :profile/stack "TypeScript, React, Node.js"
+  :profile/role "Frontend Lead"
+  :profile/location "Amsterdam, UTC+1"
+  :profile/bio nil
+  :profile/created-at #inst "2026-01-20T09:00:00Z"
+  :profile/updated-at #inst "2026-01-20T09:00:00Z"}
+
+ {:xt/id :profile/555666-100200300
+  :profile/user-id 555666
+  :profile/chat-id -100200300
+  :profile/username "maria_fe"
+  :profile/salary "130k USD"
+  :profile/stack "Kotlin, Spring Boot, PostgreSQL"
+  :profile/role "Backend Developer"
+  :profile/location nil
+  :profile/bio "Building microservices at scale. Previously at Spotify."
+  :profile/created-at #inst "2026-02-01T11:45:00Z"
+  :profile/updated-at #inst "2026-02-01T11:45:00Z"}
+
+ ;; === Chat -100500600: DevOps community ===
+
+ {:xt/id :profile/111222-100500600
+  :profile/user-id 111222
+  :profile/chat-id -100500600
+  :profile/username "veschin"
+  :profile/salary "160k USD"
+  :profile/stack "Clojure, Terraform, Kubernetes"
+  :profile/role "Platform Engineer"
+  :profile/location "Berlin, UTC+1"
+  :profile/bio nil
+  :profile/created-at #inst "2026-02-10T08:00:00Z"
+  :profile/updated-at #inst "2026-02-10T08:00:00Z"}
+
+ {:xt/id :profile/777888-100500600
+  :profile/user-id 777888
+  :profile/chat-id -100500600
+  :profile/username "dmitry_ops"
+  :profile/salary "140k USD"
+  :profile/stack "Go, Docker, AWS, Terraform"
+  :profile/role "SRE"
+  :profile/location "Moscow, UTC+3"
+  :profile/bio "Site reliability engineer. Automate everything."
+  :profile/created-at #inst "2026-02-12T16:20:00Z"
+  :profile/updated-at #inst "2026-03-01T10:00:00Z"}]

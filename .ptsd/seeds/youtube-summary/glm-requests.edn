@@ -1,0 +1,90 @@
+;; youtube-summary/glm-requests.edn
+;; GLM (ChatGLM) API request/response pairs for video summarization.
+;; Endpoint: POST https://open.bigmodel.cn/api/paas/v4/chat/completions
+;; Auth: Authorization: Bearer {GLM_API_KEY}
+
+{:description "GLM API request/response pairs for YouTube video summarization"
+
+ :config
+ {:api-key "glm-test-key-abc123def456ghi789"
+  :base-url "https://open.bigmodel.cn/api/paas/v4"
+  :model "glm-4-flash"}
+
+ :successful-summary
+ {:video {:title "Rich Hickey - Simple Made Easy (Strange Loop 2011)"
+          :duration-seconds 2213
+          :video-id "LJ4d5CGN6bI"}
+
+  :transcript-snippet "So what I want to talk about today is sort of two words that we've been using interchangeably and I think that's really important that we not do that. The word simple and the word easy..."
+
+  :request
+  {:model "glm-4-flash"
+   :messages
+   [{:role "system"
+     :content "You are a helpful assistant that summarizes YouTube video transcripts. Produce a concise summary with main topics, key points, and a recommendation. Format:\n\n<title>\n<duration>\n\nMain Topics:\n- Topic 1\n- Topic 2\n\nKey Points:\n- Point 1\n- Point 2\n\nWorth watching if: <recommendation>"}
+    {:role "user"
+     :content "Summarize this video transcript:\n\nTitle: Rich Hickey - Simple Made Easy (Strange Loop 2011)\nDuration: 36 minutes\n\nTranscript:\nSo what I want to talk about today is sort of two words that we've been using interchangeably and I think that's really important that we not do that. The word simple and the word easy..."}]
+   :max_tokens 500
+   :temperature 0.7}
+
+  :response
+  {:id "glm-req-a1b2c3d4e5f6"
+   :created 1772582400
+   :model "glm-4-flash"
+   :choices
+   [{:index 0
+     :finish_reason "stop"
+     :message
+     {:role "assistant"
+      :content "Rich Hickey - Simple Made Easy (Strange Loop 2011)\n36 minutes\n\nMain Topics:\n- The distinction between \"simple\" and \"easy\" in software design\n- How complexity arises from complecting (interleaving) concerns\n- Choosing simple constructs over familiar (easy) ones\n\nKey Points:\n- Simple means \"one fold/braid\" — not interleaved with other concerns\n- Easy means \"near at hand\" — familiar, convenient, but not necessarily simple\n- Complexity is the primary source of bugs and maintenance burden\n- Prefer values over state, composition over inheritance, queues over direct coupling\n- Testing and type systems do not address fundamental complexity\n\nWorth watching if: You want a paradigm-shifting perspective on why simplicity matters more than convenience in software architecture."}}]
+   :usage {:prompt_tokens 1250
+           :completion_tokens 180
+           :total_tokens 1430}}
+
+  :expected-summary "Rich Hickey - Simple Made Easy (Strange Loop 2011)\n36 minutes\n\nMain Topics:\n- The distinction between \"simple\" and \"easy\" in software design\n- How complexity arises from complecting (interleaving) concerns\n- Choosing simple constructs over familiar (easy) ones\n\nKey Points:\n- Simple means \"one fold/braid\" — not interleaved with other concerns\n- Easy means \"near at hand\" — familiar, convenient, but not necessarily simple\n- Complexity is the primary source of bugs and maintenance burden\n- Prefer values over state, composition over inheritance, queues over direct coupling\n- Testing and type systems do not address fundamental complexity\n\nWorth watching if: You want a paradigm-shifting perspective on why simplicity matters more than convenience in software architecture."}
+
+ :russian-language-summary
+ {:video {:title "Clojure для начинающих — Введение"
+          :duration-seconds 1800
+          :video-id "rfscVS0vtbw"}
+
+  :request
+  {:model "glm-4-flash"
+   :messages
+   [{:role "system"
+     :content "Вы помощник, который резюмирует транскрипции YouTube видео. Создайте краткое резюме с основными темами, ключевыми моментами и рекомендацией. Формат:\n\n<название>\n<продолжительность>\n\nОсновные темы:\n- Тема 1\n- Тема 2\n\nКлючевые моменты:\n- Момент 1\n- Момент 2\n\nСтоит смотреть, если: <рекомендация>"}
+    {:role "user"
+     :content "Summarize this video transcript:\n\nTitle: Clojure для начинающих — Введение\nDuration: 30 minutes\n\nTranscript:\nВсем привет, сегодня мы поговорим о языке программирования Clojure..."}]
+   :max_tokens 500
+   :temperature 0.7}
+
+  :response
+  {:id "glm-req-ru-789abc"
+   :created 1772582500
+   :model "glm-4-flash"
+   :choices
+   [{:index 0
+     :finish_reason "stop"
+     :message
+     {:role "assistant"
+      :content "Clojure для начинающих — Введение\n30 минут\n\nОсновные темы:\n- Что такое Clojure и зачем он нужен\n- Функциональное программирование на JVM\n- Иммутабельные структуры данных\n\nКлючевые моменты:\n- Clojure — это диалект Lisp для JVM\n- Иммутабельность по умолчанию снижает количество багов\n- REPL-driven development ускоряет цикл разработки\n\nСтоит смотреть, если: Вы хотите начать изучение функционального программирования на JVM."}}]
+   :usage {:prompt_tokens 980
+           :completion_tokens 150
+           :total_tokens 1130}}}
+
+ :truncated-transcript
+ {:scenario "Transcript exceeds 10,000 chars — truncated before sending"
+  :original-length 24500
+  :truncated-length 10000
+  :truncation-note "Transcript truncated from 24,500 to 10,000 characters"
+  :request-content-ends-with "... [transcript truncated]"}
+
+ :glm-error-response
+ {:scenario "GLM API returns an error"
+  :response
+  {:status 500
+   :body {:error {:message "Internal server error"
+                  :type "server_error"
+                  :code "500"}}}
+  :expected {:error :glm-api-error
+             :message "Summary service temporarily unavailable."}}}

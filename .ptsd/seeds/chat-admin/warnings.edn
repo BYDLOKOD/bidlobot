@@ -1,0 +1,103 @@
+;; chat-admin/warnings.edn
+;; Warning documents in XTDB format + escalation scenarios.
+;; Demonstrates the 3-strikes system: 3 warnings -> auto-mute 24h.
+
+{:description "Warning XTDB documents and escalation scenarios (3 warnings -> auto-mute)"
+
+ :chat-id -1001234567890
+
+ ;; Target user who accumulates warnings
+ :target-user {:user-id 666777888
+               :username "troublemaker42"
+               :first-name "Igor"}
+
+ ;; Individual warning documents
+ :warnings
+ [{:xt/id :warn/a1b2c3d4-e5f6-7890-abcd-ef1234567890
+   :warn/user-id 666777888
+   :warn/chat-id -1001234567890
+   :warn/username "troublemaker42"
+   :warn/reason "Spam links in chat"
+   :warn/issued-by 111222333
+   :warn/issued-by-username "alexey_dev"
+   :warn/warning-number 1
+   :warn/created-at #inst "2026-02-15T10:00:00.000Z"}
+
+  {:xt/id :warn/b2c3d4e5-f6a7-8901-bcde-f12345678901
+   :warn/user-id 666777888
+   :warn/chat-id -1001234567890
+   :warn/username "troublemaker42"
+   :warn/reason "Off-topic political debate"
+   :warn/issued-by 222333444
+   :warn/issued-by-username "marina_fp"
+   :warn/warning-number 2
+   :warn/created-at #inst "2026-02-20T16:30:00.000Z"}
+
+  {:xt/id :warn/c3d4e5f6-a7b8-9012-cdef-123456789012
+   :warn/user-id 666777888
+   :warn/chat-id -1001234567890
+   :warn/username "troublemaker42"
+   :warn/reason "Personal insults toward another member"
+   :warn/issued-by 111222333
+   :warn/issued-by-username "alexey_dev"
+   :warn/warning-number 3
+   :warn/created-at #inst "2026-03-01T09:15:00.000Z"}]
+
+ ;; Escalation scenarios showing progression
+ :escalation-scenarios
+ [{:scenario "First warning — notification only"
+   :input {:command "/warn @troublemaker42 \"Spam links in chat\""
+           :issuer-id 111222333
+           :target-id 666777888
+           :chat-id -1001234567890}
+   :prior-warnings 0
+   :expected {:action :warn
+              :warning-number 1
+              :auto-mute false
+              :notification "@troublemaker42 warned: Spam links in chat (warning 1/3)"}}
+
+  {:scenario "Second warning — notification with stronger language"
+   :input {:command "/warn @troublemaker42 \"Off-topic political debate\""
+           :issuer-id 222333444
+           :target-id 666777888
+           :chat-id -1001234567890}
+   :prior-warnings 1
+   :expected {:action :warn
+              :warning-number 2
+              :auto-mute false
+              :notification "@troublemaker42 warned: Off-topic political debate (warning 2/3)"}}
+
+  {:scenario "Third warning — triggers auto-mute for 24 hours"
+   :input {:command "/warn @troublemaker42 \"Personal insults toward another member\""
+           :issuer-id 111222333
+           :target-id 666777888
+           :chat-id -1001234567890}
+   :prior-warnings 2
+   :expected {:action :warn-and-mute
+              :warning-number 3
+              :auto-mute true
+              :mute-duration-hours 24
+              :notification "@troublemaker42 warned: Personal insults toward another member (warning 3/3). Auto-muted for 24 hours."
+              :mute-until #inst "2026-03-02T09:15:00.000Z"}}]
+
+ ;; Warning history query result
+ :warning-history
+ {:command "/warns @troublemaker42"
+  :chat-id -1001234567890
+  :user-id 666777888
+  :expected-output
+  "Warnings for @troublemaker42 (3/3):
+
+1. Spam links in chat — by @alexey_dev (Feb 15, 2026)
+2. Off-topic political debate — by @marina_fp (Feb 20, 2026)
+3. Personal insults toward another member — by @alexey_dev (Mar 1, 2026)"}
+
+ ;; Clear warnings
+ :clear-warnings
+ {:command "/warn :clear @troublemaker42"
+  :issuer-id 111222333
+  :chat-id -1001234567890
+  :user-id 666777888
+  :expected {:action :clear-warnings
+             :warnings-removed 3
+             :notification "All warnings cleared for @troublemaker42."}}}

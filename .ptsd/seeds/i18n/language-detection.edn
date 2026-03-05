@@ -1,0 +1,154 @@
+;; Language detection test cases.
+;; Each entry contains a Telegram update structure (or partial) and the
+;; expected detected language. Detection reads language_code from
+;; update.message.from or update.inline_query.from.
+
+{:description "Telegram update structures with language_code and expected detected language"
+
+ ;; Config used for default language fallback
+ :config {:default-language :en}
+
+ :cases
+ [;; 1. Russian language_code in message update
+  {:description "Message from Russian-speaking user"
+   :update
+   {:update_id 100001
+    :message
+    {:message_id 42
+     :from       {:id            294817365
+                  :is_bot        false
+                  :first_name    "Alexei"
+                  :username      "veschin"
+                  :language_code "ru"}
+     :chat       {:id   -1001987654321
+                  :type "supergroup"
+                  :title "Clojure Russia"}
+     :date       1709625720
+     :text       "/register"}}
+   :expected :ru}
+
+  ;; 2. English language_code in message update
+  {:description "Message from English-speaking user"
+   :update
+   {:update_id 100002
+    :message
+    {:message_id 43
+     :from       {:id            518293746
+                  :is_bot        false
+                  :first_name    "Anna"
+                  :username      "anna_dev"
+                  :language_code "en"}
+     :chat       {:id   -1001987654321
+                  :type "supergroup"
+                  :title "Clojure Russia"}
+     :date       1709625780
+     :text       "/profile"}}
+   :expected :en}
+
+  ;; 3. language_code in inline_query.from
+  {:description "Inline query from Russian user"
+   :update
+   {:update_id 100003
+    :inline_query
+    {:id     "AQADBA1234567890"
+     :from   {:id            294817365
+              :is_bot        false
+              :first_name    "Alexei"
+              :username      "veschin"
+              :language_code "ru"}
+     :query  ":user anna_dev :get :salary"
+     :offset ""
+     :chat_type "sender"}}
+   :expected :ru}
+
+  ;; 4. Unknown/unsupported language_code -> falls back to default (:en)
+  {:description "German language_code (unsupported) -> default :en"
+   :update
+   {:update_id 100004
+    :message
+    {:message_id 44
+     :from       {:id            738192045
+                  :is_bot        false
+                  :first_name    "Max"
+                  :username      "max_clj"
+                  :language_code "de"}
+     :chat       {:id   -1001987654321
+                  :type "supergroup"}
+     :date       1709625840
+     :text       "/help"}}
+   :expected :en}
+
+  ;; 5. Missing language_code field entirely -> default
+  {:description "User with no language_code field"
+   :update
+   {:update_id 100005
+    :message
+    {:message_id 45
+     :from       {:id         901827364
+                  :is_bot     false
+                  :first_name "NoLang"}
+     :chat       {:id   -1001987654321
+                  :type "supergroup"}
+     :date       1709625900
+     :text       "Hello"}}
+   :expected :en}
+
+  ;; 6. Nil update -> default language
+  {:description "Nil update object"
+   :update   nil
+   :expected :en}
+
+  ;; 7. Empty update map -> default
+  {:description "Empty update map"
+   :update   {}
+   :expected :en}
+
+  ;; 8. callback_query with language_code
+  {:description "Callback query with Russian language"
+   :update
+   {:update_id 100006
+    :callback_query
+    {:id      "cb_98765"
+     :from    {:id            294817365
+               :is_bot        false
+               :first_name    "Alexei"
+               :username      "veschin"
+               :language_code "ru"}
+     :message {:message_id 50
+               :chat       {:id -1001987654321 :type "supergroup"}
+               :text       "Profile Registration"}
+     :data    "form:next"}}
+   :expected :ru}
+
+  ;; 9. language_code "en-US" style (should detect as :en or fallback)
+  {:description "BCP47-style language code en-US"
+   :update
+   {:update_id 100007
+    :message
+    {:message_id 46
+     :from       {:id            112233445
+                  :is_bot        false
+                  :first_name    "John"
+                  :username      "john_us"
+                  :language_code "en-US"}
+     :chat       {:id -1001987654321 :type "supergroup"}
+     :date       1709625960
+     :text       "/start"}}
+   :expected :en
+   :notes    "Implementation should handle 'en-US' by taking prefix before hyphen"}
+
+  ;; 10. language_code "uk" (Ukrainian, unsupported) -> default
+  {:description "Ukrainian language_code -> fallback to default"
+   :update
+   {:update_id 100008
+    :message
+    {:message_id 47
+     :from       {:id            556677889
+                  :is_bot        false
+                  :first_name    "Taras"
+                  :username      "taras_ua"
+                  :language_code "uk"}
+     :chat       {:id -1001987654321 :type "supergroup"}
+     :date       1709626020
+     :text       "/register"}}
+   :expected :en}]}

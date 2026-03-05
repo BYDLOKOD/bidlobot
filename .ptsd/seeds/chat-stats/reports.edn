@@ -1,0 +1,70 @@
+;; chat-stats/reports.edn
+;; Expected report output strings for /stats commands.
+;; Based on the data in chat-stats.edn (chat -1001234567890, 5 users, 4237 total messages).
+
+{:description "Expected formatted report outputs for stats commands"
+
+ :stats-overview
+ {:command "/stats"
+  :chat-id -1001234567890
+  :expected-output
+  "Chat Statistics: Clojure Russia
+
+Total messages: 4,237
+Total users: 5
+Avg messages/user: 847
+Most active: @alexey_dev (1,542 messages)
+
+Stats since: Dec 1, 2025"}
+
+ :stats-top
+ {:command "/stats :top"
+  :chat-id -1001234567890
+  :expected-output
+  "Top Users: Clojure Russia
+
+1. @alexey_dev — 1,542 messages
+2. @marina_fp — 987 messages
+3. @dmi3_arch — 856 messages
+4. @pavel_clj — 614 messages
+5. @olga_data — 238 messages"}
+
+ :stats-user
+ {:command "/stats :user @marina_fp"
+  :chat-id -1001234567890
+  :user-id 222333444
+  :expected-output
+  "Stats for @marina_fp
+
+Messages: 987
+First seen: Dec 3, 2025
+Last seen: Mar 4, 2026
+Rank: #2 of 5"}
+
+ :stats-user-least-active
+ {:command "/stats :user @olga_data"
+  :chat-id -1001234567890
+  :user-id 555666777
+  :expected-output
+  "Stats for @olga_data
+
+Messages: 238
+First seen: Jan 15, 2026
+Last seen: Mar 2, 2026
+Rank: #5 of 5"}
+
+ :stats-today
+ {:command "/stats :today"
+  :chat-id -1001234567890
+  :today-date #inst "2026-03-05T00:00:00.000Z"
+  :today-message-count 23
+  :expected-output
+  "Today's Activity: Clojure Russia
+
+Messages today: 23
+Active users today: 2"}
+
+ :stats-user-not-found
+ {:command "/stats :user @nonexistent"
+  :chat-id -1001234567890
+  :expected-output "User @nonexistent not found in this chat."}}

@@ -1,0 +1,52 @@
+;; Bot configuration for TG client creation and system lifecycle.
+;; Contains the config that create-bot reads from zen context,
+;; plus the expected client and system map structures.
+
+{:description "Bot config for client creation and expected system structures"
+
+ ;; Config as returned by (get-config ztx) — input to create-bot
+ :bot-config
+ {:token            "7204518376:AAH3kV9xTcLmJfRqWnB8y5pZvNdUoKsEgMi"
+  :api-url          "https://api.telegram.org"
+  :default-language :en
+  :debug            false}
+
+ ;; Expected structure returned by (create-bot ztx)
+ :create-bot-result
+ {:client "<tg-client-instance>"
+  :ztx    "<zen-context-instance>"}
+
+ ;; Client creation config passed to tg/->client
+ :tg-client-config
+ {:bot-token    "7204518376:AAH3kV9xTcLmJfRqWnB8y5pZvNdUoKsEgMi"
+  :limiter-opts {:send-message {:per-chat {:rate 1}
+                                :in-total {:rate 30}}}}
+
+ ;; Polling configuration
+ :polling-config
+ {:timeout          30
+  :limit            100
+  :allowed-updates  ["message" "callback_query" "inline_query"]}
+
+ ;; Expected system map from (start!)
+ :system-map
+ {:ztx  "<zen-context>"
+  :node "<xtdb-node>"
+  :bot  {:client "<tg-client>"
+         :ztx    "<zen-context>"}}
+
+ ;; Shutdown timeout
+ :shutdown-config
+ {:handler-timeout-ms 5000}
+
+ ;; Environment variables required for full startup
+ :required-env
+ {"TG_BOT_TOKEN"      "7204518376:AAH3kV9xTcLmJfRqWnB8y5pZvNdUoKsEgMi"
+  "XTDB_STORAGE_TYPE" "memory"}
+
+ ;; Optional environment variables with defaults
+ :optional-env
+ {"TG_API_URL"    {:default "https://api.telegram.org"}
+  "DEFAULT_LANG"  {:default "en"}
+  "DEBUG"         {:default "false"}
+  "XTDB_STORAGE_PATH" {:default nil :notes "Only needed when XTDB_STORAGE_TYPE=rocksdb"}}}

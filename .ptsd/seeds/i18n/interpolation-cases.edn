@@ -1,0 +1,94 @@
+;; Interpolation test cases for the i18n `t` function.
+;; Each case has a template key, language, variables map, and expected output.
+;; Mechanism: clojure.string/replace for each {key} in the template string.
+
+{:description "Interpolation inputs, variable maps, and expected rendered strings"
+
+ :cases
+ [;; 1. Standard interpolation with two variables (EN)
+  {:description "Form progress with current/total in English"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current 2 :total 5}
+   :expected    "Step 2 of 5"}
+
+  ;; 2. Standard interpolation with two variables (RU)
+  {:description "Form progress with current/total in Russian"
+   :lang        :ru
+   :key         :form/progress
+   :template    "\u0428\u0430\u0433 {current} \u0438\u0437 {total}"
+   :vars        {:current 2 :total 5}
+   :expected    "\u0428\u0430\u0433 2 \u0438\u0437 5"}
+
+  ;; 3. First step
+  {:description "First step of registration"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current 1 :total 5}
+   :expected    "Step 1 of 5"}
+
+  ;; 4. Last step
+  {:description "Last step of registration"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current 5 :total 5}
+   :expected    "Step 5 of 5"}
+
+  ;; 5. Missing variable in vars map — placeholder stays unchanged
+  {:description "Vars map missing :total — placeholder stays as-is"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current 3}
+   :expected    "Step 3 of {total}"}
+
+  ;; 6. Empty vars map — all placeholders unchanged
+  {:description "Empty vars map — no substitution"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {}
+   :expected    "Step {current} of {total}"}
+
+  ;; 7. Nil value in vars map — replaced with empty string
+  {:description "Nil value for :current — replaced with empty string"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current nil :total 5}
+   :expected    "Step  of 5"}
+
+  ;; 8. Nil vars map — same as empty, placeholders unchanged
+  {:description "Nil vars map"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        nil
+   :expected    "Step {current} of {total}"}
+
+  ;; 9. Template without placeholders — returned as-is
+  {:description "No placeholders in template"
+   :lang        :en
+   :key         :form/title
+   :template    "Profile Registration"
+   :vars        {:foo "bar"}
+   :expected    "Profile Registration"}
+
+  ;; 10. String variable values
+  {:description "String values interpolated correctly"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current "two" :total "five"}
+   :expected    "Step two of five"}
+
+  ;; 11. Zero as variable value
+  {:description "Zero renders as 0, not empty"
+   :lang        :en
+   :key         :form/progress
+   :template    "Step {current} of {total}"
+   :vars        {:current 0 :total 5}
+   :expected    "Step 0 of 5"}]}

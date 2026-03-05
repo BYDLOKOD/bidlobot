@@ -1,0 +1,91 @@
+;; youtube-summary/urls.edn
+;; Valid and invalid YouTube URLs with expected parsed video IDs and error codes.
+;; Video IDs are 11 characters (Base64 URL-safe alphabet).
+
+{:description "YouTube URL parsing test cases with expected video IDs or error codes"
+
+ :valid-urls
+ [;; Standard youtube.com/watch?v= format
+  {:url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+   :expected {:video-id "dQw4w9WgXcQ"}}
+
+  ;; Without www
+  {:url "https://youtube.com/watch?v=LJ4d5CGN6bI"
+   :expected {:video-id "LJ4d5CGN6bI"}}
+
+  ;; Short youtu.be format
+  {:url "https://youtu.be/kJQP7kiw5Fk"
+   :expected {:video-id "kJQP7kiw5Fk"}}
+
+  ;; Mobile URL
+  {:url "https://m.youtube.com/watch?v=9bZkp7q19f0"
+   :expected {:video-id "9bZkp7q19f0"}}
+
+  ;; With extra query parameters (timestamp, list)
+  {:url "https://www.youtube.com/watch?v=hY7m5jjJ9mM&t=120"
+   :expected {:video-id "hY7m5jjJ9mM"}}
+
+  {:url "https://www.youtube.com/watch?v=Ks-_Mh1QhMc&list=PLRqwX-V7Uu6ZiZxtDDRCi6uhfTH4FilpH&index=3"
+   :expected {:video-id "Ks-_Mh1QhMc"}}
+
+  ;; youtu.be with timestamp
+  {:url "https://youtu.be/rfscVS0vtbw?t=300"
+   :expected {:video-id "rfscVS0vtbw"}}
+
+  ;; HTTP (non-HTTPS)
+  {:url "http://www.youtube.com/watch?v=ZZ5LpwO-An4"
+   :expected {:video-id "ZZ5LpwO-An4"}}
+
+  ;; Video ID with hyphens and underscores
+  {:url "https://www.youtube.com/watch?v=_-x0WkL3bXE"
+   :expected {:video-id "_-x0WkL3bXE"}}
+
+  ;; Embed format (sometimes shared)
+  {:url "https://www.youtube.com/embed/M7lc1UVf-VE"
+   :expected {:video-id "M7lc1UVf-VE"}}]
+
+ :invalid-urls
+ [;; Not a YouTube URL
+  {:url "https://vimeo.com/123456789"
+   :expected {:error :not-youtube-url
+              :message "Only YouTube videos are supported."}}
+
+  ;; Random website
+  {:url "https://example.com/watch?v=abc123"
+   :expected {:error :not-youtube-url
+              :message "Only YouTube videos are supported."}}
+
+  ;; YouTube URL but no video ID
+  {:url "https://www.youtube.com/"
+   :expected {:error :missing-video-id
+              :message "Invalid YouTube URL: no video ID found."}}
+
+  ;; YouTube channel URL (not a video)
+  {:url "https://www.youtube.com/@ClojureTV"
+   :expected {:error :not-video-url
+              :message "Invalid YouTube URL: not a video link."}}
+
+  ;; YouTube playlist URL without specific video
+  {:url "https://www.youtube.com/playlist?list=PLRqwX-V7Uu6ZiZxtDDRCi6uhfTH4FilpH"
+   :expected {:error :not-video-url
+              :message "Invalid YouTube URL: not a video link."}}
+
+  ;; Empty string
+  {:url ""
+   :expected {:error :empty-url
+              :message "No URL provided."}}
+
+  ;; Malformed URL
+  {:url "not-a-url-at-all"
+   :expected {:error :invalid-url
+              :message "Invalid URL format."}}
+
+  ;; YouTube shorts (not supported in v1)
+  {:url "https://www.youtube.com/shorts/dQw4w9WgXcQ"
+   :expected {:error :not-video-url
+              :message "Invalid YouTube URL: not a video link."}}
+
+  ;; Truncated video ID
+  {:url "https://www.youtube.com/watch?v=abc"
+   :expected {:error :invalid-video-id
+              :message "Invalid YouTube URL: malformed video ID."}}]}

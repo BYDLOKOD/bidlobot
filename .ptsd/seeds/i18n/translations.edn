@@ -1,0 +1,54 @@
+;; Complete EN/RU translation maps matching the i18n section of zrc/doxme/bot.edn.
+;; These are the exact translations the bot uses. Tests should verify that
+;; (get-i18n ztx :lang) returns these maps verbatim.
+
+{:description "Complete translation maps for EN and RU, mirroring bot.edn i18n"
+
+ :en
+ {:bot/name               "BidloBot"
+  :bot/desc               "Profile management bot for team chats"
+  :form/title             "Profile Registration"
+  :form/progress          "Step {current} of {total}"
+  :form/back              "\u25c0\ufe0f Back"
+  :form/next              "Next \u25b6\ufe0f"
+  :form/skip              "\u23ed\ufe0f Skip"
+  :form/cancel            "\u274c Cancel"
+  :form/confirm           "\u2705 Confirm"
+  :form/complete          "Registration complete!"
+  :form/expired           "Session expired. Please start again with /register"
+  :profile/not-found      "Profile not found. Register with /register"
+  :profile/saved          "Profile saved successfully!"
+  :profile/updated        "Profile updated!"
+  :error/invalid-command  "Invalid command. Use :help for usage."
+  :error/user-not-found   "User not found in this chat."
+  :error/not-registered   "You are not registered. Use /register first."}
+
+ :ru
+ {:bot/name               "BidloBot"
+  :bot/desc               "\u0411\u043e\u0442 \u0443\u043f\u0440\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u043f\u0440\u043e\u0444\u0438\u043b\u044f\u043c\u0438 \u0434\u043b\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u043d\u044b\u0445 \u0447\u0430\u0442\u043e\u0432"
+  :form/title             "\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u043f\u0440\u043e\u0444\u0438\u043b\u044f"
+  :form/progress          "\u0428\u0430\u0433 {current} \u0438\u0437 {total}"
+  :form/back              "\u25c0\ufe0f \u041d\u0430\u0437\u0430\u0434"
+  :form/next              "\u0414\u0430\u043b\u0435\u0435 \u25b6\ufe0f"
+  :form/skip              "\u23ed\ufe0f \u041f\u0440\u043e\u043f\u0443\u0441\u0442\u0438\u0442\u044c"
+  :form/cancel            "\u274c \u041e\u0442\u043c\u0435\u043d\u0430"
+  :form/confirm           "\u2705 \u041f\u043e\u0434\u0442\u0432\u0435\u0440\u0434\u0438\u0442\u044c"
+  :form/complete          "\u0420\u0435\u0433\u0438\u0441\u0442\u0440\u0430\u0446\u0438\u044f \u0437\u0430\u0432\u0435\u0440\u0448\u0435\u043d\u0430!"
+  :form/expired           "\u0421\u0435\u0441\u0441\u0438\u044f \u0438\u0441\u0442\u0435\u043a\u043b\u0430. \u041d\u0430\u0447\u043d\u0438\u0442\u0435 \u0437\u0430\u043d\u043e\u0432\u043e \u0441 /register"
+  :profile/not-found      "\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d. \u0417\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u0443\u0439\u0442\u0435\u0441\u044c \u0447\u0435\u0440\u0435\u0437 /register"
+  :profile/saved          "\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u0443\u0441\u043f\u0435\u0448\u043d\u043e \u0441\u043e\u0445\u0440\u0430\u043d\u0451\u043d!"
+  :profile/updated        "\u041f\u0440\u043e\u0444\u0438\u043b\u044c \u043e\u0431\u043d\u043e\u0432\u043b\u0451\u043d!"
+  :error/invalid-command  "\u041d\u0435\u0432\u0435\u0440\u043d\u0430\u044f \u043a\u043e\u043c\u0430\u043d\u0434\u0430. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439\u0442\u0435 :help \u0434\u043b\u044f \u0441\u043f\u0440\u0430\u0432\u043a\u0438."
+  :error/user-not-found   "\u041f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044c \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d \u0432 \u044d\u0442\u043e\u043c \u0447\u0430\u0442\u0435."
+  :error/not-registered   "\u0412\u044b \u043d\u0435 \u0437\u0430\u0440\u0435\u0433\u0438\u0441\u0442\u0440\u0438\u0440\u043e\u0432\u0430\u043d\u044b. \u0421\u043d\u0430\u0447\u0430\u043b\u0430 /register."}
+
+ ;; Key count per language (for completeness checks)
+ :key-counts {:en 17 :ru 17}
+
+ ;; All keys that must exist in both languages
+ :required-keys
+ [:bot/name :bot/desc
+  :form/title :form/progress :form/back :form/next :form/skip
+  :form/cancel :form/confirm :form/complete :form/expired
+  :profile/not-found :profile/saved :profile/updated
+  :error/invalid-command :error/user-not-found :error/not-registered]}

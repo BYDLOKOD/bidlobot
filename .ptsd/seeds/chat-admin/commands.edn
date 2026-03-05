@@ -1,0 +1,166 @@
+;; chat-admin/commands.edn
+;; Admin command inputs with expected results for admin and non-admin users.
+
+{:description "Admin command inputs and expected results, testing permission checks"
+
+ :chat-id -1001234567890
+
+ ;; Admin user context
+ :admin-user {:user-id 111222333
+              :username "alexey_dev"
+              :role :creator}
+
+ ;; Regular admin user context
+ :regular-admin {:user-id 222333444
+                 :username "marina_fp"
+                 :role :admin}
+
+ ;; Non-admin user context
+ :non-admin-user {:user-id 444555666
+                  :username "pavel_clj"
+                  :role nil}
+
+ :commands
+ [;; --- /warn command ---
+  {:command "/warn @troublemaker42 \"Spam links\""
+   :issuer :admin-user
+   :expected {:success true
+              :action :warn
+              :target-username "troublemaker42"
+              :reason "Spam links"
+              :response "@troublemaker42 warned: Spam links (warning 1/3)"}}
+
+  {:command "/warn @troublemaker42 \"Being rude\""
+   :issuer :non-admin-user
+   :expected {:success false
+              :error :permission-denied
+              :response "You don't have permission to use this command."}}
+
+  {:command "/warns @troublemaker42"
+   :issuer :admin-user
+   :expected {:success true
+              :action :list-warnings
+              :target-username "troublemaker42"}}
+
+  {:command "/warn :clear @troublemaker42"
+   :issuer :admin-user
+   :expected {:success true
+              :action :clear-warnings
+              :target-username "troublemaker42"
+              :response "All warnings cleared for @troublemaker42."}}
+
+  ;; --- /mute command ---
+  {:command "/mute @troublemaker42 1h"
+   :issuer :admin-user
+   :expected {:success true
+              :action :mute
+              :target-username "troublemaker42"
+              :duration-seconds 3600
+              :response "@troublemaker42 muted for 1 hour."}}
+
+  {:command "/mute @troublemaker42 1d"
+   :issuer :regular-admin
+   :expected {:success true
+              :action :mute
+              :target-username "troublemaker42"
+              :duration-seconds 86400
+              :response "@troublemaker42 muted for 1 day."}}
+
+  {:command "/mute @troublemaker42"
+   :issuer :admin-user
+   :expected {:success true
+              :action :mute
+              :target-username "troublemaker42"
+              :duration-seconds nil
+              :response "@troublemaker42 muted indefinitely."}}
+
+  {:command "/mute @troublemaker42 1h"
+   :issuer :non-admin-user
+   :expected {:success false
+              :error :permission-denied
+              :response "You don't have permission to use this command."}}
+
+  {:command "/unmute @troublemaker42"
+   :issuer :admin-user
+   :expected {:success true
+              :action :unmute
+              :target-username "troublemaker42"
+              :response "@troublemaker42 has been unmuted."}}
+
+  ;; --- /ban command ---
+  {:command "/ban @crypto_scammer \"Scam links\""
+   :issuer :admin-user
+   :expected {:success true
+              :action :ban
+              :target-username "crypto_scammer"
+              :reason "Scam links"
+              :response "@crypto_scammer has been banned: Scam links"}}
+
+  {:command "/ban @someone \"No reason\""
+   :issuer :non-admin-user
+   :expected {:success false
+              :error :permission-denied
+              :response "You don't have permission to use this command."}}
+
+  {:command "/unban @forgiven_one"
+   :issuer :admin-user
+   :expected {:success true
+              :action :unban
+              :target-username "forgiven_one"
+              :response "@forgiven_one has been unbanned."}}
+
+  ;; --- /admin command ---
+  {:command "/admin :add @pavel_clj"
+   :issuer :admin-user
+   :expected {:success true
+              :action :admin-add
+              :target-username "pavel_clj"
+              :response "@pavel_clj has been added as admin."}}
+
+  {:command "/admin :add @pavel_clj"
+   :issuer :regular-admin
+   :expected {:success false
+              :error :creator-only
+              :response "Only the chat creator can manage admins."}}
+
+  {:command "/admin :remove @marina_fp"
+   :issuer :admin-user
+   :expected {:success true
+              :action :admin-remove
+              :target-username "marina_fp"
+              :response "@marina_fp has been removed from admins."}}
+
+  {:command "/admin :remove @alexey_dev"
+   :issuer :admin-user
+   :expected {:success false
+              :error :cannot-remove-creator
+              :response "Cannot remove the chat creator from admins."}}
+
+  {:command "/admin :list"
+   :issuer :admin-user
+   :expected {:success true
+              :action :admin-list
+              :response "Chat Admins:\n\n1. @alexey_dev (creator)\n2. @marina_fp (admin)\n3. @dmi3_arch (admin)"}}
+
+  {:command "/admin :list"
+   :issuer :non-admin-user
+   :expected {:success true
+              :action :admin-list
+              :note "Anyone can view the admin list"
+              :response "Chat Admins:\n\n1. @alexey_dev (creator)\n2. @marina_fp (admin)\n3. @dmi3_arch (admin)"}}
+
+  ;; --- Duration parsing ---
+  {:command "/mute @user 30m"
+   :issuer :admin-user
+   :expected {:success true
+              :duration-seconds 1800}}
+
+  {:command "/mute @user 2h"
+   :issuer :admin-user
+   :expected {:success true
+              :duration-seconds 7200}}
+
+  {:command "/mute @user 7d"
+   :issuer :admin-user
+   :expected {:success true
+              :duration-seconds 604800}}]}

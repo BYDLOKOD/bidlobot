@@ -1,0 +1,232 @@
+;; Sample Telegram update structures for each supported update type.
+;; Each entry includes the raw update, its detected type, and expected
+;; routing target. Used to test the polling loop and update router.
+
+{:description "Telegram updates with type detection and routing expectations"
+
+ ;; --- Message updates ---
+ :message-updates
+ [{:description "Text command /start in private chat"
+   :update
+   {:update_id 200001
+    :message
+    {:message_id 1
+     :from       {:id            294817365
+                  :is_bot        false
+                  :first_name    "Alexei"
+                  :username      "veschin"
+                  :language_code "ru"}
+     :chat       {:id   294817365
+                  :type "private"}
+     :date       1709625600
+     :text       "/start"
+     :entities   [{:offset 0 :length 6 :type "bot_command"}]}}
+   :detected-type :message
+   :route-target  :command-handler
+   :command       "/start"}
+
+  {:description "Text command /register in supergroup"
+   :update
+   {:update_id 200002
+    :message
+    {:message_id 1847
+     :from       {:id            518293746
+                  :is_bot        false
+                  :first_name    "Anna"
+                  :username      "anna_dev"
+                  :language_code "en"}
+     :chat       {:id    -1001987654321
+                  :type  "supergroup"
+                  :title "Clojure Russia"}
+     :date       1709625660
+     :text       "/register"
+     :entities   [{:offset 0 :length 9 :type "bot_command"}]}}
+   :detected-type :message
+   :route-target  :command-handler
+   :command       "/register"}
+
+  {:description "Regular text message (stats collection)"
+   :update
+   {:update_id 200003
+    :message
+    {:message_id 1848
+     :from       {:id            294817365
+                  :is_bot        false
+                  :first_name    "Alexei"
+                  :username      "veschin"
+                  :language_code "ru"}
+     :chat       {:id    -1001987654321
+                  :type  "supergroup"
+                  :title "Clojure Russia"}
+     :date       1709625720
+     :text       "Has anyone tried babashka for scripting?"}}
+   :detected-type :message
+   :route-target  :stats-collector
+   :command       nil}
+
+  {:description "Photo message (counted for stats)"
+   :update
+   {:update_id 200004
+    :message
+    {:message_id 1849
+     :from       {:id         738192045
+                  :is_bot     false
+                  :first_name "Max"
+                  :username   "max_clj"}
+     :chat       {:id    -1001987654321
+                  :type  "supergroup"
+                  :title "Clojure Russia"}
+     :date       1709625780
+     :photo      [{:file_id "AgACAgIAAxk" :width 90 :height 90}
+                  {:file_id "AgACAgIAAxl" :width 320 :height 320}]
+     :caption    "My REPL setup"}}
+   :detected-type :message
+   :route-target  :stats-collector
+   :command       nil}]
+
+ ;; --- Callback query updates ---
+ :callback-query-updates
+ [{:description "Form navigation: next step"
+   :update
+   {:update_id 200005
+    :callback_query
+    {:id      "cb_1709625840_001"
+     :from    {:id            518293746
+               :is_bot        false
+               :first_name    "Anna"
+               :username      "anna_dev"
+               :language_code "en"}
+     :message {:message_id 1850
+               :chat       {:id 518293746 :type "private"}
+               :date       1709625780
+               :text       "Profile Registration\n\nYour salary expectation? (e.g., 100k USD)\n\nStep 1 of 5"}
+     :chat_instance "-1234567890123"
+     :data    "form:next"}}
+   :detected-type :callback_query
+   :route-target  :form-fsm-handler}
+
+  {:description "Form navigation: back"
+   :update
+   {:update_id 200006
+    :callback_query
+    {:id      "cb_1709625900_002"
+     :from    {:id            518293746
+               :is_bot        false
+               :first_name    "Anna"
+               :username      "anna_dev"
+               :language_code "en"}
+     :message {:message_id 1850
+               :chat       {:id 518293746 :type "private"}
+               :date       1709625780
+               :text       "Your technology stack?"}
+     :chat_instance "-1234567890123"
+     :data    "form:back"}}
+   :detected-type :callback_query
+   :route-target  :form-fsm-handler}
+
+  {:description "Form: confirm registration"
+   :update
+   {:update_id 200007
+    :callback_query
+    {:id      "cb_1709626020_003"
+     :from    {:id            518293746
+               :is_bot        false
+               :first_name    "Anna"
+               :username      "anna_dev"
+               :language_code "en"}
+     :message {:message_id 1850
+               :chat       {:id 518293746 :type "private"}
+               :date       1709625780
+               :text       "Confirm your profile:\nsalary: 120k EUR\nstack: Rust, Go"}
+     :chat_instance "-1234567890123"
+     :data    "form:confirm"}}
+   :detected-type :callback_query
+   :route-target  :form-fsm-handler}
+
+  {:description "Form: cancel registration"
+   :update
+   {:update_id 200008
+    :callback_query
+    {:id      "cb_1709626080_004"
+     :from    {:id            738192045
+               :is_bot        false
+               :first_name    "Max"
+               :username      "max_clj"}
+     :message {:message_id 1860
+               :chat       {:id 738192045 :type "private"}
+               :date       1709626000
+               :text       "Your current role?"}
+     :chat_instance "-9876543210987"
+     :data    "form:cancel"}}
+   :detected-type :callback_query
+   :route-target  :form-fsm-handler}]
+
+ ;; --- Inline query updates ---
+ :inline-query-updates
+ [{:description "Query user profile field"
+   :update
+   {:update_id 200009
+    :inline_query
+    {:id        "AQADBA_il001"
+     :from      {:id            294817365
+                 :is_bot        false
+                 :first_name    "Alexei"
+                 :username      "veschin"
+                 :language_code "ru"}
+     :query     ":user anna_dev :get :salary"
+     :offset    ""
+     :chat_type "sender"}}
+   :detected-type :inline_query
+   :route-target  :query-language-handler}
+
+  {:description "Query chat stats"
+   :update
+   {:update_id 200010
+    :inline_query
+    {:id        "AQADBA_il002"
+     :from      {:id            518293746
+                 :is_bot        false
+                 :first_name    "Anna"
+                 :username      "anna_dev"
+                 :language_code "en"}
+     :query     ":chat :stats"
+     :offset    ""
+     :chat_type "sender"}}
+   :detected-type :inline_query
+   :route-target  :query-language-handler}
+
+  {:description "Help command via inline"
+   :update
+   {:update_id 200011
+    :inline_query
+    {:id        "AQADBA_il003"
+     :from      {:id            738192045
+                 :is_bot        false
+                 :first_name    "Max"
+                 :username      "max_clj"}
+     :query     ":help"
+     :offset    ""
+     :chat_type "sender"}}
+   :detected-type :inline_query
+   :route-target  :query-language-handler}
+
+  {:description "Empty inline query"
+   :update
+   {:update_id 200012
+    :inline_query
+    {:id        "AQADBA_il004"
+     :from      {:id            294817365
+                 :is_bot        false
+                 :first_name    "Alexei"
+                 :username      "veschin"}
+     :query     ""
+     :offset    ""
+     :chat_type "sender"}}
+   :detected-type :inline_query
+   :route-target  :query-language-handler}]
+
+ ;; --- Offset tracking ---
+ :offset-tracking
+ {:description "After processing a batch, offset = max(update_id) + 1"
+  :batch       [{:update_id 200001} {:update_id 200002} {:update_id 200003}]
+  :expected-next-offset 200004}}

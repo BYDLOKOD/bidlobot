@@ -1,0 +1,75 @@
+;; Invalid configuration seed data.
+;; Each entry represents a malformed or invalid bot.edn and the expected
+;; error response from create-context or accessors. Used to test error
+;; handling paths in the zen-loader feature.
+
+[;; 1. Missing namespace declaration
+ {:description "EDN without ns declaration"
+  :input       "{salary {:zen/tags #{profile-field} :type :string :required true :prompt \"test\"}}"
+  :expected    {:error   :config-validation-error
+                :errors  [{:type :missing-ns}]}}
+
+ ;; 2. Empty file
+ {:description "Empty bot.edn file"
+  :input       ""
+  :expected    {:error   :config-parse-error
+                :message "Empty configuration file"}}
+
+ ;; 3. Invalid EDN syntax (unclosed brace)
+ {:description "Malformed EDN with unclosed brace"
+  :input       "{ns doxme.bot\n config {:token \"abc\""
+  :expected    {:error   :config-parse-error
+                :message "Unexpected end of input"}}
+
+ ;; 4. Invalid profile-field type
+ {:description "Profile field with invalid :type value"
+  :input       "{ns doxme.bot\n profile-field {:zen/tags #{zen/tag zen/schema} :type zen/map :require #{:type :prompt} :keys {:type {:type zen/keyword :enum [{:value :string} {:value :integer} {:value :boolean}]} :prompt {:type zen/string}}}\n bad-field {:zen/tags #{profile-field} :type :array :prompt \"test\"}}"
+  :expected    {:error   :config-validation-error
+                :errors  [{:path    [:type]
+                           :message "Expected one of :string, :integer, :boolean"
+                           :type    :enum}]}}
+
+ ;; 5. Missing required :token in bot-config
+ {:description "bot-config without required :token field"
+  :input       "{ns doxme.bot\n config {:zen/tags #{zen/tag zen/schema} :type zen/map :require #{:token} :keys {:token {:type zen/string}}}\n bot-config {:zen/tags #{config} :default-language :en}}"
+  :expected    {:error   :config-validation-error
+                :errors  [{:path    [:token]
+                           :message "is required"
+                           :type    :require}]}}
+
+ ;; 6. Invalid default-language enum value
+ {:description "bot-config with unsupported language enum"
+  :input       "{ns doxme.bot\n config {:zen/tags #{zen/tag zen/schema} :type zen/map :keys {:token {:type zen/string} :default-language {:type zen/keyword :enum [{:value :en} {:value :ru}]}}}\n bot-config {:zen/tags #{config} :token \"test\" :default-language :de}}"
+  :expected    {:error   :config-validation-error
+                :errors  [{:path    [:default-language]
+                           :message "Expected one of :en, :ru"
+                           :type    :enum}]}}
+
+ ;; 7. Missing environment variable without default
+ {:description "#env tag referencing missing env var without default"
+  :env-map     {}
+  :input       "{ns doxme.bot\n config {:zen/tags #{zen/tag zen/schema} :type zen/map :keys {:token {:type zen/string}}}\n bot-config {:zen/tags #{config} :token #env TG_BOT_TOKEN}}"
+  :expected    {:error   :config-validation-error
+                :message "Environment variable TG_BOT_TOKEN is not set"}}
+
+ ;; 8. Wrong type for :debug (string instead of boolean)
+ {:description "bot-config with string where boolean expected"
+  :input       "{ns doxme.bot\n config {:zen/tags #{zen/tag zen/schema} :type zen/map :keys {:token {:type zen/string} :debug {:type zen/boolean}}}\n bot-config {:zen/tags #{config} :token \"test\" :debug \"yes\"}}"
+  :expected    {:error   :config-validation-error
+                :errors  [{:path    [:debug]
+                           :message "Expected boolean, got string"
+                           :type    :type-mismatch}]}}
+
+ ;; 9. Profile field missing required :prompt key
+ {:description "Profile field without :prompt (required by tag schema)"
+  :input       "{ns doxme.bot\n profile-field {:zen/tags #{zen/tag zen/schema} :type zen/map :require #{:type :prompt} :keys {:type {:type zen/keyword} :prompt {:type zen/string}}}\n bad-field {:zen/tags #{profile-field} :type :string}}"
+  :expected    {:error   :config-validation-error
+                :errors  [{:path    [:prompt]
+                           :message "is required"
+                           :type    :require}]}}
+
+ ;; 10. Duplicate namespace
+ {:description "EDN with duplicate ns declaration"
+  :input       "{ns doxme.bot\n ns doxme.other}"
+  :expected    {:error   :config-parse-error
+                :message "Duplicate key: ns"}}]

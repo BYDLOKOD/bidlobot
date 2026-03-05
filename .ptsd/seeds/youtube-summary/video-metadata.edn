@@ -1,0 +1,192 @@
+;; youtube-summary/video-metadata.edn
+;; Sample YouTube Data API v3 responses for valid, invalid, and live videos.
+;; Endpoint: GET https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id={VIDEO_ID}&key={API_KEY}
+
+{:description "YouTube Data API v3 response fixtures for video metadata retrieval"
+
+ :valid-video
+ {:video-id "dQw4w9WgXcQ"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "abc123def456"
+   :pageInfo {:totalResults 1 :resultsPerPage 1}
+   :items
+   [{:kind "youtube#video"
+     :etag "xyz789"
+     :id "dQw4w9WgXcQ"
+     :snippet
+     {:publishedAt "2009-10-25T06:57:33Z"
+      :channelId "UCuAXFkgsw1L7xaCfnd5JJOw"
+      :title "Rick Astley - Never Gonna Give You Up (Official Music Video)"
+      :description "The official video for Never Gonna Give You Up by Rick Astley..."
+      :channelTitle "Rick Astley"
+      :tags ["rick astley" "never gonna give you up"]
+      :categoryId "10"
+      :defaultLanguage "en"
+      :defaultAudioLanguage "en"}
+     :contentDetails
+     {:duration "PT3M33S"
+      :dimension "2d"
+      :definition "hd"
+      :caption "true"
+      :licensedContent true}}]}
+  :expected {:title "Rick Astley - Never Gonna Give You Up (Official Music Video)"
+             :duration-seconds 213
+             :has-captions true
+             :valid true}}
+
+ :long-tech-talk
+ {:video-id "LJ4d5CGN6bI"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "long123"
+   :pageInfo {:totalResults 1 :resultsPerPage 1}
+   :items
+   [{:kind "youtube#video"
+     :etag "talk456"
+     :id "LJ4d5CGN6bI"
+     :snippet
+     {:publishedAt "2024-11-15T14:00:00Z"
+      :channelId "UCmyxGWFhS-cxSRAIXL"
+      :title "Rich Hickey - Simple Made Easy (Strange Loop 2011)"
+      :description "Talk by Rich Hickey at Strange Loop 2011 about simplicity vs complexity..."
+      :channelTitle "Strange Loop"
+      :categoryId "28"}
+     :contentDetails
+     {:duration "PT36M53S"
+      :dimension "2d"
+      :definition "hd"
+      :caption "true"
+      :licensedContent false}}]}
+  :expected {:title "Rich Hickey - Simple Made Easy (Strange Loop 2011)"
+             :duration-seconds 2213
+             :has-captions true
+             :valid true}}
+
+ :video-too-long
+ {:video-id "9bZkp7q19f0"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "toolong789"
+   :pageInfo {:totalResults 1 :resultsPerPage 1}
+   :items
+   [{:kind "youtube#video"
+     :etag "longvid"
+     :id "9bZkp7q19f0"
+     :snippet
+     {:publishedAt "2024-06-01T08:00:00Z"
+      :channelId "UC3fakeChannel"
+      :title "Full Day Workshop: Building Systems with Clojure"
+      :description "An 8-hour workshop covering everything from basics to advanced..."
+      :channelTitle "Clojure Academy"
+      :categoryId "27"}
+     :contentDetails
+     {:duration "PT8H15M42S"
+      :dimension "2d"
+      :definition "hd"
+      :caption "true"
+      :licensedContent true}}]}
+  :expected {:error :video-too-long
+             :duration-seconds 29742
+             :message "Video too long (max 1 hour)."}}
+
+ :video-too-short
+ {:video-id "kJQP7kiw5Fk"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "short456"
+   :pageInfo {:totalResults 1 :resultsPerPage 1}
+   :items
+   [{:kind "youtube#video"
+     :etag "shortvid"
+     :id "kJQP7kiw5Fk"
+     :snippet
+     {:publishedAt "2025-09-10T12:00:00Z"
+      :channelId "UC4fakeChannel"
+      :title "Quick Tip: REPL Shortcut"
+      :description "15 seconds of REPL magic"
+      :channelTitle "Clj Tips"
+      :categoryId "28"}
+     :contentDetails
+     {:duration "PT15S"
+      :dimension "2d"
+      :definition "hd"
+      :caption "false"
+      :licensedContent false}}]}
+  :expected {:error :video-too-short
+             :duration-seconds 15
+             :message "Video too short to summarize."}}
+
+ :live-stream
+ {:video-id "hY7m5jjJ9mM"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "live789"
+   :pageInfo {:totalResults 1 :resultsPerPage 1}
+   :items
+   [{:kind "youtube#video"
+     :etag "livevid"
+     :id "hY7m5jjJ9mM"
+     :snippet
+     {:publishedAt "2026-03-05T10:00:00Z"
+      :channelId "UC5fakeChannel"
+      :title "LIVE: Clojure Conf 2026 - Day 1"
+      :description "Live stream of Clojure Conf 2026"
+      :channelTitle "Clojure Events"
+      :categoryId "28"
+      :liveBroadcastContent "live"}
+     :contentDetails
+     {:duration "P0D"
+      :dimension "2d"
+      :definition "hd"
+      :caption "false"
+      :licensedContent false}}]}
+  :expected {:error :live-stream
+             :message "Cannot summarize live streams."}}
+
+ :deleted-or-private
+ {:video-id "XXXXXXXXXXX"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "notfound"
+   :pageInfo {:totalResults 0 :resultsPerPage 0}
+   :items []}
+  :expected {:error :video-not-found
+             :message "Video not found or unavailable."}}
+
+ :no-captions
+ {:video-id "Ks-_Mh1QhMc"
+  :api-response
+  {:kind "youtube#videoListResponse"
+   :etag "nocaps123"
+   :pageInfo {:totalResults 1 :resultsPerPage 1}
+   :items
+   [{:kind "youtube#video"
+     :etag "nocapsvid"
+     :id "Ks-_Mh1QhMc"
+     :snippet
+     {:publishedAt "2025-05-20T09:00:00Z"
+      :channelId "UC6fakeChannel"
+      :title "Coding Session: No Commentary"
+      :description "Pure coding session without narration"
+      :channelTitle "Silent Coder"
+      :categoryId "28"}
+     :contentDetails
+     {:duration "PT25M10S"
+      :dimension "2d"
+      :definition "hd"
+      :caption "false"
+      :licensedContent false}}]}
+  :expected {:error :no-subtitles
+             :message "No subtitles available for this video."}}
+
+ ;; ISO 8601 duration parsing test cases
+ :duration-parsing
+ [{:iso "PT3M33S"   :seconds 213}
+  {:iso "PT36M53S"  :seconds 2213}
+  {:iso "PT8H15M42S" :seconds 29742}
+  {:iso "PT15S"     :seconds 15}
+  {:iso "PT1H"      :seconds 3600}
+  {:iso "PT59M59S"  :seconds 3599}
+  {:iso "P0D"       :seconds 0}
+  {:iso "PT25M10S"  :seconds 1510}]}

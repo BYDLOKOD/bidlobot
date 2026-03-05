@@ -1,0 +1,64 @@
+;; valid-queries.edn
+;; Valid query inputs covering all known command types (:user, :chat, :help)
+;; with various argument patterns. Each entry maps an input string to the
+;; expected parsed AST: {:cmd <keyword> :args [<tokens>]}
+
+[;; === :user command ===
+ {:input ":user veschin :get :salary"
+  :expected {:cmd :user :args ["veschin" :get :salary]}}
+
+ {:input ":user veschin :get :stack"
+  :expected {:cmd :user :args ["veschin" :get :stack]}}
+
+ {:input ":user veschin :get :role"
+  :expected {:cmd :user :args ["veschin" :get :role]}}
+
+ {:input ":user veschin :get :location"
+  :expected {:cmd :user :args ["veschin" :get :location]}}
+
+ {:input ":user veschin :get :bio"
+  :expected {:cmd :user :args ["veschin" :get :bio]}}
+
+ {:input ":user veschin :profile"
+  :expected {:cmd :user :args ["veschin" :profile]}}
+
+ {:input ":user alex_dev :get :salary"
+  :expected {:cmd :user :args ["alex_dev" :get :salary]}}
+
+ {:input ":user maria_fe :profile"
+  :expected {:cmd :user :args ["maria_fe" :profile]}}
+
+ ;; :user with no args (syntactically valid; evaluator checks semantics)
+ {:input ":user"
+  :expected {:cmd :user :args []}}
+
+ ;; === :chat command ===
+ {:input ":chat :stats"
+  :expected {:cmd :chat :args [:stats]}}
+
+ {:input ":chat :stats :top"
+  :expected {:cmd :chat :args [:stats :top]}}
+
+ {:input ":chat :users"
+  :expected {:cmd :chat :args [:users]}}
+
+ ;; :chat with no args
+ {:input ":chat"
+  :expected {:cmd :chat :args []}}
+
+ ;; === :help command ===
+ {:input ":help"
+  :expected {:cmd :help :args []}}
+
+ {:input ":help :user"
+  :expected {:cmd :help :args [:user]}}
+
+ {:input ":help :chat"
+  :expected {:cmd :help :args [:chat]}}
+
+ ;; === whitespace handling ===
+ {:input ":user   veschin   :get   :salary"
+  :expected {:cmd :user :args ["veschin" :get :salary]}}
+
+ {:input "  :help  "
+  :expected {:cmd :help :args []}}]
