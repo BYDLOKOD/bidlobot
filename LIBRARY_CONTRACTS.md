@@ -18,7 +18,7 @@
 ### 1.2 Инициализация клиента
 
 ```clojure
-(ns bidlobot.tg.client
+(ns doxme.tg.client
   (:require [marksto.clj-tg-bot-api.core :as tg]))
 
 (defn create-client [config]
@@ -41,7 +41,7 @@
 ### 1.3 Контракт: Update Loop
 
 ```clojure
-(ns bidlobot.tg.polling
+(ns doxme.tg.polling
   (:require [marksto.clj-tg-bot-api.core :as tg]
             [marksto.clj-tg-bot-api.utils :as tg-utils]))
 
@@ -64,7 +64,7 @@
 ### 1.4 Контракт: Update Router
 
 ```clojure
-(ns bidlobot.tg.router
+(ns doxme.tg.router
   (:require [marksto.clj-tg-bot-api.utils :as tg-utils]))
 
 (defmulti handle-update 
@@ -89,7 +89,7 @@
 ### 1.5 Контракт: Inline Query Handler
 
 ```clojure
-(ns bidlobot.tg.inline
+(ns doxme.tg.inline
   (:require [marksto.clj-tg-bot-api.core :as tg]))
 
 ;; Структура inline_query из update:
@@ -127,7 +127,7 @@
 ### 1.6 Контракт: Callback Query Handler
 
 ```clojure
-(ns bidlobot.tg.callback
+(ns doxme.tg.callback
   (:require [marksto.clj-tg-bot-api.core :as tg]))
 
 ;; Структура callback_query из update:
@@ -154,7 +154,7 @@
 ### 1.7 Контракт: Sending Messages
 
 ```clojure
-(ns bidlobot.tg.message
+(ns doxme.tg.message
   (:require [marksto.clj-tg-bot-api.core :as tg]))
 
 (defn send-message [client chat-id text]
@@ -185,7 +185,7 @@
 ### 1.8 Контракт: Utils
 
 ```clojure
-(ns bidlobot.tg.utils
+(ns doxme.tg.utils
   (:require [marksto.clj-tg-bot-api.utils :as tg-utils]))
 
 ;; Типы updates
@@ -219,7 +219,7 @@
 ### 2.2 Контракт: Context Initialization
 
 ```clojure
-(ns bidlobot.zen.core
+(ns doxme.zen.core
   (:require [zen.core :as zen]))
 
 (defn create-context [paths env]
@@ -237,14 +237,14 @@
 (def ztx (-> (create-context ["resources"] 
                              {"TG_BOT_TOKEN" "123:ABC"
                               "DB_HOST" "localhost"})
-             (load-spec! 'bidlobot.bot)))
+             (load-spec! 'doxme.bot)))
 ```
 
 ### 2.3 Контракт: Schema Definition
 
 ```edn
-;; resources/bidlobot/bot.edn
-{ns bidlobot.bot
+;; resources/doxme/bot.edn
+{ns doxme.bot
 
  ;; === TAGS ===
  
@@ -346,27 +346,27 @@
 ### 2.4 Контракт: Getting Data from Zen
 
 ```clojure
-(ns bidlobot.zen.queries
+(ns doxme.zen.queries
   (:require [zen.core :as zen]))
 
 ;; Получить конкретную модель
 (defn get-config [ztx]
-  (zen/get-symbol ztx 'bidlobot.bot/bot-config))
+  (zen/get-symbol ztx 'doxme.bot/bot-config))
 ;; => {:token "123:ABC" :default-language :en}
 
 ;; Получить все поля профиля (по тегу)
 (defn get-profile-fields [ztx]
-  (zen/get-tagged ztx 'bidlobot.bot/profile-field))
+  (zen/get-tagged ztx 'doxme.bot/profile-field))
 ;; => [{:zen/tags #{...} :type :string :required true ...} ...]
 
 ;; Получить все inline команды (по тегу)
 (defn get-inline-commands [ztx]
-  (zen/get-tagged ztx 'bidlobot.bot/inline-command))
+  (zen/get-tagged ztx 'doxme.bot/inline-command))
 ;; => [{:command :user :examples [...]} ...]
 
 ;; Получить i18n данные
 (defn get-i18n [ztx lang]
-  (-> (zen/get-symbol ztx 'bidlobot.bot/i18n)
+  (-> (zen/get-symbol ztx 'doxme.bot/i18n)
       (get lang)))
 ;; => {:form/title "Registration" ...}
 ```
@@ -374,13 +374,13 @@
 ### 2.5 Контракт: Validation
 
 ```clojure
-(ns bidlobot.zen.validation
+(ns doxme.zen.validation
   (:require [zen.core :as zen]))
 
 ;; Валидация данных профиля
 (defn validate-profile [ztx data]
   (let [result (zen/validate ztx 
-                             ['bidlobot.bot/profile]
+                             ['doxme.bot/profile]
                              data)]
     (if (empty? (:errors result))
       {:valid true}
@@ -396,13 +396,13 @@
 ### 2.6 Контракт: Form Steps from Zen
 
 ```clojure
-(ns bidlobot.form.steps
+(ns doxme.form.steps
   (:require [zen.core :as zen]
             [clojure.string :as str]))
 
 ;; Генерация шагов формы из zen модели
 (defn build-form-steps [ztx]
-  (let [fields (zen/get-tagged ztx 'bidlobot.bot/profile-field)
+  (let [fields (zen/get-tagged ztx 'doxme.bot/profile-field)
         sorted (sort-by (fn [f] (if (:required f) 0 1)) fields)]
     (map-indexed
       (fn [idx field]
@@ -447,17 +447,17 @@ bot-config
 ### 3.1 Bot Initialization Flow
 
 ```clojure
-(ns bidlobot.core
-  (:require [bidlobot.zen.core :as zen]
-            [bidlobot.tg.client :as tg]
-            [bidlobot.tg.polling :as polling]
-            [bidlobot.tg.router :as router]))
+(ns doxme.core
+  (:require [doxme.zen.core :as zen]
+            [doxme.tg.client :as tg]
+            [doxme.tg.polling :as polling]
+            [doxme.tg.router :as router]))
 
 (defn start-bot! []
   ;; 1. Загружаем конфигурацию из zen
   (let [ztx (zen/create-context ["resources"] 
                                 (System/getenv))
-        _ (zen/load-spec! ztx 'bidlobot.bot)
+        _ (zen/load-spec! ztx 'doxme.bot)
         
         config (zen/get-config ztx)
         
@@ -477,10 +477,10 @@ bot-config
 ### 3.2 Form Flow с Zen
 
 ```clojure
-(ns bidlobot.form.machine
-  (:require [bidlobot.zen.queries :as zq]
-            [bidlobot.tg.message :as msg]
-            [bidlobot.tg.callback :as cb]))
+(ns doxme.form.machine
+  (:require [doxme.zen.queries :as zq]
+            [doxme.tg.message :as msg]
+            [doxme.tg.callback :as cb]))
 
 ;; Шаги генерируются из zen
 (defn init-form [ztx client chat-id]
@@ -501,9 +501,9 @@ bot-config
 ### 3.3 Inline Query с Zen Commands
 
 ```clojure
-(ns bidlobot.query.handler
-  (:require [bidlobot.zen.queries :as zq]
-            [bidlobot.tg.inline :as inline]))
+(ns doxme.query.handler
+  (:require [doxme.zen.queries :as zq]
+            [doxme.tg.inline :as inline]))
 
 ;; Команды загружаются из zen
 (defn handle-inline-query [ztx client update]
@@ -541,8 +541,8 @@ bot-config
 (defn test-zen-context []
   (zen/new-context
     {:memory-store
-     {'bidlobot.test
-      '{:ns bidlobot.test
+     {'doxme.test
+      '{:ns doxme.test
         profile-field {:zen/tags #{zen/tag zen/schema}
                        :type zen/map}
         test-field {:zen/tags #{profile-field}

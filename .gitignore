@@ -9,3 +9,6 @@ target/
 # Env
 .env
 .env.local
+
+# Cache
+.cpcache/

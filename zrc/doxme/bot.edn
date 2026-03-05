@@ -1,7 +1,7 @@
-{ns bidlobot.bot
+{ns doxme.bot
 
  ;; === TAGS ===
- 
+
  ;; Тег для определения полей профиля
  profile-field
  {:zen/tags #{zen/tag zen/schema}
@@ -43,7 +43,7 @@
          :handler {:type zen/keyword}}}
 
  ;; === PROFILE SCHEMA ===
- 
+
  profile
  {:zen/tags #{zen/schema}
   :zen/desc "User profile data structure"
@@ -60,7 +60,7 @@
          :updated-at {:type zen/datetime}}}
 
  ;; === PROFILE FIELDS (тегированные определения) ===
- 
+
  salary
  {:zen/tags #{profile-field}
   :type :string
@@ -98,7 +98,7 @@
   :max-length 500}
 
  ;; === INLINE COMMANDS ===
- 
+
  user-command
  {:zen/tags #{inline-command}
   :command :user
@@ -125,7 +125,7 @@
              ":help :user"]}
 
  ;; === BOT COMMANDS ===
- 
+
  start-command
  {:zen/tags #{bot-command}
   :command "/start"
@@ -151,7 +151,7 @@
   :handler :help-handler}
 
  ;; === FORM SESSION SCHEMA ===
- 
+
  form-session
  {:zen/tags #{zen/schema}
   :zen/desc "Multi-step form session state"
@@ -169,7 +169,7 @@
          :expires-at {:type zen/datetime}}}
 
  ;; === CONFIGURATION ===
-  
+
  config
  {:zen/tags #{zen/tag zen/schema}
   :zen/desc "Bot configuration schema"
@@ -192,7 +192,7 @@
   :debug #env-boolean [DEBUG false]}
 
  ;; === I18N ===
- 
+
  i18n
  {:en {:bot/name "BidloBot"
        :bot/desc "Profile management bot for team chats"

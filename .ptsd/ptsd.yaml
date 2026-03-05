@@ -1,0 +1,15 @@
+project:
+  name: "bidlobot"
+
+testing:
+  patterns:
+    files: ["**/*_test.clj"]
+
+review:
+  min_score: 7
+  auto_redo: true
+
+hooks:
+  pre_commit: true
+  scopes: [PRD, SEED, BDD, TEST, IMPL, TASK, STATUS]
+  types: [feat, add, fix, refactor, remove, update]

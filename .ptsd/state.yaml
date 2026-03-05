@@ -1,0 +1,51 @@
+features:
+  bot-lifecycle:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  chat-admin:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  chat-stats:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  form-fsm:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  i18n:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  profiles:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  query-lang:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  xtdb:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  youtube-summary:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
+  zen-loader:
+    stage: 
+    hashes:
+      prd: 8e6307906f0e2306944b147a52531bc684f1a48d2115e3ac7327f6d760b44ea8
+    scores:
