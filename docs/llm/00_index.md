@@ -15,8 +15,12 @@ Each entry declares `id` and `kind` in front-matter.
 - [40_moderation.md](40_moderation.md) - warn/mute/ban, admin permissions, 3-strike rule
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits, error handling, onboarding, shutdown
 - [60_architecture.md](60_architecture.md) - layered composition, bbolt schema, key invariants, failure handling matrix, where to add features
-- [70_deployment.md](70_deployment.md) - build flags, env vars, systemd unit, backup cron, healthcheck, BotFather setup, rollback
+- [70_deployment.md](70_deployment.md) - docker-compose stack, env vars, healthcheck, BotFather setup, backup, rollback
 - [handoff.md](handoff.md) - next-session action plan. Read first.
+
+## Devlog
+
+- [devlog/01_dockerization_and_deploy.md](devlog/01_dockerization_and_deploy.md) - 2026-05-14/15: critic-driven hardening, Docker stack, public release, deploy to <deploy-host>.
 
 ## Archived (not part of current scope)
 
@@ -27,6 +31,7 @@ Each entry declares `id` and `kind` in front-matter.
 - `index` - this file
 - `spec` - domain rules. Read before changing related code.
 - `guide` - reference material
+- `log` - devlog entry, dry facts about what happened
 
 ## Update rule
 

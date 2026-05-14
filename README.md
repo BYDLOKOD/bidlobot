@@ -1,7 +1,7 @@
 # BidloBot
 
 Telegram bot for managing IT-community supergroups. One Go binary, embedded
-bbolt database, long-polling.
+bbolt database, long-polling. Ships as a docker-compose stack.
 
 ## What it does
 
@@ -27,11 +27,11 @@ The full reference lives in `docs/llm/`:
 - `50_telegram.md` - Telegram API specifics that shape the design.
 - `60_architecture.md` - layered composition, bbolt schema, key invariants,
   failure handling matrix, where to add features.
-- `70_deployment.md` - build flags, env vars, systemd unit, backup cron,
-  healthcheck, BotFather setup, rollback.
-- `handoff.md` - current session state + 14-step manual smoke checklist.
+- `70_deployment.md` - docker-compose stack, env vars, healthcheck, BotFather
+  setup, backup, rollback.
+- `handoff.md` - current session state + manual smoke checklist.
 
-## Quick start
+## Quick start (local dev)
 
 Requires Go 1.26+ and a bot token from `@BotFather`.
 
@@ -39,11 +39,8 @@ Requires Go 1.26+ and a bot token from `@BotFather`.
 # Validate token + BotFather config
 go run ./cmd/probe          # expects can_read_all=true, supports_inline=true
 
-# Build
-go build -o bidlobot ./cmd/bidlobot
-
-# Run with token in env
-TG_BOT_TOKEN=... DB_PATH=./data ./bidlobot
+# Build and run with token in env
+TG_BOT_TOKEN=... DB_PATH=./data go run ./cmd/bidlobot
 ```
 
 If `can_read_all=false`: `@BotFather` -> `/setprivacy` -> off, then **remove and
@@ -52,14 +49,29 @@ re-add the bot** to every chat.
 If `supports_inline=false`: `@BotFather` -> `/setinline` -> on with placeholder
 text.
 
-## Verifying in a real chat
+> Important: only one process per token can poll `getUpdates` at a time.
+> Stop any production deployment before starting a local instance with the
+> same token, otherwise updates are split between processes.
+
+## Quick start (production, docker)
 
 ```sh
-INTEGRATION_TEST=1 SMOKE_TIMEOUT=600 go run ./cmd/smoke
+# 1. Build the image
+docker compose build
+
+# 2. Drop the env file alongside docker-compose.yml
+cp deploy/env.example ./env
+$EDITOR ./env  # set TG_BOT_TOKEN
+
+# 3. Start
+docker compose up -d
+docker compose logs -f bot
 ```
 
-Watch the JSON log on stdout. Send commands from the chat following the
-14-step checklist in `docs/llm/handoff.md` `## Manual smoke checklist`.
+The image runs as non-root (UID 65532), uses tini as PID 1 for clean
+SIGTERM handling, exposes the health endpoint on the container's loopback
+only (no host port mapping), and persists bbolt data in the `bidlobot-data`
+named volume. See `docs/llm/70_deployment.md` for the full deploy runbook.
 
 ## Tests
 
@@ -76,9 +88,8 @@ in `internal/bot/replay_test.go`.
 ```
 cmd/
   bidlobot/        production entrypoint
-  bidlobot-backup/ online bbolt backup
+  bidlobot-backup/ online bbolt snapshot binary (used inside container)
   probe/           one-shot getMe (no polling, no side effects)
-  smoke/           bounded production wiring against real chat
 internal/
   bot/             telego dispatch, middleware, dispatcher, executors
   domain/          membership / stats / moderation / cleanup / pending
@@ -90,6 +101,11 @@ internal/
   storage/         bbolt repos, key conventions, group->supergroup migration
   testutil/        MockAPI, recorder, update factories
   text/            Russian user-facing strings
+deploy/
+  env.example      template for the operator env file
+  backup.sh        host-side stop/cp/start backup wrapper
+Dockerfile         multi-stage, alpine runtime, non-root, tini PID 1
+docker-compose.yml single-service stack, named volume, internal healthcheck
 ```
 
 ## License

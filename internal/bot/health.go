@@ -53,15 +53,29 @@ type VersionInfo struct {
 // healthChecker captures everything /health needs to know about the
 // running bot. Fields are filled by the App at construction; nothing
 // here knows about Telegram or bbolt directly.
+//
+// getMeOK is best-effort and cached: a 60s window prevents the handler
+// from amplifying transient Telegram 5xx into a restart loop while
+// still surfacing a sustained outage within ~1.5 healthcheck intervals.
 type healthChecker struct {
-	startedAt   time.Time
-	lastUpdate  atomic.Int64 // unix seconds
-	dbOpen      func() bool
-	getMeOK     func(ctx context.Context) bool
+	startedAt  time.Time
+	lastUpdate atomic.Int64 // unix seconds
+	dbOpen     func() bool
+	getMeOK    func(ctx context.Context) bool
+
+	// getMe result cache.
+	getMeMu       sync.Mutex
+	getMeCachedOK bool
+	getMeCachedAt time.Time
 
 	// version metadata
 	version VersionInfo
 }
+
+// getMeCacheTTL bounds how long a cached getMe result is trusted.
+// 60s = two healthcheck intervals, so a real outage flips /health red
+// in 60-90s, but a single Telegram blip is absorbed.
+const getMeCacheTTL = 60 * time.Second
 
 // HealthServer wraps http.Server lifecycle. Created via newHealthServer;
 // Start spawns a goroutine; Stop blocks until the listener is gone.
@@ -188,16 +202,14 @@ func healthHandler(hc *healthChecker) http.HandlerFunc {
 			}
 		}
 
-		// Bot reachability check is best-effort: a single failure does
-		// not flip /health red - only repeat failures matter, and those
-		// will manifest as stale updates.
-		if hc.getMeOK != nil {
-			ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-			defer cancel()
-			if !hc.getMeOK(ctx) {
-				degraded("getMe failed")
-				return
-			}
+		// Bot reachability check, cached. See getMeCacheTTL: brief
+		// Telegram 5xx bursts must not flip /health red repeatedly,
+		// because compose `restart: unless-stopped` would then bounce
+		// the bot during the very Telegram incident the bot is
+		// trying to ride out.
+		if hc.getMeOK != nil && !hc.checkGetMeCached(r.Context()) {
+			degraded("getMe failed")
+			return
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -230,6 +242,31 @@ func newHealthChecker(dbOpen func() bool, getMeOK func(ctx context.Context) bool
 // from the bot's incoming-update path.
 func (hc *healthChecker) MarkUpdate(t time.Time) {
 	hc.lastUpdate.Store(t.Unix())
+}
+
+// checkGetMeCached returns the cached getMe verdict if still fresh, or
+// re-runs getMeOK against ctx with a 2s timeout. The cache is a small
+// state machine guarded by a Mutex - lock contention is a non-issue
+// since /health requests at compose-default 30s intervals.
+func (hc *healthChecker) checkGetMeCached(parent context.Context) bool {
+	hc.getMeMu.Lock()
+	if !hc.getMeCachedAt.IsZero() && time.Since(hc.getMeCachedAt) < getMeCacheTTL {
+		ok := hc.getMeCachedOK
+		hc.getMeMu.Unlock()
+		return ok
+	}
+	hc.getMeMu.Unlock()
+
+	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
+	defer cancel()
+	ok := hc.getMeOK(ctx)
+
+	hc.getMeMu.Lock()
+	hc.getMeCachedOK = ok
+	hc.getMeCachedAt = time.Now()
+	hc.getMeMu.Unlock()
+
+	return ok
 }
 
 func versionInfoFromRuntime(overrideVersion, overrideCommit string) VersionInfo {

@@ -5,164 +5,217 @@ kind: guide
 
 # Deployment
 
-What to copy where on a Linux box to run the bot 24/7. Adapted to Debian/Ubuntu but everything is plain shell + systemd.
+Production runs as a docker-compose stack. Single replica, named
+volume for bbolt, internal healthcheck (no host port published),
+non-root container with tini as PID 1.
 
-## Build
+## Prerequisites
 
-```sh
-GOFLAGS="-trimpath" go build -ldflags "
-  -X main.version=$(git describe --tags --always)
-  -X main.commit=$(git rev-parse HEAD)
-" -o /usr/local/bin/bidlobot ./cmd/bidlobot
+- Linux host with Docker 24+ and Compose v2 (`docker compose version`).
+- A bot token from `@BotFather`.
+- `/setprivacy` Disabled and bot re-added to the chat (otherwise the
+  bot only sees commands and @-mentions; stats and membership stay
+  empty). `/setinline` Enabled with a placeholder string.
 
-go build -o /usr/local/bin/bidlobot-backup ./cmd/bidlobot-backup
-go build -o /usr/local/bin/bidlobot-probe ./cmd/probe
-```
+## Image
 
-`bidlobot --version` prints the build banner. `bidlobot --check-config` validates env vars and exits 0/1 without opening the database.
+`Dockerfile` in the repo root. Multi-stage:
+
+- `golang:1.26-alpine` build stage. `CGO_ENABLED=0` because every
+  dependency is pure Go. Build cache mounted via BuildKit so warm
+  builds stay fast.
+- `alpine:3.20` runtime. Ships `bidlobot`, `bidlobot-backup`, and
+  `bidlobot-probe` into `/usr/local/bin`. Adds `ca-certificates`,
+  `tzdata`, `wget` (for the healthcheck), `tini` (PID 1).
+- Runs as `bidlobot` (UID 65532), `WORKDIR /var/lib/bidlobot`. A
+  baked `.keep` marker forces a fresh named volume to inherit the
+  image's `0750 bidlobot:bidlobot` ownership.
+- `HEALTHCHECK` polls `http://127.0.0.1:8080/health` over the container
+  loopback every 30 s, with 60 s start-period to absorb slow Telegram
+  cold starts.
+
+`docker compose build` produces `bidlobot:latest`. Tag explicitly with
+`VERSION=v1.0.0 docker compose build` to bake the version into both
+the image tag and the `--version` banner via ldflags.
+
+## Compose stack
+
+`docker-compose.yml`:
+
+- Single service `bot`. `container_name: bidlobot`.
+- `restart: unless-stopped`.
+- `env_file: ./env` -- compose reads the env file alongside the
+  compose YAML. On the deploy host this lives at `/opt/bidlobot/env`.
+- `volumes: bidlobot-data:/var/lib/bidlobot` -- bbolt persists across
+  container recreate.
+- `stop_grace_period: 30s` -- App.ShutdownTimeout (10 s) for handler
+  drain + 10 s for in-flight WaitGroup + 10 s slack for `bbolt.Close`.
+- `healthcheck: wget /health` -- internal only. The host's 8080 / 8081
+  are deliberately unmapped because they are usually occupied by other
+  services on the deploy host.
+- Resource caps: 256 MB memory, 0.5 CPU. Comfortably above the bot's
+  steady-state footprint.
+- JSON log rotation: 10 MB x 5 files = 50 MB ceiling per container.
 
 ## Environment
 
 Required:
 
-- `TG_BOT_TOKEN` - must match `\d+:[A-Za-z0-9_-]{35,}`. Store in `/etc/bidlobot/env` (mode 0600, owned by the bot user) and `EnvironmentFile=` it from systemd.
+- `TG_BOT_TOKEN` -- format `\d+:[A-Za-z0-9_-]{35,}`. The bot validates
+  this at startup and exits non-zero on bad shape.
 
 Optional:
 
-- `DB_PATH` - bbolt directory, default `./data`. Use `/var/lib/bidlobot` in production.
-- `LOG_LEVEL` - `debug`/`info`/`warn`/`error`, default `info`.
-- `HEALTH_PORT` - HTTP listener for `/health` and `/version`, default `8080`. Set `0` to disable.
-- `RECORD_UPDATES` - JSONL path; if set, every incoming update is appended for offline replay.
+- `LOG_LEVEL` -- `debug` | `info` | `warn` | `error`, default `info`.
+- `DB_PATH` -- bbolt directory. Container default `/var/lib/bidlobot`.
+  Do not override unless you also rewire the volume mount.
+- `HEALTH_PORT` -- container port for `/health` and `/version`,
+  default `8080`. `0` disables the listener (and breaks the compose
+  healthcheck unless you also rewrite the `test:` field).
+- `RECORD_UPDATES` -- JSONL path inside the container; if set, every
+  incoming update is appended for offline replay. Ship as a bind mount
+  if you need to pull recordings from the host.
 
-## systemd unit
-
-`/etc/systemd/system/bidlobot.service`:
-
-```ini
-[Unit]
-Description=BidloBot - Telegram group management
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=bidlobot
-Group=bidlobot
-EnvironmentFile=/etc/bidlobot/env
-ExecStart=/usr/local/bin/bidlobot
-Restart=on-failure
-RestartSec=5s
-
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-ReadWritePaths=/var/lib/bidlobot
-
-# Resource caps (tune for your scale)
-MemoryMax=256M
-TasksMax=128
-
-# Graceful shutdown matches App.ShutdownTimeout (10s) + slack
-TimeoutStopSec=15s
-KillMode=mixed
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable + start:
+## First deploy
 
 ```sh
-useradd --system --home /var/lib/bidlobot --shell /usr/sbin/nologin bidlobot
-install -d -o bidlobot -g bidlobot /var/lib/bidlobot
-install -d -m 0750 -o root -g bidlobot /etc/bidlobot
-install -m 0640 -o root -g bidlobot env_template /etc/bidlobot/env
-systemctl daemon-reload
-systemctl enable --now bidlobot
-journalctl -u bidlobot -f
+# On the deploy host
+git clone https://github.com/veschin/bidlobot.git /opt/bidlobot
+cd /opt/bidlobot
+cp deploy/env.example env
+$EDITOR env  # set TG_BOT_TOKEN
+
+docker compose up -d --build
+docker compose logs -f bot
 ```
+
+Expect, in order:
+
+1. `starting build=...`
+2. `authenticated bot=<name> id=<n> can_read_all=true supports_inline=true`
+3. `health server listening addr=:8080`
+4. `bot started, polling for updates`
+
+If `can_read_all=false`, fix BotFather then `docker compose restart bot`.
+
+## Health and version
+
+```sh
+# Internal probe (compose healthcheck does this every 30 s)
+docker exec bidlobot wget -qO- http://127.0.0.1:8080/health
+
+# Build banner without execing
+docker exec bidlobot bidlobot --version
+```
+
+`/health` returns `200 {"status":"ok"}` when:
+
+- The bbolt instance accepts a no-op view transaction.
+- The most recent update arrived within 5 minutes (or the bot is
+  still inside its startup grace).
+- A cached `getMe` (TTL 60 s) returned successfully.
+
+`/version` returns build info including the commit hash injected at
+build time via `-X main.version=... -X main.commit=...`.
 
 ## Backup
 
-`scripts/backup.sh` is in the repo. Drop it on the host and add a cron entry. The script prefers the Go binary (true online snapshot via `db.View(tx -> tx.WriteTo)`); if the bot holds the exclusive write lock, it falls back to `cp` with bbolt's torn-meta tolerance and warns. Both paths leave the result at `backups/bidlobot-YYYYMMDD-HHMMSS.db`.
+`deploy/backup.sh` -- host-side stop / cp / start. Resolves the
+volume mount path via `docker volume inspect bidlobot-data`, copies
+`bidlobot.db`, then restarts the bot. Trades ~10 s downtime for a
+guaranteed-consistent snapshot.
 
-`/etc/cron.d/bidlobot-backup`:
+Cron suggestion (root):
 
 ```cron
-# Hot bbolt snapshot every hour, retain last 7 by mtime.
-17 * * * * bidlobot /usr/local/bin/bidlobot-backup -src /var/lib/bidlobot/bidlobot.db -dst /var/lib/bidlobot/backups/ >/dev/null 2>&1
+# Hot snapshot at 03:17 UTC daily, retain 7 newest by mtime.
+17 3 * * * /opt/bidlobot/deploy/backup.sh >>/var/log/bidlobot-backup.log 2>&1
 ```
 
-For point-in-time copies, stop the bot first; see the script header for the tradeoff.
+Default destination: `/var/backups/bidlobot/bidlobot-YYYYMMDD-HHMMSS.db`,
+configurable via `BIDLOBOT_BACKUP_DIR`. Failed runs exit nonzero so
+cron alerts.
 
-## Health
-
-`HEALTH_PORT` defaults to `8080`. Probe from monitoring:
-
-```sh
-curl --silent --max-time 3 http://localhost:8080/health
-# {"status":"ok"} -> 200
-# {"status":"degraded","reason":"db_closed"} -> 503
-```
-
-Hook into Prometheus blackbox or a vanilla cron:
-
-```sh
-*/1 * * * * bidlobot bash -c 'curl -fsS --max-time 3 http://localhost:8080/health || systemctl restart bidlobot'
-```
-
-`/version` returns build info, useful for confirming a deploy:
-
-```sh
-curl http://localhost:8080/version
-```
+> The earlier sidecar-style `bidlobot-backup` binary (still in the
+> image, callable via `docker exec bidlobot bidlobot-backup`) cannot
+> snapshot a running bot: bbolt holds an exclusive flock and the
+> backup binary's read-only open times out. Use it only after stopping
+> the bot.
 
 ## Logs
 
-Structured JSON to stdout. `journalctl -u bidlobot -o cat | jq` for tailing. Recommend forwarding to your central log store via `systemd-journal-remote` or `vector`.
+Structured JSON to stdout, captured by Docker's `json-file` driver.
+
+```sh
+docker compose logs -f bot
+docker compose logs --since 1h bot | jq 'select(.level=="ERROR")'
+```
 
 What never leaks into logs:
-- `TG_BOT_TOKEN`
-- Message text (only chat_id, user_id, command, duration_ms)
-- bio / profile content (the bio domain is archived anyway)
+
+- `TG_BOT_TOKEN` (telego's default replacer redacts; do not enable
+  telego `WithDebug`, which prints raw payloads).
+- Message text -- only `chat_id`, `user_id`, command, duration_ms.
 
 What does:
-- chat_id (public)
-- user_id (public, stable)
-- handler dispatch durations
-- API errors verbatim
-- Rate-limiter drops (chat_id + drop reason)
-- Pending GC removed-count
+
+- Authentication, BotFather flag state.
+- Per-handler dispatch durations, API errors verbatim.
+- Rate-limiter drops (`chat_id` + drop reason).
+- Pending GC removed-count.
+
+For longer retention forward the journal to a central log store via
+`vector` or `systemd-journal-upload`.
 
 ## CI
 
-`.github/workflows/ci.yml` runs `go vet`, `go test -race -cover`, `go build` on every push and PR. Use Go 1.26+. The cache key is the module hash, so dependency bumps refresh automatically.
+`.github/workflows/ci.yml`:
 
-For deployments via tag pushes, add a release workflow that runs `goreleaser` or `GOOS=linux go build` and uploads the binary as a release artifact; see `.github/workflows/ci.yml` for the setup-go pattern.
+- `go vet`, `go test -race -cover`, `go build` on every push and PR.
+- `docker buildx build` (no push) so a Dockerfile regression fails
+  CI before it bites a deploy.
+- `gitleaks` scan to catch accidentally-committed env files or
+  hard-coded tokens.
 
-## BotFather one-time setup
-
-Identical to `handoff.md` but reproduced here so this file is self-contained:
-
-1. `@BotFather` -> `/mybots` -> bot name.
-2. `Bot Settings` -> `Group Privacy` -> **Turn off**. Then **remove and re-add the bot to every chat** (privacy is cached at join).
-3. `Bot Settings` -> `Inline Mode` -> **Turn on** -> placeholder text e.g. `stats top, cleanup 6mo, warn @user`.
-4. `Bot Settings` -> `Inline Feedback` -> **Disabled**.
-5. Promote bot to administrator in every chat where you want stats / cleanup / moderation. Minimum permission: `Restrict Members`. Add `Delete Messages` if you also want delete features later.
-6. Verify: `bidlobot-probe` reports `can_read_all=true, supports_inline=true`.
-
-Skipping any of 2-5 silently disables that capability - the bot will start and answer commands but stats/membership/cleanup will be empty.
+Coverage uploaded as artifact (7-day retention).
 
 ## Rollback
 
-The bot stores state in bbolt. Forward-compatible schema changes only (we never delete buckets, only add). To roll back to an older binary:
+bbolt schema is forward-compatible (we never delete buckets, only
+add). To roll back:
 
-1. `systemctl stop bidlobot`
-2. Replace `/usr/local/bin/bidlobot` with the older binary.
-3. `systemctl start bidlobot`
+```sh
+# On deploy host
+cd /opt/bidlobot
+git fetch
+git checkout <previous-good-sha>
+docker compose up -d --build
+```
 
-If the older binary doesn't recognize a bucket created by the new binary, the bucket is simply ignored - no read/write touches it.
+If the older binary doesn't recognize a bucket created by the newer
+one, the bucket is ignored. For destructive-schema rollbacks (rare),
+restore from a backup taken before the upgrade and stop the bot
+before swapping the database file:
 
-For destructive-schema rollbacks (rare), restore from a backup taken before the upgrade and stop the bot before swapping the file.
+```sh
+docker compose stop bot
+VOL=$(docker volume inspect -f '{{.Mountpoint}}' bidlobot-data)
+cp /var/backups/bidlobot/bidlobot-<ts>.db "$VOL/bidlobot.db"
+docker compose start bot
+```
+
+## Operational footguns
+
+- **Single token, two processes**: stop production before running
+  `cmd/probe` or any local `go run ./cmd/bidlobot` against the same
+  `TG_BOT_TOKEN`. Telegram returns 409 to the loser of the
+  `getUpdates` race; both processes flap and split traffic.
+- **Forgetting to remove-and-re-add after `/setprivacy` flip**:
+  privacy mode is cached at join. The bot will start cleanly, polls
+  successfully, but only sees commands and @-mentions until you
+  remove and re-add it.
+- **Editing `env` without restart**: compose only re-reads `env_file`
+  on container recreate. After editing: `docker compose up -d`.
+- **Backup during crash loop**: `deploy/backup.sh` exits nonzero if
+  the container is not running, so cron alerts. Diagnose the crash
+  first; do not wrap the script in `|| true`.

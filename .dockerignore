@@ -1,0 +1,46 @@
+# Build context hygiene. Anything not needed by `go build` is excluded
+# so cold builds stay small and warm builds don't bust the cache on
+# unrelated edits.
+
+# VCS and tooling state
+.git
+.github
+.gitignore
+.gitattributes
+
+# Local agent state - never relevant inside the image
+.claude
+.vscode
+.idea
+
+# Secrets - belt and suspenders; the .env path lives only on the host
+.env
+.env.*
+!.env.example
+deploy/env
+
+# Local runtime state
+data/
+*.db
+*.db.lock
+*.db.bak
+
+# Pre-compiled binaries from local `go build`
+/bidlobot
+/bidlobot-backup
+/bidlobot-probe
+
+# Recorded sessions, fixtures only consumed by `go test`
+testdata/
+
+# Host-side scripts (backup wrapper). The image does not need them.
+scripts/
+
+# Docs and operator-facing prose - go test does not need these, and
+# excluding them keeps the build cache stable across doc-only commits
+docs/
+README.md
+*.md
+
+# Backup output
+backups/

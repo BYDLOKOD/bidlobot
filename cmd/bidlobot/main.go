@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
@@ -142,8 +143,15 @@ func main() {
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 	if err := app.AttachHealth(
+		// dbOpen probes bbolt with a no-op view txn. Path() returning a
+		// non-empty string is a tautology (it's set at open time and
+		// never cleared on Close), so we issue an actual transaction to
+		// confirm the underlying file handle is alive.
 		func() bool {
-			return db != nil && db.Path() != ""
+			if db == nil {
+				return false
+			}
+			return db.View(func(_ *bolt.Tx) error { return nil }) == nil
 		},
 		func(ctx context.Context) bool {
 			cctx, cancel := context.WithTimeout(ctx, 2*time.Second)

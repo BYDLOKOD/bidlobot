@@ -1,7 +1,20 @@
 /data/
 /bidlobot
+/bidlobot-backup
+/bidlobot-probe
 *.db
 *.db.lock
+*.db.bak
+
+# Secrets - operator env files. Only env.example is allowed in git.
 .env
-.env.local
+.env.*
+!.env.example
+deploy/env
+
+# Backup output
+backups/
+
+# Local agent state
 .claude/worktrees/
+.claude/scheduled_tasks.lock

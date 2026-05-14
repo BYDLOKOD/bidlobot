@@ -1,13 +1,16 @@
 # CI for the BidloBot Go module.
 #
-# Runs vet, race-tested unit tests with coverage, and a full build on every
-# push and PR targeting master. Coverage output is exported as an artifact
-# so reviewers can browse it without re-running the tests locally.
+# Runs on every push and PR targeting master. Three concerns:
 #
-# We pin actions to a major version (v5/v4) rather than a SHA: project is
-# pre-release and the convenience of automatic patch updates outweighs the
-# supply-chain risk for a non-production CI workflow. Bump to a SHA when
-# the bot starts shipping signed releases.
+#   1. correctness  -- vet + test -race + build
+#   2. deploy posture -- docker buildx build (no push) so a Dockerfile
+#      regression bites CI, not the deploy host
+#   3. secret hygiene -- gitleaks scan, since the repo is public and
+#      one accidental .env commit becomes a permanent leak
+#
+# Actions are pinned to floating major tags (v4 / v5). When the
+# project starts shipping signed releases or accepts external PRs,
+# pin to commit SHAs instead.
 name: ci
 
 on:
@@ -20,7 +23,6 @@ permissions:
   contents: read
 
 concurrency:
-  # Cancel superseded runs on the same ref to keep queue depth bounded.
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
@@ -32,21 +34,20 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # gitleaks needs full history
 
       - name: setup go
         uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-          # setup-go@v5 caches ~/go/pkg/mod and the build cache automatically
-          # when a go.sum is present; no separate actions/cache step needed.
           cache: true
 
       - name: go vet
         run: go vet ./...
 
       - name: go test -race -cover
-        run: |
-          go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: go build
         run: go build ./...
@@ -58,3 +59,49 @@ jobs:
           name: coverage-${{ github.run_id }}
           path: coverage.out
           retention-days: 7
+
+  docker:
+    name: docker build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: build (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: bidlobot:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            VERSION=${{ github.ref_name }}-${{ github.sha }}
+            COMMIT=${{ github.sha }}
+
+      - name: smoke test image
+        run: |
+          docker run --rm bidlobot:ci --version
+          docker run --rm -e TG_BOT_TOKEN= bidlobot:ci --check-config && exit 1 || true
+          docker run --rm -e TG_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi bidlobot:ci --check-config
+
+  secret-scan:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
