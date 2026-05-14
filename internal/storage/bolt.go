@@ -21,6 +21,7 @@ var buckets = []string{
 	"members",
 	"members_by_chat",
 	"chats",
+	"pending_actions",
 }
 
 type BoltStore struct {
