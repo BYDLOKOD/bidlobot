@@ -14,11 +14,17 @@ func setCommands(ctx context.Context, bot *telego.Bot) error {
 
 	groupCommands := []telego.BotCommand{
 		{Command: "stats", Description: "Статистика чата"},
+		{Command: "dice", Description: "Бросить кубик"},
+		{Command: "battle", Description: "Реакция-баттл X vs Y"},
+		{Command: "quiz", Description: "Угадай язык по коду"},
 		{Command: "help", Description: "Справка"},
 	}
 
 	adminCommands := []telego.BotCommand{
 		{Command: "stats", Description: "Статистика чата"},
+		{Command: "dice", Description: "Бросить кубик"},
+		{Command: "battle", Description: "Реакция-баттл X vs Y"},
+		{Command: "quiz", Description: "Угадай язык по коду"},
 		{Command: "warn", Description: "Предупредить пользователя"},
 		{Command: "warns", Description: "Предупреждения / сброс"},
 		{Command: "mute", Description: "Замьютить пользователя"},

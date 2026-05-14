@@ -35,6 +35,8 @@ func registerRoutes(
 	adminGroup.HandleMessage(modH.HandleBan, th.CommandEqual("ban"))
 	adminGroup.HandleMessage(modH.HandleUnban, th.CommandEqual("unban"))
 
+	registerGameRoutes(bh, sgGroup, a)
+
 	bh.HandleMessageReaction(membershipReactionHandler(a.memberSvc, a.log), th.AnyMessageReaction())
 	bh.HandleMyChatMemberUpdated(membershipMyChatMemberHandler(a.memberSvc, a, a.log))
 	bh.HandleChatMemberUpdated(membershipChatMemberHandler(a.memberSvc, a.adminCache, a.log))

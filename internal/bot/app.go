@@ -26,6 +26,7 @@ type App struct {
 	dispatcher  *CallbackDispatcher
 	pendingGC   PendingGC
 	inlineSvc   *InlineService
+	games       *GamesRegistry
 }
 
 // PendingGC is the narrow API the App needs to periodically clean up
@@ -45,6 +46,18 @@ func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, st
 		dispatcher:  dispatcher,
 		pendingGC:   pendingGC,
 		inlineSvc:   inlineSvc,
+	}
+}
+
+// AttachGames installs the mini-games registry. Call before Run so that
+// registerRoutes sees the wiring. Passing nil is a no-op.
+func (a *App) AttachGames(g *GamesRegistry) {
+	if g == nil {
+		return
+	}
+	a.games = g
+	if a.inlineSvc != nil && g.InlineRouter != nil {
+		a.inlineSvc.SetGameRouter(g.InlineRouter)
 	}
 }
 
@@ -153,13 +166,19 @@ const helpDM = `BidloBot - управление IT-сообществом.
 
 Бот работает в supergroup-чатах. Добавь меня в группу с правами администратора (минимум: Restrict Members), чтобы начать.`
 
-const helpSupergroup = `BidloBot - статистика и модерация чата.
+const helpSupergroup = `BidloBot - статистика, модерация и мини-игры.
 
 Stats:
   /stats         - обзор чата
   /stats top     - топ участников
   /stats today   - активность за день
   /stats @user   - статистика пользователя
+
+Games:
+  /dice [emoji]      - бросок кубика, рекорды чата
+  /battle X Y        - голосование реакциями за 60с
+  /quiz              - угадай язык по сниппету
+  /quiz top          - топ-5 угадавших
 
 Moderation (только для админов):
   /warn @user [причина]   - выдать предупреждение
