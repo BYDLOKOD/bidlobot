@@ -12,6 +12,7 @@ import (
 	"github.com/mymmrac/telego"
 
 	"github.com/veschin/bidlobot/internal/bot"
+	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
@@ -80,7 +81,10 @@ func main() {
 
 	modExecutor := bot.NewModerationExecutor(modSvc, memberRepo, adminCache, log)
 	modExecutor.RegisterAll(dispatcher)
-	// Phase 3e will register the cleanup executor here.
+
+	cleanupSvc := cleanup.NewService(memberRepo, tgBot, log)
+	cleanupExecutor := bot.NewCleanupExecutor(cleanupSvc, pendingRepo, tgBot, log)
+	cleanupExecutor.RegisterAll(dispatcher)
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 
