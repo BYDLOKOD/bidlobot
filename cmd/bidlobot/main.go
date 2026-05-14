@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mymmrac/telego"
 
@@ -16,31 +19,59 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
+	"github.com/veschin/bidlobot/internal/shared/ratelimit"
+	"github.com/veschin/bidlobot/internal/shared/retry"
+	"github.com/veschin/bidlobot/internal/shared/tgclient"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
-func main() {
-	log := setupLogger()
+// version and commit may be overridden via:
+//
+//	go build -ldflags "-X main.version=v1.0.0 -X main.commit=$(git rev-parse HEAD)"
+//
+// Otherwise they fall back to runtime/debug.ReadBuildInfo at startup.
+var (
+	version = ""
+	commit  = ""
+)
 
-	token := os.Getenv("TG_BOT_TOKEN")
-	if token == "" {
-		log.Error("TG_BOT_TOKEN is required")
-		os.Exit(1)
+func main() {
+	flagVersion := flag.Bool("version", false, "print build version and exit")
+	flagCheck := flag.Bool("check-config", false, "validate config and exit (0 ok, 1 invalid)")
+	flag.Parse()
+
+	meta := versionFromRuntime(version, commit)
+	if *flagVersion {
+		fmt.Println(meta.String())
+		return
 	}
 
-	dbPath := envOr("DB_PATH", "./data")
-	if err := os.MkdirAll(dbPath, 0755); err != nil {
+	cfg := loadConfig()
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintln(os.Stderr, "configuration invalid:")
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Exit(1)
+	}
+	if *flagCheck {
+		fmt.Println("configuration ok")
+		return
+	}
+
+	log := setupLogger(cfg.LogLevel)
+	log.Info("starting", "build", meta.String())
+
+	if err := os.MkdirAll(cfg.DBPath, 0o755); err != nil {
 		log.Error("create data dir", "error", err)
 		os.Exit(1)
 	}
 
-	tgBot, err := telego.NewBot(token)
+	tgBot, err := telego.NewBot(cfg.Token)
 	if err != nil {
 		log.Error("create telegram bot", "error", err)
 		os.Exit(1)
 	}
 
-	store, err := storage.NewBoltStore(filepath.Join(dbPath, "bidlobot.db"))
+	store, err := storage.NewBoltStore(filepath.Join(cfg.DBPath, "bidlobot.db"))
 	if err != nil {
 		log.Error("open database", "error", err)
 		os.Exit(1)
@@ -57,6 +88,22 @@ func main() {
 
 	adminCache := shared.NewAdminCache(tgBot, botInfo.ID, log)
 
+	limiter := ratelimit.New(ratelimit.Config{Logger: log})
+	defer limiter.Close()
+
+	tgClient, err := tgclient.New(tgclient.Config{
+		Bot:         tgBot,
+		Limiter:     limiter,
+		RetryPolicy: retry.Policy{},
+		Migrator:    store,
+		Admin:       adminCache,
+		Logger:      log,
+	})
+	if err != nil {
+		log.Error("init telegram client wrapper", "error", err)
+		os.Exit(1)
+	}
+
 	statsRepo := storage.NewStatsRepo(db)
 	warnRepo := storage.NewWarnRepo(db)
 	memberRepo := storage.NewMembershipRepo(db)
@@ -71,10 +118,29 @@ func main() {
 	statsSvc := stats.NewService(statsRepo, statsBuffer, displayResolver, log)
 	statsHandler := stats.NewHandler(statsSvc, statsLookup, log)
 
-	modSvc := moderation.NewService(warnRepo, tgBot, adminCache, log)
+	// Moderation routes its writes through the wrapped client so 429/5xx,
+	// migration, and per-chat rate limits all apply to ban/restrict/etc.
+	modSvc := moderation.NewService(warnRepo, tgClient, adminCache, log)
 	modHandler := moderation.NewHandler(modSvc, adminCache, modLookup, log)
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc)
+	if err := app.AttachHealth(
+		func() bool {
+			// db.Path returns "" once the bbolt instance is closed.
+			return db != nil && db.Path() != ""
+		},
+		func(ctx context.Context) bool {
+			cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			_, gerr := tgClient.GetMe(cctx)
+			return gerr == nil
+		},
+		meta.Version,
+		meta.Commit,
+	); err != nil {
+		log.Error("attach health", "error", err)
+		os.Exit(1)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -98,20 +164,17 @@ func main() {
 	log.Info("shutdown complete")
 }
 
-func setupLogger() *slog.Logger {
-	level := slog.LevelInfo
-	switch strings.ToLower(envOr("LOG_LEVEL", "info")) {
+func setupLogger(level string) *slog.Logger {
+	lvl := slog.LevelInfo
+	switch strings.ToLower(level) {
 	case "debug":
-		level = slog.LevelDebug
+		lvl = slog.LevelDebug
 	case "warn":
-		level = slog.LevelWarn
+		lvl = slog.LevelWarn
 	case "error":
-		level = slog.LevelError
+		lvl = slog.LevelError
 	}
-
-	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		Level: level,
-	}))
+	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
 }
 
 func envOr(key, fallback string) string {
