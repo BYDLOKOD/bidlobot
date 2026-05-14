@@ -116,6 +116,10 @@ func (m *MockAPI) GetChatMember(_ context.Context, params *telego.GetChatMemberP
 		return &telego.ChatMemberBanned{User: telego.User{ID: params.UserID}}, nil
 	case "left":
 		return &telego.ChatMemberLeft{User: telego.User{ID: params.UserID}}, nil
+	case "administrator":
+		return &telego.ChatMemberAdministrator{User: telego.User{ID: params.UserID}}, nil
+	case "creator":
+		return &telego.ChatMemberOwner{User: telego.User{ID: params.UserID}}, nil
 	default:
 		return &telego.ChatMemberMember{User: telego.User{ID: params.UserID}}, nil
 	}
