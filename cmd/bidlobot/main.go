@@ -63,12 +63,16 @@ func main() {
 
 	memberSvc := membership.NewService(memberRepo, log)
 
+	displayResolver := &membershipDisplayResolver{repo: memberRepo}
+	statsLookup := &membershipStatsLookup{repo: memberRepo}
+	modLookup := &membershipModerationLookup{repo: memberRepo}
+
 	statsBuffer := stats.NewBuffer(statsRepo, log)
-	statsSvc := stats.NewService(statsRepo, statsBuffer, log)
-	statsHandler := stats.NewHandler(statsSvc, nil, log)
+	statsSvc := stats.NewService(statsRepo, statsBuffer, displayResolver, log)
+	statsHandler := stats.NewHandler(statsSvc, statsLookup, log)
 
 	modSvc := moderation.NewService(warnRepo, tgBot, adminCache, log)
-	modHandler := moderation.NewHandler(modSvc, adminCache, nil, log)
+	modHandler := moderation.NewHandler(modSvc, adminCache, modLookup, log)
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc)
 
@@ -115,4 +119,44 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// Three thin adapters around MembershipRepo, one per consumer interface
+// the cross-domain wiring needs. Putting them in cmd keeps the domain
+// packages free of cross-imports.
+
+type membershipStatsLookup struct {
+	repo *storage.MembershipRepo
+}
+
+func (l *membershipStatsLookup) GetByUsername(ctx context.Context, absChatID int64, username string) (int64, error) {
+	m, err := l.repo.GetMemberByUsername(ctx, absChatID, username)
+	if err != nil {
+		return 0, err
+	}
+	return m.UserID, nil
+}
+
+type membershipModerationLookup struct {
+	repo *storage.MembershipRepo
+}
+
+func (l *membershipModerationLookup) GetByUsername(ctx context.Context, absChatID int64, username string) (int64, bool, error) {
+	m, err := l.repo.GetMemberByUsername(ctx, absChatID, username)
+	if err != nil {
+		return 0, false, err
+	}
+	return m.UserID, m.IsBot, nil
+}
+
+type membershipDisplayResolver struct {
+	repo *storage.MembershipRepo
+}
+
+func (r *membershipDisplayResolver) UserDisplay(ctx context.Context, absChatID, userID int64) string {
+	m, err := r.repo.GetMember(ctx, userID, absChatID)
+	if err != nil {
+		return ""
+	}
+	return shared.UserDisplay(m.Username, m.FirstName)
 }

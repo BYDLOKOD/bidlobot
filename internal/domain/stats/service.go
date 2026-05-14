@@ -9,19 +9,41 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
+// DisplayResolver returns a chat-local display name for a user (e.g.
+// "@alice" or "Alice"). The Service uses it to print real names in
+// /stats output instead of bare user IDs. A nil resolver is tolerated
+// - output then falls back to "User <id>".
+type DisplayResolver interface {
+	UserDisplay(ctx context.Context, absChatID, userID int64) string
+}
+
 type Service struct {
-	buffer *Buffer
-	store  Store
-	log    *slog.Logger
+	buffer  *Buffer
+	store   Store
+	display DisplayResolver
+	log     *slog.Logger
 }
 
 // NewService создаёт сервис статистики с буфером и хранилищем.
-func NewService(store Store, buffer *Buffer, log *slog.Logger) *Service {
+// display может быть nil - тогда имена пользователей не подставляются.
+func NewService(store Store, buffer *Buffer, display DisplayResolver, log *slog.Logger) *Service {
 	return &Service{
-		buffer: buffer,
-		store:  store,
-		log:    log,
+		buffer:  buffer,
+		store:   store,
+		display: display,
+		log:     log,
 	}
+}
+
+func (s *Service) displayFor(ctx context.Context, absChatID, userID int64) string {
+	if s.display == nil {
+		return fmt.Sprintf("User %d", userID)
+	}
+	d := s.display.UserDisplay(ctx, absChatID, userID)
+	if d == "" {
+		return fmt.Sprintf("User %d", userID)
+	}
+	return d
 }
 
 // ChatOverview возвращает HTML-форматированный обзор статистики чата.
@@ -64,8 +86,8 @@ func (s *Service) ChatOverview(ctx context.Context, absChatID int64) (string, er
 
 	if mostActive != nil {
 		output += fmt.Sprintf(
-			"Most active: User %d (%s messages)\n",
-			mostActive.UserID,
+			"Most active: %s (%s messages)\n",
+			s.displayFor(ctx, absChatID, mostActive.UserID),
 			shared.FormatNumber(mostActive.MessageCount),
 		)
 	}
@@ -105,12 +127,12 @@ func (s *Service) Top(ctx context.Context, absChatID int64) (string, error) {
 	}
 
 	for idx := 0; idx < limit; idx++ {
-		s := statsList[idx]
+		row := statsList[idx]
 		output += fmt.Sprintf(
-			"%d. User %d - %s messages\n",
+			"%d. %s - %s messages\n",
 			idx+1,
-			s.UserID,
-			shared.FormatNumber(s.MessageCount),
+			s.displayFor(ctx, absChatID, row.UserID),
+			shared.FormatNumber(row.MessageCount),
 		)
 	}
 
@@ -134,7 +156,8 @@ func (s *Service) Today(ctx context.Context, absChatID int64) (string, error) {
 
 // UserStats возвращает персональную статистику пользователя в чате.
 // Ранг определяется среди всех пользователей чата по убыванию сообщений.
-func (s *Service) UserStats(ctx context.Context, absChatID, userID int64, username string) (string, error) {
+// Параметр username игнорируется - имя берётся через DisplayResolver.
+func (s *Service) UserStats(ctx context.Context, absChatID, userID int64, _ string) (string, error) {
 	userStats, err := s.buffer.GetMerged(ctx, userID, absChatID)
 	if err == ErrNotFound {
 		return "", fmt.Errorf("stat not found: %w", err)
@@ -156,14 +179,12 @@ func (s *Service) UserStats(ctx context.Context, absChatID, userID int64, userna
 	})
 
 	rank := 0
-	for idx, s := range statsList {
-		if s.UserID == userID {
+	for idx, row := range statsList {
+		if row.UserID == userID {
 			rank = idx + 1
 			break
 		}
 	}
-
-	userDisplay := shared.UserDisplay(username, fmt.Sprintf("%d", userID))
 
 	output := fmt.Sprintf(
 		"<b>Stats for %s</b>\n"+
@@ -171,7 +192,7 @@ func (s *Service) UserStats(ctx context.Context, absChatID, userID int64, userna
 			"Rank: %d / %d\n"+
 			"First seen: %s\n"+
 			"Last seen: %s",
-		userDisplay,
+		s.displayFor(ctx, absChatID, userID),
 		shared.FormatNumber(userStats.MessageCount),
 		rank,
 		len(statsList),
