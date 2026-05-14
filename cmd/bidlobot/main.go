@@ -60,6 +60,7 @@ func main() {
 	statsRepo := storage.NewStatsRepo(db)
 	warnRepo := storage.NewWarnRepo(db)
 	memberRepo := storage.NewMembershipRepo(db)
+	pendingRepo := storage.NewPendingRepo(db)
 
 	memberSvc := membership.NewService(memberRepo, log)
 
@@ -74,7 +75,10 @@ func main() {
 	modSvc := moderation.NewService(warnRepo, tgBot, adminCache, log)
 	modHandler := moderation.NewHandler(modSvc, adminCache, modLookup, log)
 
-	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc)
+	dispatcher := bot.NewCallbackDispatcher(pendingRepo, adminCache, tgBot, log)
+	// Phase 3d/3e will register destructive executors here.
+
+	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

@@ -40,4 +40,8 @@ func registerRoutes(
 	bh.HandleChatMemberUpdated(membershipChatMemberHandler(a.memberSvc, a.adminCache, a.log))
 
 	bh.HandleInlineQuery(inlineQueryHandler(a.log))
+
+	if a.dispatcher != nil {
+		bh.HandleCallbackQuery(a.dispatcher.Handle, th.AnyCallbackQueryWithMessage())
+	}
 }

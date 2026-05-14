@@ -23,15 +23,26 @@ type App struct {
 	adminCache  *shared.AdminCache
 	statsBuffer *stats.Buffer
 	memberSvc   *membership.Service
+	dispatcher  *CallbackDispatcher
+	pendingGC   PendingGC
 }
 
-func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service) *App {
+// PendingGC is the narrow API the App needs to periodically clean up
+// expired pending actions; declared here so wiring can pass either a
+// PendingRepo or a fake without depending on the storage package.
+type PendingGC interface {
+	GarbageCollect(ctx context.Context, now time.Time) (int, error)
+}
+
+func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC) *App {
 	return &App{
 		bot:         bot,
 		log:         log,
 		adminCache:  adminCache,
 		statsBuffer: statsBuffer,
 		memberSvc:   memberSvc,
+		dispatcher:  dispatcher,
+		pendingGC:   pendingGC,
 	}
 }
 
@@ -78,12 +89,38 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler, modH *moderation.H
 	registerRoutes(bh, a, statsH, modH)
 
 	go a.statsBuffer.Run(ctx, 60*time.Second)
+	if a.pendingGC != nil {
+		go a.runPendingGC(ctx, time.Minute)
+	}
 
 	a.log.Info("bot started, polling for updates")
 	go bh.Start()
 
 	<-ctx.Done()
 	return nil
+}
+
+// runPendingGC sweeps expired pending actions out of bbolt every
+// interval. The 5-minute TTL means a 1-minute sweep keeps stale entries
+// out of the way without thrashing on small chats.
+func (a *App) runPendingGC(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := a.pendingGC.GarbageCollect(ctx, time.Now().UTC())
+			if err != nil {
+				a.log.Warn("pending GC failed", "error", err)
+				continue
+			}
+			if n > 0 {
+				a.log.Info("pending GC removed expired actions", "count", n)
+			}
+		}
+	}
 }
 
 func (a *App) Stop() {
