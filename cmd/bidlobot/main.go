@@ -77,7 +77,10 @@ func main() {
 
 	dispatcher := bot.NewCallbackDispatcher(pendingRepo, adminCache, tgBot, log)
 	inlineSvc := bot.NewInlineService(pendingRepo, log)
-	// Phase 3d/3e will register destructive executors here.
+
+	modExecutor := bot.NewModerationExecutor(modSvc, memberRepo, adminCache, log)
+	modExecutor.RegisterAll(dispatcher)
+	// Phase 3e will register the cleanup executor here.
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 
