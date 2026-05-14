@@ -25,6 +25,7 @@ type App struct {
 	memberSvc   *membership.Service
 	dispatcher  *CallbackDispatcher
 	pendingGC   PendingGC
+	inlineSvc   *InlineService
 }
 
 // PendingGC is the narrow API the App needs to periodically clean up
@@ -34,7 +35,7 @@ type PendingGC interface {
 	GarbageCollect(ctx context.Context, now time.Time) (int, error)
 }
 
-func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC) *App {
+func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
 	return &App{
 		bot:         bot,
 		log:         log,
@@ -43,6 +44,7 @@ func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, st
 		memberSvc:   memberSvc,
 		dispatcher:  dispatcher,
 		pendingGC:   pendingGC,
+		inlineSvc:   inlineSvc,
 	}
 }
 

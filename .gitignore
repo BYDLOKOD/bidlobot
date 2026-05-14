@@ -4,3 +4,4 @@
 *.db.lock
 .env
 .env.local
+.claude/worktrees/

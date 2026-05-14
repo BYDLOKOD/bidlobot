@@ -76,9 +76,10 @@ func main() {
 	modHandler := moderation.NewHandler(modSvc, adminCache, modLookup, log)
 
 	dispatcher := bot.NewCallbackDispatcher(pendingRepo, adminCache, tgBot, log)
+	inlineSvc := bot.NewInlineService(pendingRepo, log)
 	// Phase 3d/3e will register destructive executors here.
 
-	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo)
+	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
