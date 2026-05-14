@@ -12,6 +12,7 @@ import (
 	"github.com/mymmrac/telego"
 
 	"github.com/veschin/bidlobot/internal/bot"
+	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
@@ -58,6 +59,9 @@ func main() {
 
 	statsRepo := storage.NewStatsRepo(db)
 	warnRepo := storage.NewWarnRepo(db)
+	memberRepo := storage.NewMembershipRepo(db)
+
+	memberSvc := membership.NewService(memberRepo, log)
 
 	statsBuffer := stats.NewBuffer(statsRepo, log)
 	statsSvc := stats.NewService(statsRepo, statsBuffer, log)
@@ -66,7 +70,7 @@ func main() {
 	modSvc := moderation.NewService(warnRepo, tgBot, adminCache, log)
 	modHandler := moderation.NewHandler(modSvc, adminCache, nil, log)
 
-	app := bot.NewApp(tgBot, log, adminCache, statsBuffer)
+	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

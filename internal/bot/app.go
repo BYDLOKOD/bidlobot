@@ -9,6 +9,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
@@ -21,14 +22,16 @@ type App struct {
 	handler     *th.BotHandler
 	adminCache  *shared.AdminCache
 	statsBuffer *stats.Buffer
+	memberSvc   *membership.Service
 }
 
-func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer) *App {
+func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service) *App {
 	return &App{
 		bot:         bot,
 		log:         log,
 		adminCache:  adminCache,
 		statsBuffer: statsBuffer,
+		memberSvc:   memberSvc,
 	}
 }
 
@@ -39,6 +42,7 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler, modH *moderation.H
 			"callback_query",
 			"my_chat_member",
 			"chat_member",
+			"message_reaction",
 		},
 	})
 	if err != nil {
