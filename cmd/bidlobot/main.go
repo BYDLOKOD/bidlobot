@@ -158,6 +158,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Phase 4 mini-games: dice / battle / quiz. Constructor wires the
+	// inline router and slash handlers; AttachGames installs them on App.
+	app.AttachGames(buildGames(db, tgBot, log))
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 

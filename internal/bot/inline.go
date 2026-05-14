@@ -28,11 +28,30 @@ const pendingTTL = 5 * time.Minute
 type InlineService struct {
 	pending pending.Store
 	log     *slog.Logger
+
+	// gameRouter is consulted before the moderation/cleanup branches so
+	// that mini-game commands (dice/battle/quiz) can register without
+	// the inline package importing the games packages. Returns
+	// (results, true) when the command was handled; (nil, false) when
+	// the inline service should continue with the default switch.
+	gameRouter InlineGameRouter
+}
+
+// InlineGameRouter is the contract a mini-game module implements to plug
+// itself into inline-mode dispatch. The router receives the lowercased
+// first token (cmd) and the trailing tokens (args). Implementations must
+// be cheap and side-effect-free: inline queries fire on every keystroke.
+type InlineGameRouter interface {
+	Route(cmd string, args []string, actor telego.User) (results []telego.InlineQueryResult, handled bool)
 }
 
 func NewInlineService(pendingStore pending.Store, log *slog.Logger) *InlineService {
 	return &InlineService{pending: pendingStore, log: log}
 }
+
+// SetGameRouter wires a router that handles dice/battle/quiz inline
+// queries. Idempotent; passing nil disables routing.
+func (s *InlineService) SetGameRouter(r InlineGameRouter) { s.gameRouter = r }
 
 // inlineCommand describes one offer the bot suggests when the user types
 // "@bidlobot ..." in any chat. For read-only entries the result fires
@@ -93,6 +112,24 @@ func catalog() []inlineCommand {
 			send:        "/help",
 		},
 		{
+			id:          "dice",
+			title:       "🎲 Бросить кубик",
+			description: "Отправить /dice - бросок 1-6",
+			send:        "/dice",
+		},
+		{
+			id:          "battle",
+			title:       "🥊 Реакция-баттл",
+			description: "Используйте: battle X Y - голосование за 60с",
+			send:        "/help",
+		},
+		{
+			id:          "quiz",
+			title:       "🧩 Код-квиз",
+			description: "Отправить /quiz - угадай язык",
+			send:        "/quiz",
+		},
+		{
 			id:          "help",
 			title:       "❓ Помощь",
 			description: "Отправить /help - список команд",
@@ -115,6 +152,12 @@ func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQue
 	args := parts[1:]
 	now := time.Now().UTC()
 	actor := query.From
+
+	if s.gameRouter != nil {
+		if results, ok := s.gameRouter.Route(cmd, args, actor); ok {
+			return results
+		}
+	}
 
 	switch cmd {
 	case "stats":
