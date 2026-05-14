@@ -5,7 +5,7 @@ kind: guide
 
 # Handoff: next session action plan
 
-Last updated: 2026-05-14, after Phases 0-2 and Phase 5.
+Last updated: 2026-05-14, after Phases 0-3, 5, and most of 6. Phase 4 (mini-games) currently in progress in a parallel agent worktree.
 
 ## Current state
 
@@ -51,8 +51,9 @@ User has a test supergroup with the bot already added as administrator with `can
 
 ## What does NOT exist
 
-- Mini-games
-- End-to-end run against the real bot
+- Mini-games (Phase 4 agent finishing in worktree-agent-a58a57ebfa140844f)
+- End-to-end run against the real bot (blocked on user flipping BotFather flags above)
+- Real-chat verification of cleanup workflow with kicks (run after BotFather setup is complete)
 
 ## Phase 5 deliverables (production readiness)
 
