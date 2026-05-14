@@ -5,7 +5,7 @@ kind: guide
 
 # Handoff: next session action plan
 
-Last updated: 2026-05-14, after Phases 0-2.
+Last updated: 2026-05-14, after Phases 0-2 and Phase 5.
 
 ## Current state
 
@@ -17,7 +17,7 @@ Six implementation phases planned:
 - **Phase 2 done** - inline mode as a slash-command launcher (read-only commands only); destructive deferred to Phase 3
 - **Phase 3** - cleanup feature + pending-actions storage + destructive inline confirms
 - **Phase 4** - mini-games (dice, reaction-battle, code-quiz)
-- **Phase 5** - production-readiness (rate limiter, retry, migration, /health, CI, backup)
+- **Phase 5 done** - production-readiness (rate limiter, retry, migration, /health, graceful shutdown, backup, CI, config validation)
 - **Phase 6** - integration testing (replayer + smoke tests)
 
 ## BotFather one-time setup
@@ -37,12 +37,13 @@ Verified 2026-05-14 against the live token: `can_read_all_group_messages=false`,
 
 ## What exists now
 
-- 22 Go files across `cmd/bidlobot`, `internal/{bot,domain/{stats,moderation},shared,storage,testutil,text}`
-- Three subscription types: `message`, `callback_query`, `my_chat_member`, `chat_member`
-- bbolt with 6 buckets (`profiles`, `profiles_by_chat` kept empty for archive revival; `stats`, `stats_by_chat`, `warnings`, `warns_by_target`)
+- Go modules across `cmd/{bidlobot,bidlobot-backup}`, `internal/{bot,domain/{stats,moderation,membership,pending,cleanup},shared,shared/{ratelimit,retry,tgclient},storage,testutil,text}`
+- Subscription types: `message`, `callback_query`, `my_chat_member`, `chat_member`, `message_reaction`, `inline_query`
+- bbolt with 10 buckets (`profiles`, `profiles_by_chat` kept empty for archive revival; `stats`, `stats_by_chat`, `members`, `members_by_chat`, `chats`, `warnings`, `warns_by_target`, `pending_actions`)
 - AdminCache (60 s TTL, invalidated on `chat_member` updates)
 - `RECORD_UPDATES=path` env activates JSONL recorder middleware
-- `go build` clean, `go vet` clean, `go test` green (storage, stats, moderation, shared)
+- `HEALTH_PORT` env (default 8080, 0 disables) controls /health and /version listener
+- `go build` clean, `go vet` clean, `go test -race` green
 
 ## Test environment
 
@@ -50,18 +51,20 @@ User has a test supergroup with the bot already added as administrator with `can
 
 ## What does NOT exist
 
-- Chats registry (no list of installations)
-- Membership tracking (no per-user last_seen / last_message / last_reaction)
-- Inline mode (`HandleInlineQuery` not registered)
-- Cleanup feature
 - Mini-games
-- `message_reaction` subscription (requires admin + explicit allowed_updates)
-- Rate-limited sender wrapper
-- Migration handler (`migrate_to_chat_id`)
-- Healthcheck endpoint
-- CI pipeline
-- Backup tooling
 - End-to-end run against the real bot
+
+## Phase 5 deliverables (production readiness)
+
+- **Per-chat outgoing rate limiter** in `internal/shared/ratelimit/`. 15 req/min per chat (1 token / 4s), FIFO queue capped at 50, drop oldest on overflow with WARN log. Lazy worker spawn with idle reaper so unused chats do not consume goroutines.
+- **Retry with backoff** in `internal/shared/retry/`. 429 sleeps `retry_after` + 10% jitter, retry once. 5xx walks 1s/2s/4s/8s exponential ladder with jitter, up to 4 attempts. Other 4xx surface immediately. Context cancellation aborts.
+- **Migration handler** for `migrate_to_chat_id`: `storage.MigrateChatID` rewrites all bbolt records keyed by abs(old) -> abs(new) across stats, members, chats, warnings buckets in a single transaction. The `tgclient.Client` wrapper detects the 400+migrate response, runs the migration, invalidates the admin cache, rewrites the request and replays.
+- **Composed wrapper** in `internal/shared/tgclient/`. Outer migration -> retry -> per-chat rate limit. Read-only methods (GetMe, GetChat, GetChatMember, GetChatAdministrators) bypass the rate limiter; AnswerCallbackQuery/AnswerInlineQuery skip rate-limiting too because of their strict server-side timeout.
+- **Health endpoint** at `internal/bot/health.go`. `GET /health` returns 200 ok if DB is open, last update was < 5 min ago (with startup grace), and a cached GetMe round-trip works. Otherwise 503 with reason. `GET /version` returns runtime/debug.ReadBuildInfo. Listener bound to `HEALTH_PORT` (default 8080); 0 disables.
+- **Graceful shutdown**: `App.Stop()` calls `BotHandler.StopWithContext` with a 10s deadline AND waits up to the same deadline on a per-update WaitGroup tracked by an `inFlightMiddleware`. Stats flush and health server stop happen after handlers settle.
+- **Backup tooling**: `cmd/bidlobot-backup` is a Go binary that opens the DB ReadOnly and uses `db.View(tx -> tx.WriteTo)` for a true online snapshot. `scripts/backup.sh` is the operator wrapper with `flock -n` for non-overlapping runs and rotation keeping the 7 newest by mtime. **Tradeoff documented in script header**: Go binary requires the bot to NOT hold the exclusive write lock, so a running bot forces fallback to plain `cp`. cp is best-effort - bbolt's double meta page recovers torn meta on next open, but for a true point-in-time backup, stop the bot first.
+- **CI pipeline**: `.github/workflows/ci.yml` runs go vet, go test -race -cover, go build on every push and PR to master/main. Uses `actions/setup-go@v5` (built-in cache) and `actions/upload-artifact@v4` for coverage.
+- **Config validation + version flags**: `cmd/bidlobot/config.go` validates TG_BOT_TOKEN format (`\d+:[A-Za-z0-9_-]{35,}`), DB_PATH writability, HEALTH_PORT range, LOG_LEVEL. Errors aggregated via `errors.Join`. `--version` prints build banner. `--check-config` exits 0/1 without opening the database.
 
 ## Anti-patterns (carry-over)
 
