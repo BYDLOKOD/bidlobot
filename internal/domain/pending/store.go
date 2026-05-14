@@ -50,6 +50,10 @@ type Store interface {
 	Create(ctx context.Context, a Action) error
 	Get(ctx context.Context, id string) (*Action, error)
 	Delete(ctx context.Context, id string) error
+	// PinChatID locks the action to a chat on first callback. Subsequent
+	// callbacks observed in a different chat must be refused - see the
+	// callback dispatcher for the rationale (forward-attack guard).
+	PinChatID(ctx context.Context, id string, absChatID int64) error
 	// GarbageCollect removes all expired entries and returns the count
 	// removed, so the periodic sweeper can log progress.
 	GarbageCollect(ctx context.Context, now time.Time) (int, error)

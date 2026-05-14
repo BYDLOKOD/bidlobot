@@ -57,6 +57,17 @@ func (s *fakePendingStore) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (s *fakePendingStore) PinChatID(_ context.Context, id string, absChatID int64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a, ok := s.data[id]
+	if !ok {
+		return errors.New("not found")
+	}
+	a.AbsChatID = absChatID
+	return nil
+}
+
 func (s *fakePendingStore) GarbageCollect(_ context.Context, _ time.Time) (int, error) {
 	return 0, nil
 }

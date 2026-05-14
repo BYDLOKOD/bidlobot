@@ -147,9 +147,26 @@ func (d *CallbackDispatcher) dispatch(ctx context.Context, query telego.Callback
 		}
 	}
 
-	if action.AbsChatID == 0 {
-		if msg := query.Message; msg != nil {
-			action.AbsChatID = storage.AbsChatID(msg.GetChat().ID)
+	var callbackChatID int64
+	if msg := query.Message; msg != nil {
+		callbackChatID = storage.AbsChatID(msg.GetChat().ID)
+	}
+
+	switch {
+	case action.AbsChatID == 0 && callbackChatID != 0:
+		// First callback for this pending - pin to the current chat so
+		// any subsequent callback observed in a different chat (e.g. a
+		// forwarded inline message) is refused. Without this, an admin
+		// who taps a forwarded preview would silently redirect the
+		// destructive action to the new chat.
+		if err := d.pending.PinChatID(ctx, id, callbackChatID); err != nil {
+			d.log.Warn("PinChatID failed", "error", err, "id", id)
+		}
+		action.AbsChatID = callbackChatID
+	case action.AbsChatID != 0 && callbackChatID != 0 && action.AbsChatID != callbackChatID:
+		return callbackResponse{
+			AnswerText: "Эта команда привязана к другому чату. Запросите её заново здесь.",
+			ShowAlert:  true,
 		}
 	}
 

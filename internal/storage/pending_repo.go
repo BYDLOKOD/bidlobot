@@ -95,6 +95,37 @@ func (r *PendingRepo) Delete(_ context.Context, id string) error {
 	})
 }
 
+// PinChatID rewrites the stored Action's AbsChatID. Called by the
+// callback dispatcher on the first observed callback so that any later
+// callback in a different chat (e.g. a forwarded inline message) can
+// be rejected. Idempotent if the existing AbsChatID equals the new one.
+func (r *PendingRepo) PinChatID(_ context.Context, id string, absChatID int64) error {
+	if id == "" || absChatID == 0 {
+		return fmt.Errorf("pending: PinChatID requires non-empty id and chat")
+	}
+	return r.db.Update(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(bktPending)
+		key := PendingKey(id)
+		data := bkt.Get(key)
+		if data == nil {
+			return pending.ErrNotFound
+		}
+		var a pending.Action
+		if err := json.Unmarshal(data, &a); err != nil {
+			return err
+		}
+		if a.AbsChatID == absChatID {
+			return nil
+		}
+		a.AbsChatID = absChatID
+		updated, err := json.Marshal(&a)
+		if err != nil {
+			return err
+		}
+		return bkt.Put(key, updated)
+	})
+}
+
 func (r *PendingRepo) GarbageCollect(_ context.Context, now time.Time) (int, error) {
 	now = now.UTC()
 	removed := 0
