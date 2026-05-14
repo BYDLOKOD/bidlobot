@@ -18,6 +18,9 @@ var buckets = []string{
 	"stats_by_chat",
 	"warnings",
 	"warns_by_target",
+	"members",
+	"members_by_chat",
+	"chats",
 }
 
 type BoltStore struct {

@@ -26,6 +26,22 @@ func WarnTargetPrefix(absChatID, targetUserID int64) []byte {
 	return []byte(fmt.Sprintf("wt:%020d:%020d:", absChatID, targetUserID))
 }
 
+func MemberKey(userID, absChatID int64) []byte {
+	return []byte(fmt.Sprintf("m:%020d:%020d", userID, absChatID))
+}
+
+func MemberChatIndex(absChatID, userID int64) []byte {
+	return []byte(fmt.Sprintf("mc:%020d:%020d", absChatID, userID))
+}
+
+func MemberChatPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("mc:%020d:", absChatID))
+}
+
+func ChatKey(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("c:%020d", absChatID))
+}
+
 func AbsChatID(chatID int64) int64 {
 	if chatID < 0 {
 		return -chatID
