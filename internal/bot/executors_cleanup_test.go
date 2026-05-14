@@ -351,3 +351,64 @@ func TestCleanupRegisterAll(t *testing.T) {
 		t.Error("apply executor not registered")
 	}
 }
+
+func TestCleanupWorkerHonoursAppContextCancel(t *testing.T) {
+	now := time.Now().UTC()
+	// Twenty candidates so the worker would naturally run for tens of
+	// seconds; with cancellation it must return well before that.
+	var members []membership.Member
+	for i := int64(1); i <= 20; i++ {
+		members = append(members, membership.Member{
+			UserID: i, AbsChatID: 100, Status: membership.StatusMember,
+		})
+	}
+	exec, editor, pendingStore := newCleanupExec(t, members)
+
+	// Slow down the kick interval so cancellation has a measurable effect.
+	// (newCleanupExec reaches into the cleanup.Service via SetKickInterval
+	// at construction; bump it back up for this case.)
+	// Fresh service with a 100ms interval: enough that 20 kicks would
+	// take 2s, but cancellation must short-circuit.
+	store := newInMem()
+	for _, m := range members {
+		store.put(m)
+	}
+	api := testutil.NewMockAPI()
+	svc := cleanup.NewService(store, api, testLogger())
+	svc.SetKickInterval(100 * time.Millisecond)
+
+	exec = NewCleanupExecutor(svc, pendingStore, editor, testLogger())
+	exec.RegisterAll(NewCallbackDispatcher(pendingStore, stubAdminCache(true), nil, testLogger()))
+
+	appCtx, cancel := context.WithCancel(context.Background())
+	exec.SetAppContext(appCtx)
+	wg := &sync.WaitGroup{}
+	exec.AttachWaitGroup(wg)
+
+	pendingStore.data["abc"] = &pending.Action{
+		ID: "abc", Kind: pending.KindCleanup, AbsChatID: 100,
+		ActorUserID: 1, Threshold: 30 * 24 * time.Hour,
+		ExpiresAt: now.Add(time.Hour),
+	}
+	resp := exec.ExecuteKick(context.Background(), mkCleanupQuery(1, -100, 42), pendingStore.data["abc"])
+	if !strings.Contains(resp.EditedText, "Чистка запущена") {
+		t.Fatalf("expected starting body, got %q", resp.EditedText)
+	}
+
+	// Let one or two kicks happen, then cancel and assert the worker
+	// finishes promptly via the WaitGroup.
+	time.Sleep(150 * time.Millisecond)
+	cancel()
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// success
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not honour appCtx cancellation")
+	}
+}

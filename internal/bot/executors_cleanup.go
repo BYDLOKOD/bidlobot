@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -28,6 +29,18 @@ type CleanupExecutor struct {
 	pending pending.Store
 	bot     telegramEditor
 	log     *slog.Logger
+
+	// appCtx, when set, scopes the lifetime of background kick workers
+	// to the App's lifetime. On App.Stop() the context cancels and the
+	// worker stops between kicks instead of orphaning into a closed bot.
+	// Falls back to context.Background() if SetAppContext is never
+	// called (acceptable for tests; required wiring for production).
+	appCtx context.Context
+
+	// workers WaitGroup, shared with App.inFlight, so that App.Stop()
+	// blocks on background kick workers as well as on per-update
+	// handlers. Nil for tests that drive the worker synchronously.
+	workers *sync.WaitGroup
 }
 
 // telegramEditor is the narrow telego surface CleanupExecutor needs to
@@ -49,6 +62,21 @@ func NewCleanupExecutor(svc *cleanup.Service, pendingStore pending.Store, bot te
 func (e *CleanupExecutor) RegisterAll(d *CallbackDispatcher) {
 	d.Register(pending.KindCleanup, cbPreview, e.ExecutePreview)
 	d.Register(pending.KindCleanup, cbApply, e.ExecuteKick)
+}
+
+// SetAppContext binds the background kick worker's lifetime to the
+// app-level context. Call this from main.go right after the signal-aware
+// context is created; without it the worker uses context.Background()
+// and will continue past App.Stop().
+func (e *CleanupExecutor) SetAppContext(ctx context.Context) {
+	e.appCtx = ctx
+}
+
+// AttachWaitGroup registers the App's in-flight WaitGroup so that
+// Stop() waits for any kick worker that started before shutdown to
+// finish its current kick (or hit the appCtx cancel between kicks).
+func (e *CleanupExecutor) AttachWaitGroup(wg *sync.WaitGroup) {
+	e.workers = wg
 }
 
 // ExecutePreview is the response to the "Show candidates" tap. It
@@ -102,7 +130,15 @@ func (e *CleanupExecutor) ExecuteKick(ctx context.Context, query telego.Callback
 	messageID := query.Message.GetMessageID()
 	candidates := preview.Candidates
 
-	go e.runWorker(action.ID, chatID, messageID, signed, candidates)
+	if e.workers != nil {
+		e.workers.Add(1)
+	}
+	go func() {
+		if e.workers != nil {
+			defer e.workers.Done()
+		}
+		e.runWorker(action.ID, chatID, messageID, signed, candidates)
+	}()
 
 	eta := time.Duration(len(candidates)) * 2 * time.Second
 	return callbackResponse{
@@ -113,7 +149,10 @@ func (e *CleanupExecutor) ExecuteKick(ctx context.Context, query telego.Callback
 }
 
 func (e *CleanupExecutor) runWorker(actionID string, chatID int64, messageID int, signed int64, candidates []membership.Member) {
-	ctx := context.Background()
+	ctx := e.appCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	total := len(candidates)
 	const progressEvery = 5
 

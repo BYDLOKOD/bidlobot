@@ -35,14 +35,23 @@ type App struct {
 	pendingGC   PendingGC
 	inlineSvc   *InlineService
 
-	// inFlight tracks handler goroutines so that Stop can wait for
-	// them within ShutdownTimeout.
+	// inFlight tracks handler goroutines AND background workers (e.g.
+	// cleanup kick worker) so that Stop can wait for them within
+	// ShutdownTimeout.
 	inFlight sync.WaitGroup
 
 	// healthCheck is the optional /health introspection target. nil when
 	// HEALTH_PORT is set to 0.
 	healthCheck  *healthChecker
 	healthServer *HealthServer
+}
+
+// InFlight exposes the WaitGroup for executors that need to register
+// background workers. Stop() blocks on this WaitGroup so any registered
+// goroutine must respect cancellation via App's run context to ensure
+// shutdown completes within ShutdownTimeout.
+func (a *App) InFlight() *sync.WaitGroup {
+	return &a.inFlight
 }
 
 // PendingGC is the narrow API the App needs to periodically clean up

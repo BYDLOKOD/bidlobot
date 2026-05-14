@@ -131,9 +131,14 @@ func main() {
 	modExecutor := bot.NewModerationExecutor(modSvc, memberRepo, adminCache, log)
 	modExecutor.RegisterAll(dispatcher)
 
-	cleanupSvc := cleanup.NewService(memberRepo, tgBot, log)
-	cleanupExecutor := bot.NewCleanupExecutor(cleanupSvc, pendingRepo, tgBot, log)
+	// Cleanup kicks go through the rate-limited + retried wrapper so that
+	// a 200-candidate sweep never trips Telegram's per-chat budget and
+	// transient 429/5xx don't kill the worker mid-flight. Progress
+	// EditMessageText calls go through the wrapper for the same reason.
+	cleanupSvc := cleanup.NewService(memberRepo, tgClient, log)
+	cleanupExecutor := bot.NewCleanupExecutor(cleanupSvc, pendingRepo, tgClient, log)
 	cleanupExecutor.RegisterAll(dispatcher)
+	// SetAppContext is called below once the signal-aware context exists.
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 	if err := app.AttachHealth(
@@ -155,6 +160,10 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+
+	// Cleanup workers must abort with the app, not orphan after Stop().
+	cleanupExecutor.SetAppContext(ctx)
+	cleanupExecutor.AttachWaitGroup(app.InFlight())
 
 	go func() {
 		if err := app.Run(ctx, statsHandler, modHandler); err != nil {
