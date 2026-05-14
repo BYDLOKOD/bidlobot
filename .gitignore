@@ -1,14 +1,6 @@
-.clojure/
-.nrepl-port
-target/
-.clj-kondo/
-.lsp/
-.idea/
-*.iml
-
-# Env
+/data/
+/bidlobot
+*.db
+*.db.lock
 .env
 .env.local
-
-# Cache
-.cpcache/

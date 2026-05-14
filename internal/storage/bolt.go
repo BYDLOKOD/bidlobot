@@ -1,0 +1,51 @@
+package storage
+
+import (
+	"fmt"
+	"time"
+
+	bolt "go.etcd.io/bbolt"
+)
+
+var buckets = []string{
+	"profiles",
+	"profiles_by_chat",
+	"stats",
+	"stats_by_chat",
+	"warnings",
+	"warns_by_target",
+}
+
+type BoltStore struct {
+	db *bolt.DB
+}
+
+func NewBoltStore(path string) (*BoltStore, error) {
+	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	if err != nil {
+		return nil, fmt.Errorf("open bolt db: %w", err)
+	}
+
+	err = db.Update(func(tx *bolt.Tx) error {
+		for _, name := range buckets {
+			if _, err := tx.CreateBucketIfNotExists([]byte(name)); err != nil {
+				return fmt.Errorf("create bucket %s: %w", name, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("init buckets: %w", err)
+	}
+
+	return &BoltStore{db: db}, nil
+}
+
+func (s *BoltStore) DB() *bolt.DB {
+	return s.db
+}
+
+func (s *BoltStore) Close() error {
+	return s.db.Close()
+}

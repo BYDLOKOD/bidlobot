@@ -1,0 +1,50 @@
+package storage
+
+import "fmt"
+
+func ProfileKey(userID, absChatID int64) []byte {
+	return []byte(fmt.Sprintf("p:%020d:%020d", userID, absChatID))
+}
+
+func ProfileChatIndex(absChatID, userID int64) []byte {
+	return []byte(fmt.Sprintf("c:%020d:%020d", absChatID, userID))
+}
+
+func ProfileUserPrefix(userID int64) []byte {
+	return []byte(fmt.Sprintf("p:%020d:", userID))
+}
+
+func ProfileChatPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("c:%020d:", absChatID))
+}
+
+func StatsKey(userID, absChatID int64) []byte {
+	return []byte(fmt.Sprintf("s:%020d:%020d", userID, absChatID))
+}
+
+func StatsChatIndex(absChatID, userID int64) []byte {
+	return []byte(fmt.Sprintf("sc:%020d:%020d", absChatID, userID))
+}
+
+func StatsChatPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("sc:%020d:", absChatID))
+}
+
+func WarnKey(uuid string) []byte {
+	return []byte(fmt.Sprintf("w:%s", uuid))
+}
+
+func WarnTargetIndex(absChatID, targetUserID int64, uuid string) []byte {
+	return []byte(fmt.Sprintf("wt:%020d:%020d:%s", absChatID, targetUserID, uuid))
+}
+
+func WarnTargetPrefix(absChatID, targetUserID int64) []byte {
+	return []byte(fmt.Sprintf("wt:%020d:%020d:", absChatID, targetUserID))
+}
+
+func AbsChatID(chatID int64) int64 {
+	if chatID < 0 {
+		return -chatID
+	}
+	return chatID
+}

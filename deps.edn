@@ -1,5 +1,0 @@
-{:paths ["src" "resources" "zrc"]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}
-        zen-lang/zen {:local/root "/tmp/zen"}}
- :aliases
- {:dev {:extra-paths ["dev" "test"]}}}
