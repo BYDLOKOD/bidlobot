@@ -51,9 +51,15 @@ type QuizRoutes struct {
 	CallbackPredicate th.Predicate
 }
 
-// registerGameRoutes wires the per-game handlers into the existing
-// supergroup handler tree. Called from registerRoutes so the routing
-// table stays in one file.
+// registerGameRoutes wires the per-game slash + callback handlers into
+// the existing supergroup handler tree. Called from registerRoutes so
+// the routing table stays in one file.
+//
+// Battle.ReactionObserver is intentionally NOT registered here. Telego
+// routes message_reaction updates to the FIRST matching handler only;
+// the membership reaction handler must always run, so the two observers
+// are composed in reactionFanout (see routes.go) rather than registered
+// as siblings.
 func registerGameRoutes(bh *th.BotHandler, sgGroup *th.HandlerGroup, a *App) {
 	g := a.games
 	if g == nil {
@@ -68,16 +74,11 @@ func registerGameRoutes(bh *th.BotHandler, sgGroup *th.HandlerGroup, a *App) {
 	if g.Quiz.Slash != nil {
 		sgGroup.HandleMessage(g.Quiz.Slash, th.CommandEqual("quiz"))
 	}
-	if g.Battle.ReactionObserver != nil {
-		// Telego routes message_reaction to all matching handlers, so
-		// the membership observer continues to fire alongside this one.
-		bh.HandleMessageReaction(g.Battle.ReactionObserver, th.AnyMessageReaction())
-	}
 	if g.Quiz.Callback != nil && g.Quiz.CallbackPredicate != nil {
-		// Quiz callbacks must be registered BEFORE the dispatcher so
-		// telego's first-match-wins routing sends them here, not into
-		// the pending-action lookup. routes.go calls this helper
-		// before the dispatcher registration line.
+		// Quiz callbacks must be registered BEFORE the pending-action
+		// dispatcher so telego's first-match-wins routing sends them
+		// here. routes.go calls this helper before the dispatcher
+		// registration line.
 		bh.HandleCallbackQuery(g.Quiz.Callback, g.Quiz.CallbackPredicate)
 	}
 }

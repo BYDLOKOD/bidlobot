@@ -9,6 +9,7 @@ import (
 	"github.com/veschin/bidlobot/internal/bot"
 	"github.com/veschin/bidlobot/internal/games/battle"
 	"github.com/veschin/bidlobot/internal/games/dice"
+	"github.com/veschin/bidlobot/internal/games/quiz"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
@@ -41,15 +42,21 @@ func buildGames(db *bbolt.DB, tgBot *telego.Bot, log *slog.Logger) *bot.GamesReg
 	battleRegistry := battle.NewRegistry()
 	battleHandler := bot.NewBattleHandler(battleRegistry, tgBot, log)
 
+	quizRepo := storage.NewQuizRepo(db)
+	quizActive := quiz.NewActiveQuizzes()
+	quizHandler := bot.NewQuizHandler(quizActive, quizRepo, tgBot, log)
+
 	return &bot.GamesRegistry{
 		Dice: diceHandler,
 		Battle: bot.BattleRoutes{
 			Slash:            battleHandler.HandleBattle,
 			ReactionObserver: battleHandler.ObserveReaction,
 		},
+		Quiz: bot.QuizRoutes{
+			Slash:             quizHandler.HandleQuiz,
+			Callback:          quizHandler.HandleCallback,
+			CallbackPredicate: bot.QuizCallbackPredicate(),
+		},
 		InlineRouter: bot.NewGamesInlineRouter(),
-		// Quiz is added by its commit in Phase 4. The shape of
-		// GamesRegistry stays stable; populating the field here is
-		// enough to enable it once it ships.
 	}
 }
