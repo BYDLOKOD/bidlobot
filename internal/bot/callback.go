@@ -160,7 +160,24 @@ func (d *CallbackDispatcher) dispatch(ctx context.Context, query telego.Callback
 		}
 	}
 
-	return exec(ctx, query, action)
+	resp := exec(ctx, query, action)
+
+	// Apply is a terminal action - once it runs (successfully or with
+	// an alert), the pending entry must go so a second tap on the same
+	// button cannot replay it. Preview is non-terminal: it transitions
+	// the pending into a confirmation state but keeps the row.
+	if verb == cbApply {
+		_ = d.pending.Delete(ctx, id)
+		// Strip the keyboard if the executor didn't already, so the
+		// button cannot be re-tapped before the user notices the toast.
+		if resp.ReplyMarkup == nil {
+			resp.ReplyMarkup = &telego.InlineKeyboardMarkup{
+				InlineKeyboard: [][]telego.InlineKeyboardButton{},
+			}
+		}
+	}
+
+	return resp
 }
 
 // callerStillAdmin re-checks admin status at confirm time. The user

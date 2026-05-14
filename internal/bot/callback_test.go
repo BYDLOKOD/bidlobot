@@ -269,3 +269,66 @@ func TestDispatcherStoreErrorReturnsAlert(t *testing.T) {
 		t.Fatal("store error should show alert")
 	}
 }
+
+func TestDispatcherDeletesPendingAfterApply(t *testing.T) {
+	store := newFakePending()
+	store.data["abc"] = &pending.Action{
+		ID: "abc", Kind: pending.KindWarn, ActorUserID: 100,
+		AbsChatID: 1000, ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	d := NewCallbackDispatcher(store, stubAdminCache(true), nil, testLogger())
+	calls := 0
+	d.Register(pending.KindWarn, cbApply, func(_ context.Context, _ telego.CallbackQuery, _ *pending.Action) callbackResponse {
+		calls++
+		return callbackResponse{AnswerText: "warned"}
+	})
+
+	// First tap: executor runs.
+	first := d.dispatch(context.Background(), telego.CallbackQuery{
+		Data: MakeCallback(cbApply, "abc"),
+		From: telego.User{ID: 100},
+	})
+	if calls != 1 {
+		t.Fatalf("expected 1 executor call, got %d", calls)
+	}
+	if first.ReplyMarkup == nil {
+		t.Fatal("apply response must carry an emptied keyboard so the button cannot be re-tapped")
+	}
+
+	// Second tap: pending must be gone, executor must NOT run again.
+	second := d.dispatch(context.Background(), telego.CallbackQuery{
+		Data: MakeCallback(cbApply, "abc"),
+		From: telego.User{ID: 100},
+	})
+	if calls != 1 {
+		t.Fatalf("second tap must not re-run executor, got %d total calls", calls)
+	}
+	if !second.ShowAlert {
+		t.Fatal("second tap must alert (pending deleted)")
+	}
+}
+
+func TestDispatcherDoesNotDeletePendingAfterPreview(t *testing.T) {
+	store := newFakePending()
+	store.data["abc"] = &pending.Action{
+		ID: "abc", Kind: pending.KindCleanup, ActorUserID: 100,
+		AbsChatID: 1000, ExpiresAt: time.Now().Add(time.Hour),
+	}
+
+	d := NewCallbackDispatcher(store, stubAdminCache(true), nil, testLogger())
+	d.Register(pending.KindCleanup, cbPreview, func(_ context.Context, _ telego.CallbackQuery, _ *pending.Action) callbackResponse {
+		return callbackResponse{AnswerText: "preview"}
+	})
+
+	d.dispatch(context.Background(), telego.CallbackQuery{
+		Data: MakeCallback(cbPreview, "abc"),
+		From: telego.User{ID: 100},
+	})
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if _, ok := store.data["abc"]; !ok {
+		t.Fatal("preview must NOT delete the pending - apply still needs it")
+	}
+}
