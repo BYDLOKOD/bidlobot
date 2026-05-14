@@ -1,0 +1,60 @@
+# CI for the BidloBot Go module.
+#
+# Runs vet, race-tested unit tests with coverage, and a full build on every
+# push and PR targeting master. Coverage output is exported as an artifact
+# so reviewers can browse it without re-running the tests locally.
+#
+# We pin actions to a major version (v5/v4) rather than a SHA: project is
+# pre-release and the convenience of automatic patch updates outweighs the
+# supply-chain risk for a non-production CI workflow. Bump to a SHA when
+# the bot starts shipping signed releases.
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Cancel superseded runs on the same ref to keep queue depth bounded.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: vet + race + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: setup go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          # setup-go@v5 caches ~/go/pkg/mod and the build cache automatically
+          # when a go.sum is present; no separate actions/cache step needed.
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race -cover
+        run: |
+          go test -race -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_id }}
+          path: coverage.out
+          retention-days: 7
