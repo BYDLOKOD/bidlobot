@@ -14,6 +14,7 @@ Each entry declares `id` and `kind` in front-matter.
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, display commands
 - [40_moderation.md](40_moderation.md) - warn/mute/ban, admin permissions, 3-strike rule
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits, error handling, onboarding, shutdown
+- [60_architecture.md](60_architecture.md) - layered composition, bbolt schema, key invariants, failure handling matrix, where to add features
 - [handoff.md](handoff.md) - next-session action plan. Read first.
 
 ## Archived (not part of current scope)
