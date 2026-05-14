@@ -15,6 +15,7 @@ Each entry declares `id` and `kind` in front-matter.
 - [40_moderation.md](40_moderation.md) - warn/mute/ban, admin permissions, 3-strike rule
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits, error handling, onboarding, shutdown
 - [60_architecture.md](60_architecture.md) - layered composition, bbolt schema, key invariants, failure handling matrix, where to add features
+- [70_deployment.md](70_deployment.md) - build flags, env vars, systemd unit, backup cron, healthcheck, BotFather setup, rollback
 - [handoff.md](handoff.md) - next-session action plan. Read first.
 
 ## Archived (not part of current scope)
