@@ -32,8 +32,36 @@ Verified 2026-05-14 against the live token: `can_read_all_group_messages=false`,
 ## Validation tools
 
 - `cmd/probe` -- one-shot getMe, no polling, no side effects. Use to verify token + BotFather config.
-- `cmd/smoke` -- runs the full production wiring against the real chat for a bounded duration. Refuses to start without `INTEGRATION_TEST=1`. `SMOKE_TIMEOUT` env (default 60) sets the auto-shutdown. Watch the JSON log to see each handler firing as you send commands from the chat.
-- `internal/bot/replay_test.go` -- offline integration tests that stream `testdata/session*.jsonl` recordings through the membership/cleanup domain. Catches handler/store contract regressions without a live API.
+- `cmd/smoke` -- runs the full production wiring (rate limiter + retry + migration handler + dispatcher + executors) against the real chat for a bounded duration. Refuses to start without `INTEGRATION_TEST=1`. `SMOKE_TIMEOUT` env (default 60) sets the auto-shutdown. Watch the JSON log to see each handler firing.
+- `internal/bot/end_to_end_test.go` -- in-process integration tests covering inline -> dispatcher -> executor -> bbolt for warn / ban / cleanup. No live API, no BotFather requirement.
+- `internal/bot/replay_test.go` -- offline integration tests that stream `testdata/session*.jsonl` recordings through the membership/cleanup domain.
+
+## Manual smoke checklist
+
+Run after BotFather is fixed and the bot has been re-added to the chat:
+
+```
+INTEGRATION_TEST=1 SMOKE_TIMEOUT=300 go run ./cmd/smoke
+```
+
+Then in the chat, in this order:
+
+1. **Bot identity** - JSON log on startup must show `can_read_all=true, supports_inline=true`.
+2. **Help** - `/help` -> bot replies with the help block.
+3. **Stats baseline** - `/stats` -> shows current chat overview. Likely 0 entries on a fresh DB.
+4. **Stats grows** - write 3-5 plain messages. After a few seconds (within 60s flush window or immediately via merged buffer read) `/stats top` lists you with the right count.
+5. **Reaction tracking** - react with any emoji to a recent message. Membership's `LastReactionAt` for your user_id updates. (Verify by running `/cleanup 1d` and seeing yourself NOT in candidates because LastReactionAt is recent.)
+6. **Inline read-only** - type `@e2e_test_bot stats top` in the chat. Carousel shows three options. Tap "🏆 /stats top". Bot replies in the chat as if you'd typed the slash command.
+7. **Inline destructive (cancel path)** - `@e2e_test_bot warn @<some other member> testing`. Carousel offers a preview card. Tap it -> message appears with [✅ Подтвердить] [❌ Отмена]. Tap Cancel -> message edits to "❌ Действие отменено" and buttons disappear.
+8. **Inline destructive (apply path)** - repeat 7 but tap Подтвердить -> message edits to "⚠️ @<user> предупреждён (1/3)" with reason. Re-tapping the (now-empty) button must be a no-op or alert.
+9. **Inline guard: actor mismatch** - repeat 7 from a second device/account (if you have one). Try to tap Подтвердить -> alert "Только инициатор команды может её подтвердить". Pending should not execute.
+10. **Cleanup empty path** - `@e2e_test_bot cleanup 1d`. Tap "📋 Показать кандидатов". On a fresh chat with one active member (you), the body shows "Кандидатов на чистку нет." Pending is deleted.
+11. **Cleanup populated path** - only after the bot has observed at least one inactive (or never-active) member and threshold > MinThreshold (24h). The preview lists candidates; tap "✅ Кикнуть всех" -> "🧹 Чистка запущена" -> progress edits -> final report. **DO NOT run this against a real chat with members you don't want kicked.** Test with a separate clean chat.
+12. **Healthcheck** - in another terminal: `curl http://localhost:8080/health` -> `{"status":"ok"}`. After SMOKE_TIMEOUT exits, retry: connection refused (server stopped).
+13. **Version** - `curl http://localhost:8080/version` -> JSON with build info.
+14. **Graceful shutdown** - SIGINT (ctrl-C) before SMOKE_TIMEOUT. JSON log shows "shutdown signal received" -> "handler stopped, stats flushed" within 10s.
+
+If any step fails, capture the JSON log around the failure and the bot's reply (or absence of reply) before continuing.
 
 ## What exists now
 
