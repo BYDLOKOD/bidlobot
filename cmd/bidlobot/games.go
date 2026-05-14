@@ -7,6 +7,7 @@ import (
 	"go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
+	"github.com/veschin/bidlobot/internal/games/battle"
 	"github.com/veschin/bidlobot/internal/games/dice"
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -37,11 +38,18 @@ func buildGames(db *bbolt.DB, tgBot *telego.Bot, log *slog.Logger) *bot.GamesReg
 	diceSvc := dice.NewService(diceRepo, log)
 	diceHandler := bot.NewDiceHandler(diceSvc, tgBot, log)
 
+	battleRegistry := battle.NewRegistry()
+	battleHandler := bot.NewBattleHandler(battleRegistry, tgBot, log)
+
 	return &bot.GamesRegistry{
-		Dice:         diceHandler,
+		Dice: diceHandler,
+		Battle: bot.BattleRoutes{
+			Slash:            battleHandler.HandleBattle,
+			ReactionObserver: battleHandler.ObserveReaction,
+		},
 		InlineRouter: bot.NewGamesInlineRouter(),
-		// Battle and Quiz are added by their respective commits in
-		// Phase 4. The shape of GamesRegistry stays stable; populating
-		// the fields here is enough to enable them once they ship.
+		// Quiz is added by its commit in Phase 4. The shape of
+		// GamesRegistry stays stable; populating the field here is
+		// enough to enable it once it ships.
 	}
 }
