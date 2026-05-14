@@ -38,4 +38,6 @@ func registerRoutes(
 	bh.HandleMessageReaction(membershipReactionHandler(a.memberSvc, a.log), th.AnyMessageReaction())
 	bh.HandleMyChatMemberUpdated(membershipMyChatMemberHandler(a.memberSvc, a, a.log))
 	bh.HandleChatMemberUpdated(membershipChatMemberHandler(a.memberSvc, a.adminCache, a.log))
+
+	bh.HandleInlineQuery(inlineQueryHandler(a.log))
 }

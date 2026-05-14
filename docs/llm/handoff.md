@@ -5,22 +5,27 @@ kind: guide
 
 # Handoff: next session action plan
 
-Last updated: 2026-05-14, after Phase 0 of group-management pivot.
+Last updated: 2026-05-14, after Phases 0-2.
 
 ## Current state
 
-Branch: `master`. Commits:
-- `9851c0b` - refactor: snapshot Go rewrite, remove Clojure prototype (tag `v0-bio-archive`, branch `archive/profiles-bio` points here)
-- *(pending)* - Phase 0: archive bio domain
+Branch: `master`.
 
 Six implementation phases planned:
-- **Phase 0 (current)** - archive bio, clean docs
-- **Phase 1** - membership tracking (chats bucket, member upserts on message/reaction/chat_member)
-- **Phase 2** - inline mode commands (`@bidlobot ...` autocomplete + preview-confirm pattern)
-- **Phase 3** - cleanup feature (kick inactive who never wrote and never reacted)
+- **Phase 0 done** - archive bio, clean docs
+- **Phase 1 done** - membership tracking (chats bucket, member upserts on message/reaction/chat_member); stats now prints real names; moderation refuses to act on unknown @usernames
+- **Phase 2 done** - inline mode as a slash-command launcher (read-only commands only); destructive deferred to Phase 3
+- **Phase 3** - cleanup feature + pending-actions storage + destructive inline confirms
 - **Phase 4** - mini-games (dice, reaction-battle, code-quiz)
 - **Phase 5** - production-readiness (rate limiter, retry, migration, /health, CI, backup)
 - **Phase 6** - integration testing (replayer + smoke tests)
+
+## BotFather one-time setup
+
+For inline mode to work the bot owner must run, once, in @BotFather:
+1. `/setinline` -> choose the bot -> enter placeholder text (e.g. `stats top, warns @user, help`)
+2. `/setinlinefeedback` -> Disabled (we don't process chosen_inline_result yet)
+3. Optionally `/setprivacy` -> Disabled (so the bot reads all messages - required for stats and membership tracking; the test chat is already configured this way)
 
 ## What exists now
 

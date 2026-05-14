@@ -43,6 +43,7 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler, modH *moderation.H
 			"my_chat_member",
 			"chat_member",
 			"message_reaction",
+			"inline_query",
 		},
 	})
 	if err != nil {
