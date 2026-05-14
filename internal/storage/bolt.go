@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -56,4 +57,14 @@ func (s *BoltStore) DB() *bolt.DB {
 
 func (s *BoltStore) Close() error {
 	return s.db.Close()
+}
+
+// MigrateChatID adapts the package-level [MigrateChatID] to the
+// tgclient.Migrator interface so the wrapper can be wired against a
+// BoltStore without an extra adapter type. The report is logged at
+// info level via the package-level helper rather than returned, since
+// the wrapper interface only needs error semantics.
+func (s *BoltStore) MigrateChatID(ctx context.Context, oldAbs, newAbs int64) error {
+	_, err := MigrateChatID(ctx, s.db, oldAbs, newAbs)
+	return err
 }
