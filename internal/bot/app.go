@@ -10,11 +10,9 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/moderation"
-	"github.com/veschin/bidlobot/internal/domain/profile"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/testutil"
-	"github.com/veschin/bidlobot/internal/text"
 )
 
 type App struct {
@@ -34,7 +32,7 @@ func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, st
 	}
 }
 
-func (a *App) Run(ctx context.Context, profileH *profile.Handler, statsH *stats.Handler, modH *moderation.Handler) error {
+func (a *App) Run(ctx context.Context, statsH *stats.Handler, modH *moderation.Handler) error {
 	updates, err := a.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 		AllowedUpdates: []string{
 			"message",
@@ -72,10 +70,9 @@ func (a *App) Run(ctx context.Context, profileH *profile.Handler, statsH *stats.
 		}
 	}
 
-	registerRoutes(bh, a, profileH, statsH, modH)
+	registerRoutes(bh, a, statsH, modH)
 
 	go a.statsBuffer.Run(ctx, 60*time.Second)
-	go profileH.FSMSweeper(ctx)
 
 	a.log.Info("bot started, polling for updates")
 	go bh.Start()
@@ -108,28 +105,23 @@ func (a *App) handleHelpSupergroup(_ *th.Context, msg telego.Message) error {
 	return err
 }
 
-const helpDM = text.MsgWelcomeDM + "\n\nIf you're currently registering, type /cancel to abort."
+const helpDM = `BidloBot - управление IT-сообществом.
 
-const helpSupergroup = `BidloBot - profiles, stats, moderation
+Бот работает в supergroup-чатах. Добавь меня в группу с правами администратора (минимум: Restrict Members), чтобы начать.`
 
-Profiles:
-  /register - create your profile
-  /profile - view your profile
-  /profile @user - view someone's profile
-  /update - edit your profile
-  /update field value - quick edit
+const helpSupergroup = `BidloBot - статистика и модерация чата.
 
 Stats:
-  /stats - chat overview
-  /stats top - top contributors
-  /stats today - today's activity
-  /stats @user - user stats
+  /stats         - обзор чата
+  /stats top     - топ участников
+  /stats today   - активность за день
+  /stats @user   - статистика пользователя
 
-Moderation (admins only):
-  /warn @user reason - issue warning
-  /warns @user - view warnings
-  /warns clear @user - clear warnings
-  /mute @user [duration] - mute (default: 1h)
-  /unmute @user - unmute
-  /ban @user [reason] - ban
-  /unban @user - unban`
+Moderation (только для админов):
+  /warn @user [причина]   - выдать предупреждение
+  /warns @user            - посмотреть предупреждения
+  /warns clear @user      - сбросить предупреждения
+  /mute @user [время]     - заглушить (по умолчанию 1ч)
+  /unmute @user           - снять mute
+  /ban @user [причина]    - забанить
+  /unban @user            - разбанить`

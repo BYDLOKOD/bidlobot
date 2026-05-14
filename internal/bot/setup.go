@@ -10,21 +10,14 @@ import (
 func setCommands(ctx context.Context, bot *telego.Bot) error {
 	privateCommands := []telego.BotCommand{
 		{Command: "help", Description: "Справка"},
-		{Command: "cancel", Description: "Отменить текущую операцию"},
 	}
 
 	groupCommands := []telego.BotCommand{
-		{Command: "register", Description: "Создать профиль"},
-		{Command: "profile", Description: "Посмотреть профиль"},
-		{Command: "update", Description: "Редактировать профиль"},
 		{Command: "stats", Description: "Статистика чата"},
 		{Command: "help", Description: "Справка"},
 	}
 
 	adminCommands := []telego.BotCommand{
-		{Command: "register", Description: "Создать профиль"},
-		{Command: "profile", Description: "Посмотреть профиль"},
-		{Command: "update", Description: "Редактировать профиль"},
 		{Command: "stats", Description: "Статистика чата"},
 		{Command: "warn", Description: "Предупредить пользователя"},
 		{Command: "warns", Description: "Предупреждения / сброс"},

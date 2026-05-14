@@ -13,7 +13,6 @@ import (
 
 	"github.com/veschin/bidlobot/internal/bot"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
-	"github.com/veschin/bidlobot/internal/domain/profile"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
@@ -59,17 +58,13 @@ func main() {
 
 	statsRepo := storage.NewStatsRepo(db)
 	warnRepo := storage.NewWarnRepo(db)
-	profileRepo := storage.NewProfileRepo(db)
 
 	statsBuffer := stats.NewBuffer(statsRepo, log)
 	statsSvc := stats.NewService(statsRepo, statsBuffer, log)
-	statsHandler := stats.NewHandler(statsSvc, &statsLookupAdapter{repo: profileRepo}, log)
-
-	profileSvc := profile.NewService(profileRepo, tgBot, log)
-	profileHandler := profile.NewHandler(profileSvc, tgBot, log)
+	statsHandler := stats.NewHandler(statsSvc, nil, log)
 
 	modSvc := moderation.NewService(warnRepo, tgBot, adminCache, log)
-	modHandler := moderation.NewHandler(modSvc, adminCache, &profileLookupAdapter{repo: profileRepo}, log)
+	modHandler := moderation.NewHandler(modSvc, adminCache, nil, log)
 
 	app := bot.NewApp(tgBot, log, adminCache, statsBuffer)
 
@@ -77,7 +72,7 @@ func main() {
 	defer cancel()
 
 	go func() {
-		if err := app.Run(ctx, profileHandler, statsHandler, modHandler); err != nil {
+		if err := app.Run(ctx, statsHandler, modHandler); err != nil {
 			log.Error("bot run error", "error", err)
 			cancel()
 		}
@@ -116,30 +111,4 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
-}
-
-// profileLookupAdapter adapts ProfileRepo to moderation.UsernameLookup
-type profileLookupAdapter struct {
-	repo *storage.ProfileRepo
-}
-
-func (a *profileLookupAdapter) GetByUsername(ctx context.Context, absChatID int64, username string) (int64, bool, error) {
-	p, err := a.repo.GetByUsername(ctx, absChatID, username)
-	if err != nil {
-		return 0, false, err
-	}
-	return p.UserID, false, nil
-}
-
-// statsLookupAdapter adapts ProfileRepo to stats.ProfileLookup
-type statsLookupAdapter struct {
-	repo *storage.ProfileRepo
-}
-
-func (a *statsLookupAdapter) GetByUsername(ctx context.Context, absChatID int64, username string) (int64, error) {
-	p, err := a.repo.GetByUsername(ctx, absChatID, username)
-	if err != nil {
-		return 0, err
-	}
-	return p.UserID, nil
 }

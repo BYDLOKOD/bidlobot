@@ -12,18 +12,22 @@ import (
 	"github.com/veschin/bidlobot/internal/text"
 )
 
-type ProfileLookup interface {
+// UsernameLookup resolves @username to user_id within a chat. The current
+// stats handler tolerates a nil implementation (per-username lookups simply
+// reply "not found"). A real implementation will be wired in Phase 1 when
+// membership tracking lands.
+type UsernameLookup interface {
 	GetByUsername(ctx context.Context, absChatID int64, username string) (userID int64, err error)
 }
 
 type Handler struct {
 	svc    *Service
-	lookup ProfileLookup
+	lookup UsernameLookup
 	log    *slog.Logger
 }
 
 // NewHandler создаёт обработчик команды /stats.
-func NewHandler(svc *Service, lookup ProfileLookup, log *slog.Logger) *Handler {
+func NewHandler(svc *Service, lookup UsernameLookup, log *slog.Logger) *Handler {
 	return &Handler{
 		svc:    svc,
 		lookup: lookup,

@@ -7,7 +7,6 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/moderation"
-	"github.com/veschin/bidlobot/internal/domain/profile"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/storage"
 	"github.com/veschin/bidlobot/internal/text"
@@ -16,26 +15,18 @@ import (
 func registerRoutes(
 	bh *th.BotHandler,
 	a *App,
-	profileH *profile.Handler,
 	statsH *stats.Handler,
 	modH *moderation.Handler,
 ) {
 	bh.Use(loggingHandler(a.log))
 
 	dmGroup := bh.Group(privatePredicate())
-	dmGroup.HandleMessage(profileH.HandleStartDM, th.CommandEqual("start"))
-	dmGroup.HandleMessage(profileH.HandleCancelDM, th.CommandEqual("cancel"))
 	dmGroup.HandleMessage(a.handleHelpDM, th.CommandEqual("help"))
-	dmGroup.HandleMessage(profileH.HandleFSMInput, th.AnyMessageWithText())
-	dmGroup.HandleMessage(profileH.HandleFSMNonText, th.Not(th.AnyMessageWithText()))
-	dmGroup.HandleCallbackQuery(profileH.HandleFSMCallback, th.AnyCallbackQueryWithMessage())
+	dmGroup.HandleMessage(a.handleHelpDM, th.CommandEqual("start"))
 
 	sgGroup := bh.Group(supergroupPredicate(), notLinkedChannelPredicate())
 	sgGroup.Use(statsCountHandler(a.statsBuffer))
 
-	sgGroup.HandleMessage(profileH.HandleRegister, th.CommandEqual("register"))
-	sgGroup.HandleMessage(profileH.HandleProfile, th.CommandEqual("profile"))
-	sgGroup.HandleMessage(profileH.HandleUpdate, th.CommandEqual("update"))
 	sgGroup.HandleMessage(statsH.HandleStats, th.CommandEqual("stats"))
 	sgGroup.HandleMessage(modH.HandleWarns, th.CommandEqual("warns"))
 	sgGroup.HandleMessage(a.handleHelpSupergroup, th.CommandEqual("help"))

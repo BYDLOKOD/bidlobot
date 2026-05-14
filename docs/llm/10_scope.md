@@ -7,50 +7,61 @@ kind: spec
 
 ## What this bot does
 
-Three capabilities for IT community supergroups in Telegram:
+Group management for IT supergroups in Telegram. Four capability areas:
 
-1. **Profiles** - members register tech stack, role, bio. Per-chat. Registration via DM.
-2. **Statistics** - message counters per user, top contributors, activity reports.
-3. **Moderation** - warn/mute/ban with 3-strike auto-mute. Telegram-native admin model.
+1. **Statistics** - message counters per user, top contributors, activity reports.
+2. **Moderation** - warn/mute/ban with 3-strike auto-mute. Telegram-native admin model.
+3. **Inactive cleanup** - admin can kick users who never wrote messages and never reacted within a configurable window. Read-only members (those who only react) are preserved.
+4. **Mini-games** - small chat-engagement games (dice, reaction-battle, code-quiz) callable inline or via slash commands.
 
-## What was dropped (and why)
+The primary command surface is **inline mode** (`@bidlobot ...`) with autocomplete. Slash commands remain as fallback. Destructive actions (cleanup, warn, mute, ban) follow a two-step preview-then-confirm pattern via inline keyboards.
+
+## Scope history
+
+**Pivot 2026-05-14.** Original Go rewrite (commit `9851c0b`, tag `v0-bio-archive`) included a full bio/profile domain with FSM-based registration. The bio feature is archived to branch `archive/profiles-bio` and may return later. Current focus is group management for the user's own 200+ member chat.
+
+## Archived (not in master, but preserved)
+
+| Feature | Where to find it |
+|---------|------------------|
+| Bio / profile registration FSM | `archive/profiles-bio` branch, `v0-bio-archive` tag |
+
+## Permanently dropped (must not return without explicit ask)
 
 | Feature | Why |
 |---------|-----|
-| YouTube Summary | Unrelated to core, incomplete, obscure LLM provider dependency (GLM/BigModel.cn) |
-| Inline Query DSL | Overengineered parser+evaluator for 3 commands. Standard commands suffice |
+| YouTube Summary | Unrelated to core, obscure LLM provider dependency (GLM/BigModel.cn) |
+| Inline Query DSL parser | Replaced by inline-mode autocomplete with structured commands |
 | Salary field | Public salary in group chat = guaranteed conflict |
-| zen-lang config | 200-line loader for reading a bot token and 5 strings. Env vars suffice |
-| i18n (v1) | All strings in English. Centralized in one package for future i18n |
+| zen-lang config | Env vars suffice |
+| i18n switching | All user-facing strings in Russian |
 | Bot-managed admin list | Duplicates Telegram's native admin system |
 
 ## Deployment model
 
-Single Go binary. Long-polling. Embedded KV database (BoltDB/Badger/SQLite).
+Single Go binary. Long-polling. Embedded bbolt key-value database.
 
 Env vars:
 - `TG_BOT_TOKEN` (required)
 - `DB_PATH` (default: `./data`)
 - `LOG_LEVEL` (default: `info`)
+- `RECORD_UPDATES` (optional path to JSONL recorder)
 
 ## ID scheme
 
 Format: `{entity}:{user_id}:{abs(chat_id)}`
 
-Chat IDs stored as absolute values (supergroup IDs are negative in Telegram). Users identified by `user_id` (stable, never changes). Username is display-only.
+Chat IDs stored as absolute values (supergroup IDs are negative in Telegram). Users identified by `user_id` (stable, never changes). Username is display-only and tracked for last-known mapping.
 
 Examples:
-- Profile: `profile:123456:1001234567890`
-- Stats: `stats:123456:1001234567890`
-- Warning: `warn:{uuid}` (globally unique, chat_id inside document)
+- Stats: `s:00000000000000000123:00001001234567890`
+- Membership: `m:00000000000000000123:00001001234567890`  *(Phase 1)*
+- Warning: `w:{uuid}` (globally unique, chat_id and target_user_id inside the document)
 
-## Commands
+## Commands (current state)
 
 | Command | Context | Access |
 |---------|---------|--------|
-| `/register` | supergroup | all |
-| `/profile [@user]` | supergroup | all |
-| `/update [field value]` | supergroup | all |
 | `/stats [top\|today\|@user]` | supergroup | all |
 | `/warn @user [reason]` | supergroup | admins |
 | `/warns @user` | supergroup | all |
@@ -60,9 +71,11 @@ Examples:
 | `/ban @user [reason]` | supergroup | admins |
 | `/unban @user` | supergroup | admins |
 | `/help` | supergroup + DM | all |
-| `/cancel` | DM | all |
+
+Inline mode (`@bidlobot ...`) ships in Phase 2 and exposes the same commands plus `cleanup`, `dice`, `battle`, `quiz`.
 
 ## Performance targets
 
-- Update processing: < 100ms (p95)
-- Memory: < 100MB at 50 active chats
+- Update processing: < 100 ms (p95)
+- Memory: < 100 MB at 50 active chats
+- Outgoing rate: <= 15 msg/min/chat (below Telegram's 20/min, see [50_telegram.md](50_telegram.md))

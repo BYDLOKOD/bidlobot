@@ -22,10 +22,10 @@ func TestAbsChatID(t *testing.T) {
 	}
 }
 
-func TestProfileKeyOrdering(t *testing.T) {
-	k1 := ProfileKey(100, 200)
-	k2 := ProfileKey(100, 300)
-	k3 := ProfileKey(200, 100)
+func TestStatsKeyOrdering(t *testing.T) {
+	k1 := StatsKey(100, 200)
+	k2 := StatsKey(100, 300)
+	k3 := StatsKey(200, 100)
 
 	if bytes.Compare(k1, k2) >= 0 {
 		t.Fatal("k1 should sort before k2")
@@ -35,10 +35,10 @@ func TestProfileKeyOrdering(t *testing.T) {
 	}
 }
 
-func TestChatIndexOrdering(t *testing.T) {
-	i1 := ProfileChatIndex(100, 111)
-	i2 := ProfileChatIndex(100, 222)
-	i3 := ProfileChatIndex(200, 111)
+func TestStatsChatIndexOrdering(t *testing.T) {
+	i1 := StatsChatIndex(100, 111)
+	i2 := StatsChatIndex(100, 222)
+	i3 := StatsChatIndex(200, 111)
 
 	if bytes.Compare(i1, i2) >= 0 {
 		t.Fatal("same chat, user 111 should sort before 222")
@@ -48,15 +48,15 @@ func TestChatIndexOrdering(t *testing.T) {
 	}
 }
 
-func TestPrefixScanWorks(t *testing.T) {
-	prefix := ProfileChatPrefix(100)
-	key := ProfileChatIndex(100, 111)
+func TestStatsChatPrefixScan(t *testing.T) {
+	prefix := StatsChatPrefix(100)
+	key := StatsChatIndex(100, 111)
 
 	if !bytes.HasPrefix(key, prefix) {
 		t.Fatalf("key %q should have prefix %q", key, prefix)
 	}
 
-	otherKey := ProfileChatIndex(200, 111)
+	otherKey := StatsChatIndex(200, 111)
 	if bytes.HasPrefix(otherKey, prefix) {
 		t.Fatal("different chat should not match prefix")
 	}
@@ -76,5 +76,24 @@ func TestWarnTargetPrefixScan(t *testing.T) {
 	}
 	if bytes.HasPrefix(k3, prefix) {
 		t.Fatal("different user should not match")
+	}
+}
+
+func TestParseID(t *testing.T) {
+	tests := []struct {
+		in   string
+		want int64
+	}{
+		{"00000000000000000123", 123},
+		{"123", 123},
+		{"abc", 0},
+		{"", 0},
+		{"1a2b3", 123},
+	}
+	for _, tt := range tests {
+		got := parseID([]byte(tt.in))
+		if got != tt.want {
+			t.Errorf("parseID(%q) = %d, want %d", tt.in, got, tt.want)
+		}
 	}
 }

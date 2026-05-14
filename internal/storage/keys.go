@@ -2,22 +2,6 @@ package storage
 
 import "fmt"
 
-func ProfileKey(userID, absChatID int64) []byte {
-	return []byte(fmt.Sprintf("p:%020d:%020d", userID, absChatID))
-}
-
-func ProfileChatIndex(absChatID, userID int64) []byte {
-	return []byte(fmt.Sprintf("c:%020d:%020d", absChatID, userID))
-}
-
-func ProfileUserPrefix(userID int64) []byte {
-	return []byte(fmt.Sprintf("p:%020d:", userID))
-}
-
-func ProfileChatPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("c:%020d:", absChatID))
-}
-
 func StatsKey(userID, absChatID int64) []byte {
 	return []byte(fmt.Sprintf("s:%020d:%020d", userID, absChatID))
 }
@@ -47,4 +31,14 @@ func AbsChatID(chatID int64) int64 {
 		return -chatID
 	}
 	return chatID
+}
+
+func parseID(b []byte) int64 {
+	var n int64
+	for _, c := range b {
+		if c >= '0' && c <= '9' {
+			n = n*10 + int64(c-'0')
+		}
+	}
+	return n
 }
