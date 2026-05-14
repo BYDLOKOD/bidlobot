@@ -22,10 +22,18 @@ Six implementation phases planned:
 
 ## BotFather one-time setup
 
-For inline mode to work the bot owner must run, once, in @BotFather:
-1. `/setinline` -> choose the bot -> enter placeholder text (e.g. `stats top, warns @user, help`)
-2. `/setinlinefeedback` -> Disabled (we don't process chosen_inline_result yet)
-3. Optionally `/setprivacy` -> Disabled (so the bot reads all messages - required for stats and membership tracking; the test chat is already configured this way)
+Verified 2026-05-14 against the live token: `can_read_all_group_messages=false`, `supports_inline_queries=false`. Both must be flipped before any of Phase 1-3 functions in real chats. Run, in @BotFather:
+
+1. `/setprivacy` -> bot -> Disable. **After this you must remove and re-add the bot to the chat** (privacy is cached at join time).
+2. `/setinline` -> bot -> placeholder text such as `stats top, cleanup 6mo, warn @user`.
+3. `/setinlinefeedback` -> Disabled (we don't process chosen_inline_result yet).
+4. Confirm with `go run ./cmd/probe` -- expects `can_read_all=true, supports_inline=true`.
+
+## Validation tools
+
+- `cmd/probe` -- one-shot getMe, no polling, no side effects. Use to verify token + BotFather config.
+- `cmd/smoke` -- runs the full production wiring against the real chat for a bounded duration. Refuses to start without `INTEGRATION_TEST=1`. `SMOKE_TIMEOUT` env (default 60) sets the auto-shutdown. Watch the JSON log to see each handler firing as you send commands from the chat.
+- `internal/bot/replay_test.go` -- offline integration tests that stream `testdata/session*.jsonl` recordings through the membership/cleanup domain. Catches handler/store contract regressions without a live API.
 
 ## What exists now
 
