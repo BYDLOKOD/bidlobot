@@ -14,7 +14,7 @@ Each entry declares `id` and `kind` in front-matter.
 - [25_games.md](25_games.md) - mini-games: command/cooldown table, rate-limit + bounded-notice rules, inline
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, lifetime + monthly nominations, display
 - [35_history_import.md](35_history_import.md) - in-process DM `/import` bootstrap: Telegram Desktop chat-export seeds membership (cleanup) + monthly stats
-- [40_moderation.md](40_moderation.md) - DM console: warn/mute/ban, evidence-graded `/cleanup`, the opt-in daily public tag->grace->kick lifecycle (`gracekick`), destructive-action safety
+- [40_moderation.md](40_moderation.md) - DM console: warn/mute/ban, evidence-graded `/cleanup`, the command-started public tag->grace->kick **campaign** (`gracekick`), `/cleanup stop`, destructive-action safety
 - [45_summarize.md](45_summarize.md) - admin-only `/summarize`: RAM-only window, GLM provider, error taxonomy, privacy, limitations
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits + per-user cooldown notice, error handling, onboarding, shutdown
 - [55_youtube_sanitizer.md](55_youtube_sanitizer.md) - YouTube `si=` strip: host scoping, repost-then-delete, exclusions, v1 gaps
@@ -28,6 +28,8 @@ Each entry declares `id` and `kind` in front-matter.
 - [devlog/02_privacy_ux_rework.md](devlog/02_privacy_ux_rework.md) - 2026-05-15: history import + DM-only moderation rework after two opus critic passes.
 - [devlog/03_load_audit_and_privacy_model.md](devlog/03_load_audit_and_privacy_model.md) - 2026-05-15: load/correctness audit, hot-path fixes (rate-limit/cooldown/zombie), cleanup operating model.
 - [devlog/04_monthly_stats_games_yt_dm_import.md](devlog/04_monthly_stats_games_yt_dm_import.md) - 2026-05-15: monthly nominations engine, 7 mini-games, YouTube si= sanitizer, in-process DM history import (import CLI removed).
+- [devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md](devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md) - 2026-05-15: `/cleanup` evidence grading (proven-stale vs no-data), live name resolution, window warning; first cut of the daily lifecycle.
+- [devlog/06_cleanup_campaign_rework.md](devlog/06_cleanup_campaign_rework.md) - 2026-05-15: reworked `/cleanup` into a command-started campaign (no immediate kick, no env-gated daemon); dead immediate-kick executor removed; two opus-critic rounds.
 
 ## Archived (not part of current scope)
 

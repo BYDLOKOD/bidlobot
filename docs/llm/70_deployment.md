@@ -137,6 +137,37 @@ Expect, in order:
 import-driven periodic model. Only flip BotFather + restart if you
 deliberately want continuous live message stats (see Prerequisites).
 
+## Upgrade (routine)
+
+`origin/master` is the deploy ref. Prod last ran `6942061`; current
+`origin/master` is `f203fc9` (evidence-graded `/cleanup` + the
+command-started cleanup campaign + `/summarize`). Standard upgrade:
+
+```sh
+# On the deploy host
+cd /opt/bidlobot
+git fetch origin && git checkout master && git pull --ff-only
+docker compose up -d --build
+docker compose logs -f bot
+```
+
+Verifiable upgrade facts for this release:
+
+- **Nothing auto-activates.** The cleanup campaign starts only on an
+  admin DM `/cleanup <period>` confirm; `/summarize` is inert unless
+  `GLM_API_KEY` is set. A fresh deploy with no admin action and no
+  `GLM_API_KEY` behaves exactly like the old binary.
+- **No DB migration.** The new bbolt bucket `gracekick` is created
+  idempotently at open (`CreateBucketIfNotExists`); existing buckets
+  and keys are untouched. Rollback stays forward-compatible (see
+  Rollback).
+- **Dropped env vars are harmless.** `CLEANUP_DAILY_ENABLED` and
+  `CLEANUP_DAILY_THRESHOLD` no longer exist; if the prod `env` still
+  sets them they are simply ignored (unknown env = no error). The
+  cleanup period is now the `/cleanup <period>` argument, not env.
+- `--check-config` still validates `CLEANUP_DAILY_AT` / `CLEANUP_GRACE`
+  / `CLEANUP_DAILY_BATCH` only when explicitly set to a bad value.
+
 ## Health and version
 
 ```sh

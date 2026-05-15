@@ -1,6 +1,7 @@
 ---
 id: moderation
 kind: spec
+touches: internal/bot/dm_console.go, internal/bot/dm_console_cleanup.go, internal/bot/dm_text.go, internal/domain/moderation/, internal/domain/cleanup/, internal/domain/gracekick/, internal/storage/gracekick_repo.go
 ---
 
 # Moderation
