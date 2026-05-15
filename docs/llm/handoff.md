@@ -7,31 +7,33 @@ kind: guide
 
 Last updated: 2026-05-15, after the cleanup-rework session.
 
-Prior session (monthly-stats / mini-games / YouTube-si= / DM-import /
-cooldown-UX) is **on `origin/master` and deployed to prod
-(<deploy-host>) at commit `6942061`; container healthy, polling
-(`e2e_test_bot`)**. This session's cleanup-rework rebases a single
-commit on top of that and is **not yet pushed / not yet deployed**.
+Prior baseline (monthly-stats / mini-games / YouTube-si= / DM-import /
+cooldown-UX) is on `origin/master`, deployed to prod (<deploy-host>) at
+commit `6942061`, container healthy (`e2e_test_bot`). Local `master`
+now carries **two further workstreams merged and not yet pushed**:
+cleanup-rework + chat-summarization (GLM).
 
 ## Branch / git topology (read before any git op)
 
-- Work was done in a git worktree on `feat/cleanup-rework`, rebased onto
-  `origin/master`. `origin/master` already contained all the
-  feat/summarize-glm history (6942061 is its ancestor) **plus** one
-  docs-only commit `2c55050` (games + youtube-si= specs); the rebase
-  folded that in - the 3 doc conflicts (`00_index`, `10_scope`,
-  `handoff`) were resolved by union, no code conflicts.
-- After the rebase the cleanup work is exactly **one commit** on top of
-  `origin/master`. Local `master` was reconciled (fast-forward) to
-  `origin/master` before applying it.
-- A `stash@{0}` on `feat/summarize-glm` holds parked summarize WIP from
-  a parallel workstream (NOT this work); untouched, restore with
-  `git stash pop` on that branch. Summarize is not in master/prod.
+- Local `master` HEAD `8c17737` = `origin/master` + cleanup commit
+  (`2e36426`) + `feat/summarize-glm` (2 commits) via a `--no-ff` merge.
+  **4 ahead of `origin/master`, 0 behind. Not pushed.**
+- `feat/summarize-glm` was developed by the owner in parallel (its own
+  worktree `.claude/worktrees/summarize-glm`); merged here non-rewriting
+  (branch + worktree intact). The summarize WIP that an earlier step
+  parked in a stash was already recovered and committed by the owner
+  into `9ba9f18`/`58c8feb` - **no stash to restore, nothing lost.**
+- Merge conflicts (config.go, deploy/env.example, docs 00_index /
+  10_scope; the cleanup rebase also touched handoff) were all additive
+  and resolved by union - no logic contradiction, build/tests green.
+- cleanup work lives in worktree `.claude/worktrees/cleanup-rework`
+  (branch `feat/cleanup-rework`); safe to remove after push.
 
 ## Current state
 
-`go build ./...` green; `go test ./...` green (19 pkg); `go vet` and
-`gofmt` clean. Two opus-critic rounds: one BLOCKER (B1: unresolved
+`go build ./...` green; `go test ./...` green (21 pkg, incl. summarize +
+glm); `go vet` and `gofmt` clean on the merged tree. Two opus-critic
+rounds on the cleanup work: one BLOCKER (B1: unresolved
 member could be publicly tagged/kicked) + S1/S2/S3 + a follow-up
 BLOCKER (UTF-16 vs rune message budget) - all resolved with regression
 tests. N2 (no shared per-chat lock between the daily scheduler and DM
@@ -77,10 +79,12 @@ Added this session (full detail:
 
 ## Immediate next steps
 
-1. **Push + deploy.** Branch is rebased on `origin/master`, one commit,
-   green. Owner to confirm `git push` (prod is live). Then standard
-   deploy. The daily lifecycle is OFF by default - enabling it is a
-   separate, explicit `CLEANUP_DAILY_ENABLED` step.
+1. **Push + deploy.** Local `master` (`8c17737`) = origin/master +
+   cleanup + summarize merge, 4 ahead / 0 behind, green. Owner to
+   confirm `git push origin master` (prod is live), then standard
+   deploy. Both heavy features are OFF by default: the daily lifecycle
+   needs `CLEANUP_DAILY_ENABLED`; `/summarize` needs `GLM_API_KEY`.
+   Enabling either is a separate, explicit step.
 2. **Operator manual verification** in the test chat (Claude cannot
    drive Telegram). See below.
 3. Separate item the owner flagged: the YouTube si= sanitizer "does not
