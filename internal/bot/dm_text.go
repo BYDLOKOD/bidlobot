@@ -104,7 +104,8 @@ const (
 
 	// --- cleanup ---
 
-	msgDMCleanupUsage = "Укажите период: /cleanup 6mo (примеры: 30d, 3mo, 1y)."
+	msgDMCleanupUsage = "Укажите период: /cleanup 6mo (примеры: 30d, 3mo, 1y).\n" +
+		"Остановить запущенную чистку: /cleanup stop."
 
 	msgDMCleanupBadPeriod = "Неверный период. Допустимо: 1d-5y. Примеры: 30d, 6mo, 1y."
 
@@ -157,14 +158,37 @@ const (
 		"Имена и теги бот подтягивает живым запросом; кто молчал, но ставит реакции, " +
 		"после добавления бота админом перестанет попадать в список."
 
-	// %d = stale count that the confirm will actually kick
-	msgDMCleanupConfirmFooter = "\n\nКнопка кикнет <b>только</b> список [молчат давно] (%d). " +
-		"Подтвердить может только инициатор."
+	// %d = proven-stale count the campaign will work through
+	msgDMCleanupConfirmFooter = "\n\nКнопка <b>запустит</b> чистку по списку [молчат давно] (%d): " +
+		"бот будет раз в день <b>публично в чате</b> тегать их пачками, давать время " +
+		"проявиться (написать или поставить реакцию) и кикать молчунов, пока список " +
+		"не кончится. Раздел [активность не зафиксирована] НЕ участвует.\n" +
+		"Запустить может только инициатор. Остановить потом: /cleanup stop."
 
-	// Shown instead of a confirm when nothing is safe to auto-kick.
-	msgDMCleanupReviewOnly = "\n\nℹ️ Кикать автоматически нечего - " +
+	// Shown instead of a confirm when nothing is safe to auto-act on.
+	msgDMCleanupReviewOnly = "\n\nℹ️ Запускать чистку не на ком - " +
 		"эти участники требуют ручной проверки. Для надёжного списка " +
 		"загрузите свежий экспорт через /import и повторите."
+
+	// /cleanup feature not wired (minimal/test build).
+	msgDMCleanupUnavailable = "Чистка сейчас недоступна."
+
+	// %d = how many newly queued into the campaign
+	msgDMCleanupStarted = "✅ Чистка запущена: <b>%d</b> в очереди.\n\n" +
+		"Бот сам, раз в день, будет публично тегать их в чате пачками и " +
+		"давать время проявиться; кто промолчит - кик (вернуться можно по ссылке). " +
+		"Идёт, пока список не кончится.\n\n" +
+		"Остановить в любой момент: /cleanup stop (по выбранному чату)."
+
+	// %d = records still in the active campaign
+	msgDMCleanupCampaignActive = "По этому чату уже идёт чистка: в работе <b>%d</b>. " +
+		"Останови её (/cleanup stop), потом запускай заново."
+
+	// %d = how many records dropped
+	msgDMCleanupStopped = "🛑 Чистка остановлена. Снято из очереди: <b>%d</b>. " +
+		"Уже кикнутых это не возвращает."
+
+	msgDMCleanupNoCampaign = "По этому чату чистка не запущена - останавливать нечего."
 
 	msgDMCleanupNothingLeft = "Кандидатов не осталось - возможно, данные изменились."
 

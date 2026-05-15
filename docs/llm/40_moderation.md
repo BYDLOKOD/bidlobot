@@ -67,58 +67,64 @@ Validation (warn/mute/ban): bot / admin / self rejected with the
 - **`/unban @user`** - pre-check `getChatMember` status, then
   `unbanChatMember(only_if_banned:true)` (mandatory flag - without it
   the call removes active members).
-- **`/cleanup <period>`** - see [10_scope.md] + dm_console_cleanup.go.
-  Confirm in DM; per-chat mutex blocks a second admin's concurrent run;
-  kick loop has a working Stop button registered before render. The
-  preview is **evidence-graded** (`internal/domain/cleanup`):
+- **`/cleanup <period>`** - starts the **campaign** (see below); does
+  NOT kick on confirm. The preview is **evidence-graded**
+  (`internal/domain/cleanup`):
   - `Preview.Candidates` = members the bot *observed* (message or
     reaction, live or imported) whose last activity precedes the cutoff.
-    The only set the confirm kicks.
+    The only set seeded into the campaign.
   - `Preview.NoEvidence` = members with zero recorded activity ever
     (join-only / react-only-before-bot). A data gap, **not** proof of
-    silence: shown named for manual review, never auto-kicked, never in
-    `Candidates`. This is the fix for "/cleanup listed people it never
-    saw and could not even name".
-  - Identity (Name / @handle) is resolved live via `getChatMember`
-    (`Service.ResolveIdentities`, bounded) because a Telegram Desktop
-    export has no usernames and no name for join-only members. Already
-    left/admin/bot rows are marked, not silently dropped.
+    silence: shown named for manual review, never seeded, never in
+    `Candidates`.
+  - Identity (Name / @handle) resolved live via `getChatMember`
+    (`Service.ResolveIdentities`, bounded) - the export has no usernames
+    and no name for join-only members. Left/admin/bot rows excluded.
   - `Preview.ThresholdExceedsWindow` drives a loud warning when the
-    requested period is longer than the data the bot actually has.
+    requested period exceeds the data the bot actually has.
   Empty-state copy distinguishes "no data, run import" / "everyone
   active" / "no proven-stale, only a data gap".
+- **`/cleanup stop`** - `gracekick.Cancel`: drop the chat's entire
+  campaign (queued + tagged). Already-kicked members are not restored.
+- A second `/cleanup <period>` while a campaign is active is **refused**
+  with status (no silent overwrite); stop first.
 
-## Daily inactive lifecycle (`internal/domain/gracekick`)
+## Inactive-cleanup campaign (`internal/domain/gracekick`)
 
-Opt-in, OFF unless `CLEANUP_DAILY_ENABLED`. **Public by design** - an
-explicit, owner-approved override of the DM-only invariant
-([10_scope.md], 2026-05-15). One scheduler tick per day at
-`CLEANUP_DAILY_AT` (UTC), per chat the bot administers with restrict
-rights:
+The campaign is **initiated by the admin's `/cleanup` confirm**, not by
+an env flag. Confirm -> `gracekick.Seed` enqueues the proven-stale,
+name-resolved `Candidates` as `queued` records (`NoEvidence` never
+seeded). The always-on daily scheduler then drives the lifecycle per
+chat with an active campaign, at `CLEANUP_DAILY_AT` (UTC). It is
+**public by design** - an owner-approved override of the DM-only
+invariant ([10_scope.md], 2026-05-15). `RunDaily` is 3-phase, per-chat
+serialized (a mutex so `/cleanup stop` cannot race a tick into
+resurrecting cancelled records; the throttled kick loop runs OUTSIDE the
+lock so stop stays responsive):
 
-1. **Sweep.** For every open grace ticket whose deadline passed: if the
-   member wrote OR reacted after `TaggedAt` (read from the live
-   membership record) they are spared and the ticket cleared; otherwise
-   they are kicked via the shared `cleanup.Service` (same getChatMember
-   pre-check: a now-admin / already-left member is skipped). Tickets are
-   terminal once swept - a transient kick failure does not stick; the
-   member simply re-enters via the tag phase later.
-2. **Tag.** `PreviewInactive` -> **`Candidates` only** (proven-stale;
-   `NoEvidence` is never auto-tagged - publicly @-tagging a member the
-   bot has no evidence against is unacceptable). Members already holding
-   an unexpired ticket are skipped (no re-tag). Resolve identities,
-   drop protected/left, take up to `CLEANUP_DAILY_BATCH`, post ONE
-   public message that @-mentions them and states the rule, then write
-   one grace ticket each (`GraceDeadline = now + CLEANUP_GRACE`,
-   default 72h). If the announcement send fails, **no tickets are
-   persisted** - a member is never kicked for a warning that never
-   reached the chat.
+1. **Sweep** `tagged` past `GraceDeadline`: wrote OR reacted **at/after**
+   `TaggedAt` (inclusive - second-granular timestamps) -> spared,
+   ticket cleared; still silent -> kicked via shared `cleanup.Service`
+   (getChatMember pre-check skips now-admin/left/bot); live record
+   unreadable -> deferred, never kick on uncertainty. Terminal once
+   attempted; per-member kick failures logged.
+2. **Promote** up to `CLEANUP_DAILY_BATCH` `queued` -> `tagged`: drop
+   anyone active since `SeededAt` (spared, never tagged) or now
+   admin/left/bot; unreadable -> deferred (escape: `/cleanup stop`).
+   Post ONE public @-mention message stating the rule, then persist
+   `tagged` (`GraceDeadline = now + CLEANUP_GRACE`, default 72h). If the
+   announce send fails, records stay `queued` - a member is never
+   kicked for a warning that never reached the chat.
+
+Campaign ends when the seeded list is exhausted. The legacy immediate
+public-callback kick executor was **removed** - the campaign is the only
+path that bans.
 
 Privacy-mode caveat: under BotFather privacy ON the bot does not see
-ordinary messages, but it does see replies to its own message and all
-reactions (it is admin). The tag copy therefore asks members to *reply
-or react*, and "reappeared" is read from membership timestamps, which
-update from whatever the bot is allowed to observe.
+ordinary messages, but does see replies to its own message and all
+reactions (it is admin). The tag copy asks members to *reply or react*;
+"active" is read from membership timestamps, updated from whatever the
+bot may observe.
 
 ## Destructive-action safety (parity with the old public dispatcher)
 

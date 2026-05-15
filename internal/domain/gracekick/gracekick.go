@@ -1,14 +1,14 @@
-// Package gracekick is the daily inactive-member lifecycle: tag publicly,
-// give a grace window, then kick if still silent. It is the humane
-// alternative to a silent purge - a tagged member who writes OR reacts
-// before the deadline is spared.
+// Package gracekick is the inactive-member campaign: an admin starts it
+// from the DM /cleanup command with a proven-stale list; the bot then,
+// once a day, publicly @-tags the next batch with a grace deadline,
+// spares anyone who writes or reacts in time, and kicks the rest - until
+// the seeded list is exhausted.
 //
-// Hard safety invariant: only members with PROVEN inactivity evidence
-// (cleanup.Preview.Candidates - the bot actually observed them go quiet)
-// are ever tagged or kicked here. The "no recorded activity at all"
-// bucket (cleanup.Preview.NoEvidence) is a data gap, not silence, and is
-// NEVER touched by this automatic, public path. Publicly @-tagging a
-// member the bot has no evidence against would be unacceptable.
+// This package does NOT decide who is inactive. The /cleanup command
+// computes the evidence-graded candidate list (cleanup.Preview.Candidates
+// - members the bot actually observed go quiet, NEVER the NoEvidence
+// data-gap bucket) and passes only that into Seed. gracekick just drives
+// the day-by-day public lifecycle over whatever it was seeded with.
 package gracekick
 
 import (
@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -25,40 +26,44 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
-// DefaultGrace is the time between being tagged and being kicked if the
-// member never reappears. Owner decision (2026-05-15): 3 days.
+// DefaultGrace is the time between being publicly tagged and being
+// kicked if the member never reappears. Owner decision: 3 days.
 const DefaultGrace = 72 * time.Hour
 
 // DefaultBatch caps how many members one chat tags per daily run, so a
-// chat with 300 stale members is worked down ~15/day instead of a single
-// 300-mention wall that reads as spam and hits Telegram's message limit.
+// 300-person campaign is worked down ~15/day instead of a single
+// 300-mention wall (spam + Telegram's 4096-char message limit).
 const DefaultBatch = 15
 
-// Record is one member's open grace ticket. Its mere existence means
-// "tagged, awaiting reappearance"; it is deleted on save or on kick.
+// Record states. A campaign member is queued (seeded by /cleanup,
+// awaiting its day) then tagged (publicly pinged, grace clock running).
+// A record is deleted when the member is saved, kicked, or dropped.
+const (
+	StateQueued = "queued"
+	StateTagged = "tagged"
+)
+
+// Record is one member's slot in a chat's campaign.
 type Record struct {
-	AbsChatID     int64     `json:"abs_chat_id"`
-	UserID        int64     `json:"user_id"`
-	Username      string    `json:"username,omitempty"`
-	FirstName     string    `json:"first_name,omitempty"`
+	AbsChatID int64  `json:"abs_chat_id"`
+	UserID    int64  `json:"user_id"`
+	Username  string `json:"username,omitempty"`
+	FirstName string `json:"first_name,omitempty"`
+
+	State    string    `json:"state"`     // queued | tagged
+	SeededAt time.Time `json:"seeded_at"` // when /cleanup confirm enqueued them
+
+	// Set only once promoted to tagged (zero while queued):
 	TaggedAt      time.Time `json:"tagged_at"`
 	GraceDeadline time.Time `json:"grace_deadline"`
 }
 
-// Store persists open grace tickets. A real bbolt repo and an in-memory
-// test double both satisfy it.
+// Store persists campaign records. A bbolt repo and an in-memory test
+// double both satisfy it.
 type Store interface {
 	Put(ctx context.Context, r Record) error
 	ListByChat(ctx context.Context, absChatID int64) ([]Record, error)
 	Delete(ctx context.Context, absChatID, userID int64) error
-}
-
-// Previewer is the slice of *cleanup.Service this package needs: the
-// evidence-graded candidate list plus identity resolution for the public
-// mention.
-type Previewer interface {
-	PreviewInactive(ctx context.Context, absChatID int64, threshold time.Duration, now time.Time) (*cleanup.Preview, error)
-	ResolveIdentities(ctx context.Context, absChatID int64, in []membership.Member, maxAPILookups int) []cleanup.ResolvedMember
 }
 
 // Kicker is the ban+unban executor (satisfied by *cleanup.Service). It
@@ -68,8 +73,8 @@ type Kicker interface {
 	ExecuteCleanup(ctx context.Context, signedChatID int64, candidates []membership.Member, progress func(done, total int, last cleanup.ExecutionEntry)) (*cleanup.Report, error)
 }
 
-// MemberLookup reads the live membership record so the sweep can tell
-// whether a tagged member wrote or reacted after being tagged.
+// MemberLookup reads the live membership record so the bot can tell
+// whether a member wrote or reacted (and is still a normal member).
 type MemberLookup interface {
 	GetMember(ctx context.Context, userID, absChatID int64) (*membership.Member, error)
 }
@@ -80,9 +85,8 @@ type Announcer interface {
 }
 
 type Config struct {
-	Threshold time.Duration // inactivity window fed to PreviewInactive
-	Grace     time.Duration // tag -> kick delay; DefaultGrace if zero
-	Batch     int           // max tags/chat/run; DefaultBatch if <=0
+	Grace time.Duration // tag -> kick delay; DefaultGrace if zero
+	Batch int           // max tags/chat/run; DefaultBatch if <=0
 }
 
 func (c Config) normalized() Config {
@@ -97,18 +101,41 @@ func (c Config) normalized() Config {
 
 type Service struct {
 	store   Store
-	prev    Previewer
 	kick    Kicker
 	members MemberLookup
 	out     Announcer
 	cfg     Config
 	log     *slog.Logger
+
+	// locks serializes the record-mutation phases of RunDaily/Seed/Cancel
+	// per chat so a `/cleanup stop` cannot race a daily tick into
+	// resurrecting cancelled records (publicly tagging + kicking people
+	// for a stopped campaign). One mutex per absChatID, created lazily.
+	locks sync.Map // absChatID -> *sync.Mutex
 }
 
-func NewService(store Store, prev Previewer, kick Kicker, members MemberLookup, out Announcer, cfg Config, log *slog.Logger) *Service {
+// chatLock takes the per-chat mutex and returns its unlock. The throttled
+// kick loop is deliberately run OUTSIDE this lock (see RunDaily) so a
+// stop/seed stays responsive even during a long purge.
+func (s *Service) chatLock(absChatID int64) func() {
+	mi, _ := s.locks.LoadOrStore(absChatID, &sync.Mutex{})
+	m := mi.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
+}
+
+// seenAtOrAfter reports activity at or after `since`. The boundary is
+// inclusive (>=, not >): Telegram message/reaction timestamps are
+// second-granular, so a member who acts in the very second they were
+// tagged/seeded must count as active - a strict `>` there would kick a
+// member who did exactly what the warning asked.
+func seenAtOrAfter(ts, since time.Time) bool {
+	return !ts.IsZero() && !ts.Before(since)
+}
+
+func NewService(store Store, kick Kicker, members MemberLookup, out Announcer, cfg Config, log *slog.Logger) *Service {
 	return &Service{
 		store:   store,
-		prev:    prev,
 		kick:    kick,
 		members: members,
 		out:     out,
@@ -117,7 +144,7 @@ func NewService(store Store, prev Previewer, kick Kicker, members MemberLookup, 
 	}
 }
 
-// Summary is the per-chat outcome of one daily run, for logs/metrics.
+// Summary is the per-chat outcome of one daily run, for logs.
 type Summary struct {
 	Tagged int
 	Saved  int
@@ -125,38 +152,98 @@ type Summary struct {
 	Failed int
 }
 
-// RunDaily runs one chat's lifecycle tick: first sweep open tickets whose
-// grace expired (spare the reappeared, kick the still-silent), then tag a
-// fresh batch of proven-inactive members. absChatID is the membership
-// absolute id; the signed id (-abs) is what Telegram APIs receive.
+// CampaignSize returns how many records (queued + tagged) the chat has.
+// Zero means no active campaign. Used by /cleanup to refuse a re-start
+// and by the scheduler to skip idle chats.
+func (s *Service) CampaignSize(ctx context.Context, absChatID int64) (int, error) {
+	recs, err := s.store.ListByChat(ctx, absChatID)
+	return len(recs), err
+}
+
+// Seed enqueues members into the chat's campaign as `queued`, skipping
+// anyone already in it (idempotent). The caller (/cleanup confirm) must
+// pass ONLY proven-stale, name-resolved candidates - gracekick trusts
+// this and never re-derives who is inactive. Returns count newly queued.
+func (s *Service) Seed(ctx context.Context, absChatID int64, members []membership.Member, now time.Time) (int, error) {
+	defer s.chatLock(absChatID)()
+	existing, err := s.store.ListByChat(ctx, absChatID)
+	if err != nil {
+		return 0, fmt.Errorf("gracekick seed: list: %w", err)
+	}
+	have := make(map[int64]struct{}, len(existing))
+	for _, r := range existing {
+		have[r.UserID] = struct{}{}
+	}
+	seededAt := now.Truncate(time.Second)
+	seeded := 0
+	for _, m := range members {
+		if _, dup := have[m.UserID]; dup {
+			continue
+		}
+		if err := s.store.Put(ctx, Record{
+			AbsChatID: absChatID, UserID: m.UserID,
+			Username: m.Username, FirstName: m.FirstName,
+			State: StateQueued, SeededAt: seededAt,
+		}); err != nil {
+			return seeded, fmt.Errorf("gracekick seed: put %d: %w", m.UserID, err)
+		}
+		seeded++
+	}
+	return seeded, nil
+}
+
+// Cancel drops the whole campaign for a chat (the /cleanup stop path).
+// Returns how many records were removed.
+func (s *Service) Cancel(ctx context.Context, absChatID int64) (int, error) {
+	defer s.chatLock(absChatID)()
+	recs, err := s.store.ListByChat(ctx, absChatID)
+	if err != nil {
+		return 0, fmt.Errorf("gracekick cancel: list: %w", err)
+	}
+	for _, r := range recs {
+		_ = s.store.Delete(ctx, absChatID, r.UserID)
+	}
+	return len(recs), nil
+}
+
+// RunDaily is one chat's daily tick over an existing campaign:
+//  1. sweep `tagged` records whose grace expired - spare the reappeared,
+//     kick the still-silent;
+//  2. promote up to Batch `queued` records to `tagged` - dropping anyone
+//     who came back (or stopped being a normal member) since seeding,
+//     publicly tagging the rest with a fresh grace deadline.
+//
+// No campaign -> no-op. The campaign ends naturally when the last record
+// is removed.
 func (s *Service) RunDaily(ctx context.Context, absChatID int64, now time.Time) (Summary, error) {
 	var sum Summary
 	signed := -absChatID
 
+	// --- phase A: under the chat lock, snapshot + decide the kick set ----
+	unlock := s.chatLock(absChatID)
 	recs, err := s.store.ListByChat(ctx, absChatID)
 	if err != nil {
-		return sum, fmt.Errorf("gracekick: list tickets: %w", err)
+		unlock()
+		return sum, fmt.Errorf("gracekick: list: %w", err)
 	}
-
-	// --- sweep -----------------------------------------------------------
-	stillOpen := make(map[int64]struct{}, len(recs))
+	if len(recs) == 0 {
+		unlock()
+		return sum, nil // no campaign for this chat
+	}
 	var dueKick []membership.Member
 	for _, r := range recs {
-		if now.Before(r.GraceDeadline) {
-			stillOpen[r.UserID] = struct{}{} // in grace, do not re-tag below
+		if r.State != StateTagged || now.Before(r.GraceDeadline) {
 			continue
 		}
-		saved, determined := s.reappeared(ctx, r)
+		active, determined := s.activeSince(ctx, r.UserID, absChatID, r.TaggedAt)
 		if !determined {
-			// Could not read the member's live record. Never kick on
-			// uncertainty: keep the ticket, keep them out of the re-tag
-			// set, and re-evaluate on a later run.
-			stillOpen[r.UserID] = struct{}{}
+			// Can't read the live record. Never kick on uncertainty:
+			// leave the ticket, re-evaluate next run.
 			s.log.Warn("gracekick: reappearance undetermined, deferring kick",
 				"chat", absChatID, "user", r.UserID)
 			continue
 		}
-		if saved {
+		if active {
 			_ = s.store.Delete(ctx, absChatID, r.UserID)
 			sum.Saved++
 			continue
@@ -166,87 +253,108 @@ func (s *Service) RunDaily(ctx context.Context, absChatID int64, now time.Time) 
 			Username: r.Username, FirstName: r.FirstName,
 		})
 	}
+	unlock()
+
+	// --- phase B: kick OUTSIDE the lock ---------------------------------
+	// ExecuteCleanup is throttled (~2s/kick); holding the per-chat lock
+	// across it would freeze /cleanup stop for minutes. kickOne pre-checks
+	// already-left/admin, so a concurrent Cancel deleting these records
+	// mid-loop is harmless.
 	if len(dueKick) > 0 {
 		rep, kerr := s.kick.ExecuteCleanup(ctx, signed, dueKick, nil)
-		// Tickets are terminal once the deadline passed AND we attempted
-		// the kick: a transient kick failure must not leave a stuck
-		// ticket - the member, if still stale, re-enters via the tag
-		// phase on a later run.
-		for _, m := range dueKick {
-			_ = s.store.Delete(ctx, absChatID, m.UserID)
-		}
 		if kerr != nil {
-			s.log.Warn("gracekick: kick batch returned error", "chat", absChatID, "error", kerr)
+			s.log.Warn("gracekick: kick batch error", "chat", absChatID, "error", kerr)
 		}
 		if rep != nil {
 			sum.Kicked = rep.Kicked
 			sum.Failed = rep.Failed
+			for _, e := range rep.Entries {
+				if e.Outcome == cleanup.OutcomeFailed {
+					s.log.Warn("gracekick: kick failed for member",
+						"chat", absChatID, "user", e.UserID, "error", e.APIError)
+				}
+			}
 		}
+		unlock = s.chatLock(absChatID)
+		for _, m := range dueKick {
+			// Terminal once attempted: a transient kick failure must not
+			// leave a stuck ticket (it would loop forever as "already
+			// left" and wedge campaign termination). A failed delete is
+			// surfaced; the record then self-heals via the kickOne
+			// already-left skip on a later run.
+			if derr := s.store.Delete(ctx, absChatID, m.UserID); derr != nil {
+				s.log.Warn("gracekick: post-kick ticket delete failed",
+					"chat", absChatID, "user", m.UserID, "error", derr)
+			}
+		}
+		unlock()
 	}
 
-	// Do not start a fresh public tag round while shutting down: a
-	// cancelled context here would otherwise still post to the chat.
+	// Do not start a public tag round during shutdown.
 	if cerr := ctx.Err(); cerr != nil {
 		return sum, cerr
 	}
 
-	// --- tag -------------------------------------------------------------
-	p, err := s.prev.PreviewInactive(ctx, absChatID, s.cfg.Threshold, now)
+	// --- phase C: under the lock, recompute promote from CURRENT state --
+	// Re-listing here is what makes a concurrent Cancel/Seed safe: a
+	// stopped campaign has no records left, so nothing is resurrected.
+	unlock = s.chatLock(absChatID)
+	defer unlock()
+	recs, err = s.store.ListByChat(ctx, absChatID)
 	if err != nil {
-		return sum, fmt.Errorf("gracekick: preview: %w", err)
+		return sum, fmt.Errorf("gracekick: relist: %w", err)
 	}
-	// Candidates are the PROVEN-stale set only. NoEvidence is deliberately
-	// ignored here - never auto-tag a member the bot has no evidence on.
-	fresh := make([]membership.Member, 0, len(p.Candidates))
-	for _, m := range p.Candidates {
-		if _, open := stillOpen[m.UserID]; open {
-			continue // already under an unexpired grace ticket
+	var batch []Record
+	for _, r := range recs {
+		if r.State != StateQueued {
+			continue
 		}
-		fresh = append(fresh, m)
-		if len(fresh) >= s.cfg.Batch {
+		m, merr := s.members.GetMember(ctx, r.UserID, absChatID)
+		if merr != nil || m == nil {
+			// Can't verify -> do NOT publicly tag blindly; keep queued,
+			// retry next run. (Escape from a permanently-stuck campaign is
+			// the documented /cleanup stop.)
+			continue
+		}
+		if seenAtOrAfter(m.LastMessageAt, r.SeededAt) || seenAtOrAfter(m.LastReactionAt, r.SeededAt) {
+			// Came back on their own since the campaign started - spared,
+			// never even tagged.
+			_ = s.store.Delete(ctx, absChatID, r.UserID)
+			sum.Saved++
+			continue
+		}
+		if m.IsBot || shared.IsAnonymousAdmin(m.UserID) ||
+			m.Status == membership.StatusLeft || m.Status == membership.StatusKicked ||
+			m.Status == membership.StatusAdministrator || m.Status == membership.StatusCreator {
+			// No longer a valid target (left / became admin / bot) - drop.
+			_ = s.store.Delete(ctx, absChatID, r.UserID)
+			continue
+		}
+		batch = append(batch, r)
+		if len(batch) >= s.cfg.Batch {
 			break
 		}
 	}
-	if len(fresh) == 0 {
+	if len(batch) == 0 {
 		return sum, nil
 	}
-
-	resolved := s.prev.ResolveIdentities(ctx, absChatID, fresh, s.cfg.Batch)
-	pick := make([]cleanup.ResolvedMember, 0, len(resolved))
-	for _, rm := range resolved {
-		// Affirmative safety ONLY. Never publicly tag / auto-kick a
-		// member we could not identify (failed live lookup -> Resolved
-		// false), who is not present (left/kicked), or who is protected
-		// (admin/bot). An unresolved member is precisely the "no evidence
-		// to act on, let alone publicly" case.
-		if !rm.Resolved || !rm.Present || rm.Protected {
-			continue
-		}
-		pick = append(pick, rm)
-	}
-	// Cap the batch to what fits in one Telegram message (4096 chars) so
-	// an oversized run can never 400-loop forever and stall the chat.
-	pick = fitOneMessage(pick, s.cfg.Grace)
-	if len(pick) == 0 {
+	batch = fitOneMessage(batch)
+	if len(batch) == 0 {
 		return sum, nil
 	}
-
-	if err := s.announce(ctx, signed, pick); err != nil {
-		// Nothing persisted yet - safe to retry next run. Do NOT write
-		// tickets for an announcement that never reached the chat, or the
-		// member would be kicked after the grace window without ever
-		// being warned.
+	if err := s.announce(ctx, signed, batch); err != nil {
+		// Stays queued, retried next run. Never mark tagged for a warning
+		// that never reached the chat (else a silent kick after grace).
 		return sum, fmt.Errorf("gracekick: announce: %w", err)
 	}
 	taggedAt := now.Truncate(time.Second) // match second-granular activity ts
 	deadline := taggedAt.Add(s.cfg.Grace)
-	for _, rm := range pick {
-		if perr := s.store.Put(ctx, Record{
-			AbsChatID: absChatID, UserID: rm.UserID,
-			Username: rm.Username, FirstName: rm.FirstName,
-			TaggedAt: taggedAt, GraceDeadline: deadline,
-		}); perr != nil {
-			s.log.Warn("gracekick: persist ticket failed", "chat", absChatID, "user", rm.UserID, "error", perr)
+	for _, r := range batch {
+		r.State = StateTagged
+		r.TaggedAt = taggedAt
+		r.GraceDeadline = deadline
+		if perr := s.store.Put(ctx, r); perr != nil {
+			s.log.Warn("gracekick: persist tagged failed", "chat", absChatID, "user", r.UserID, "error", perr)
 			continue
 		}
 		sum.Tagged++
@@ -254,24 +362,20 @@ func (s *Service) RunDaily(ctx context.Context, absChatID int64, now time.Time) 
 	return sum, nil
 }
 
-// reappeared reports whether the member wrote OR reacted after being
-// tagged. Owner decision: a message or a reaction both count as "alive".
-// It returns (saved, determined): determined is false when the live
-// membership record could not be read (store error, or no record at
-// all). The caller must NEVER kick on determined=false - a read fault
-// must not translate into removing a member who may well have written.
-func (s *Service) reappeared(ctx context.Context, r Record) (saved, determined bool) {
-	m, err := s.members.GetMember(ctx, r.UserID, r.AbsChatID)
+// activeSince reports whether the member wrote OR reacted at/after
+// `since` (inclusive - see seenAtOrAfter). determined is false when the
+// live membership record cannot be read; the caller must never kick on
+// determined=false.
+func (s *Service) activeSince(ctx context.Context, userID, absChatID int64, since time.Time) (active, determined bool) {
+	m, err := s.members.GetMember(ctx, userID, absChatID)
 	if err != nil || m == nil {
 		return false, false
 	}
-	return m.LastMessageAt.After(r.TaggedAt) || m.LastReactionAt.After(r.TaggedAt), true
+	return seenAtOrAfter(m.LastMessageAt, since) || seenAtOrAfter(m.LastReactionAt, since), true
 }
 
 // utf16Len returns len(s) in UTF-16 code units - the unit Telegram uses
-// for its 4096-char message cap. An astral character (emoji) is one rune
-// but TWO UTF-16 units, so a rune count would undercount an adversarial
-// display name by ~2x and let an oversized message through.
+// for its 4096-char message cap (an emoji is one rune but TWO units).
 func utf16Len(s string) int {
 	n := 0
 	for _, r := range s {
@@ -284,30 +388,24 @@ func utf16Len(s string) int {
 	return n
 }
 
-// fitOneMessage trims pick so the rendered announcement stays well under
-// Telegram's 4096 UTF-16-unit message limit. Without this, a large
-// CLEANUP_DAILY_BATCH of nameless (inline-link) members could exceed the
-// limit, make SendMessage 400 forever, and silently freeze the lifecycle
-// for that chat. Members that do not fit are tagged on a later run. At
-// least one is always kept; mention() is measured already HTML-escaped,
-// so per-key escape expansion (`<` -> `&lt;`) is counted accurately.
-func fitOneMessage(pick []cleanup.ResolvedMember, _ time.Duration) []cleanup.ResolvedMember {
-	const budget = 3000 // generous headroom under 4096 for preamble+footer
+// fitOneMessage trims the batch so the rendered announcement stays well
+// under Telegram's 4096 UTF-16-unit limit; the rest are tagged next run.
+// At least one is always kept.
+func fitOneMessage(batch []Record) []Record {
+	const budget = 3000 // headroom under 4096 for preamble + footer
 	used := 0
-	out := make([]cleanup.ResolvedMember, 0, len(pick))
-	for _, rm := range pick {
-		c := utf16Len(mention(rm)) + 2 // ", "
+	out := make([]Record, 0, len(batch))
+	for _, r := range batch {
+		c := utf16Len(mention(r)) + 2 // ", "
 		if len(out) > 0 && used+c > budget {
 			break
 		}
 		used += c
-		out = append(out, rm)
+		out = append(out, r)
 	}
 	return out
 }
 
-// truncUTF16 trims s to at most maxUnits UTF-16 code units, only ever
-// cutting on a rune boundary so a surrogate pair is never split.
 func truncUTF16(s string, maxUnits int) string {
 	units := 0
 	for i, r := range s {
@@ -323,27 +421,24 @@ func truncUTF16(s string, maxUnits int) string {
 	return s
 }
 
-// announce posts ONE public message that @-mentions the whole batch and
-// states the rule. A member with a username is mentioned as @name; one
-// without is mentioned via an inline tg://user link so the ping still
-// fires. Reply-or-react is requested explicitly because, under BotFather
-// privacy ON, an ordinary message is invisible to the bot while a reply
-// to the bot and any reaction are not - so the instruction keeps the
-// "saved" signal reliable in both privacy models.
-func (s *Service) announce(ctx context.Context, signedChatID int64, pick []cleanup.ResolvedMember) error {
+// announce posts ONE public message @-mentioning the batch and stating
+// the rule. Reply-or-react is asked explicitly because under BotFather
+// privacy ON an ordinary message is invisible to the bot while a reply
+// to the bot and any reaction are not.
+func (s *Service) announce(ctx context.Context, signedChatID int64, batch []Record) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "🧹 <b>Чистка неактивных</b>\n\n"+
-		"Эти участники давно не пишут и не реагируют. Чтобы остаться - "+
-		"<b>напишите в чат (ответом на это сообщение) или поставьте любую реакцию</b> "+
-		"в течение %s. Иначе бот удалит вас из чата.\n\n",
+		"Вы давно не писали и не реагировали в этом чате. Чтобы остаться - "+
+		"<b>напишите что-нибудь (можно ответом на это сообщение) или поставьте любую реакцию</b> "+
+		"в течение %s. Иначе бот удалит вас из чата (вернуться можно по ссылке).\n\n",
 		formatDur(s.cfg.Grace))
-	for i, rm := range pick {
+	for i, r := range batch {
 		if i > 0 {
 			b.WriteString(", ")
 		}
-		b.WriteString(mention(rm))
+		b.WriteString(mention(r))
 	}
-	b.WriteString("\n\n<i>Любое сообщение или реакция в чате снимает из списка.</i>")
+	b.WriteString("\n\n<i>Любое сообщение или реакция в чате снимает вас из списка.</i>")
 
 	_, err := s.out.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: signedChatID},
@@ -353,25 +448,22 @@ func (s *Service) announce(ctx context.Context, signedChatID int64, pick []clean
 	return err
 }
 
-// mention renders a single ping. @username when known (no HTML needed -
-// usernames are [A-Za-z0-9_]); otherwise an HTML inline mention by id
-// with an HTML-escaped visible name so the tag still notifies a user who
-// has no public @handle.
-func mention(rm cleanup.ResolvedMember) string {
-	if rm.Username != "" {
-		return "@" + rm.Username
+// mention renders a single ping: @username when known, else an inline
+// tg://user link with an HTML-escaped, length-bounded visible name so
+// the tag still notifies a user who has no public @handle.
+func mention(r Record) string {
+	if r.Username != "" {
+		return "@" + r.Username
 	}
-	name := strings.TrimSpace(rm.FirstName)
+	name := strings.TrimSpace(r.FirstName)
 	if name == "" {
 		name = "участник"
 	}
-	name = truncUTF16(name, 32) // bound a single mention's length (UTF-16)
-	return fmt.Sprintf(`<a href="tg://user?id=%d">%s</a>`, rm.UserID, shared.EscapeHTML(name))
+	name = truncUTF16(name, 32)
+	return fmt.Sprintf(`<a href="tg://user?id=%d">%s</a>`, r.UserID, shared.EscapeHTML(name))
 }
 
-// formatDur renders a grace duration in plain Russian ("3 дня", "12
-// часов"). Kept local so the domain has no dependency on the bot layer's
-// formatter.
+// formatDur renders a grace duration in plain Russian ("3 дня").
 func formatDur(d time.Duration) string {
 	if d%(24*time.Hour) == 0 {
 		days := int(d / (24 * time.Hour))
@@ -382,7 +474,7 @@ func formatDur(d time.Duration) string {
 }
 
 func plural(n int, one, few, many string) string {
-	n = n % 100
+	n %= 100
 	if n >= 11 && n <= 14 {
 		return many
 	}

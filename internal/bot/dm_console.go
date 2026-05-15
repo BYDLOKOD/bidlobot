@@ -15,6 +15,7 @@ import (
 
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/dmsession"
+	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
@@ -55,12 +56,12 @@ type DMConsole struct {
 	admin    AdminChecker
 	mod      *moderation.Service
 	cleanup  *cleanup.Service
+	gracekik *gracekick.Service // nil-tolerant: nil -> /cleanup says unavailable
 	stats    *stats.Service
 	month    *monthstats.Service
 	pending  pending.Store
 	log      *slog.Logger
 
-	runs    *cleanupRuns
 	appCtxV context.Context
 	wgV     *sync.WaitGroup
 
@@ -83,6 +84,10 @@ func (d *DMConsole) SetAppContext(ctx context.Context) { d.appCtxV = ctx }
 
 // AttachWaitGroup lets App.Stop() wait for an in-flight DM cleanup.
 func (d *DMConsole) AttachWaitGroup(wg *sync.WaitGroup) { d.wgV = wg }
+
+// SetGraceKick wires the inactive-cleanup campaign engine. Nil-tolerant:
+// without it `/cleanup` reports the feature unavailable.
+func (d *DMConsole) SetGraceKick(g *gracekick.Service) { d.gracekik = g }
 
 func (d *DMConsole) appCtx() context.Context {
 	if d.appCtxV != nil {
@@ -131,7 +136,6 @@ func NewDMConsole(
 		memberRepo:  memberRepo,
 		monthRepo:   monthRepo,
 		log:         log,
-		runs:        newCleanupRuns(),
 	}
 }
 

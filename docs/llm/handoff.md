@@ -5,134 +5,125 @@ kind: guide
 
 # Handoff: next session action plan
 
-Last updated: 2026-05-15, after the cleanup-rework session.
+Last updated: 2026-05-15, after the cleanup-campaign-rework session.
 
-Prior baseline (monthly-stats / mini-games / YouTube-si= / DM-import /
+Prior baseline (monthly-stats / games / YouTube-si= / DM-import /
 cooldown-UX) is on `origin/master`, deployed to prod (<deploy-host>) at
 commit `6942061`, container healthy (`e2e_test_bot`). Local `master`
-now carries **two further workstreams merged and not yet pushed**:
-cleanup-rework + chat-summarization (GLM).
+carries **three workstreams merged, not yet pushed**: evidence-graded
+cleanup, the cleanup **campaign rework**, and chat-summarization (GLM).
 
 ## Branch / git topology (read before any git op)
 
-- Local `master` HEAD `8c17737` = `origin/master` + cleanup commit
-  (`2e36426`) + `feat/summarize-glm` (2 commits) via a `--no-ff` merge.
-  **4 ahead of `origin/master`, 0 behind. Not pushed.**
-- `feat/summarize-glm` was developed by the owner in parallel (its own
-  worktree `.claude/worktrees/summarize-glm`); merged here non-rewriting
-  (branch + worktree intact). The summarize WIP that an earlier step
-  parked in a stash was already recovered and committed by the owner
-  into `9ba9f18`/`58c8feb` - **no stash to restore, nothing lost.**
-- Merge conflicts (config.go, deploy/env.example, docs 00_index /
-  10_scope; the cleanup rebase also touched handoff) were all additive
-  and resolved by union - no logic contradiction, build/tests green.
-- cleanup work lives in worktree `.claude/worktrees/cleanup-rework`
-  (branch `feat/cleanup-rework`); safe to remove after push.
+- Work is in worktree `.claude/worktrees/cleanup-rework`
+  (`feat/cleanup-rework`). Local `master` is fast-forwarded from it.
+  **Ahead of `origin/master`, NOT pushed.** Push is the only remaining
+  outward step and needs owner confirmation (prod is live).
+- `feat/summarize-glm` (owner's parallel workstream) was merged
+  `--no-ff`, branch/worktree intact. Earlier parked stash was already
+  recovered+committed by the owner - nothing lost (audited).
+- Doc/config merge conflicts were additive, resolved by union.
 
 ## Current state
 
-`go build ./...` green; `go test ./...` green (21 pkg, incl. summarize +
-glm); `go vet` and `gofmt` clean on the merged tree. Two opus-critic
-rounds on the cleanup work: one BLOCKER (B1: unresolved
-member could be publicly tagged/kicked) + S1/S2/S3 + a follow-up
-BLOCKER (UTF-16 vs rune message budget) - all resolved with regression
-tests. N2 (no shared per-chat lock between the daily scheduler and DM
-`/cleanup`) deliberately deferred (critic-rated acceptable: the
-getChatMember pre-check converges a double-kick to a skip).
+`go build ./...`, `go test ./...` (21 pkg), `go vet`, `gofmt` all green.
+**Two opus-critic rounds on the rework**: round-1 BLOCKER B1
+(same-second-as-tag activity could kick a responsive member) + S3/S5
+fixed with regression tests; round-2 = clean (no BLOCKER / no
+SHOULD-FIX), locking traced sound. Earlier evidence-grading critic pass
+(devlog 05) also clean.
 
-Added this session (full detail:
-`devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md`):
+The model now (full detail: `devlog/06_cleanup_campaign_rework.md`,
+spec: `40_moderation.md`):
 
-- **Evidence-graded cleanup** (`internal/domain/cleanup`):
-  `Preview.Candidates` (observed-then-silent, actionable) vs
-  `Preview.NoEvidence` (never observed - data gap, never auto-kicked);
-  `ResolveIdentities` (live Name/@handle via getChatMember, bounded,
-  flags left/admin/bot); `ThresholdExceedsWindow` warning;
-  `cleanup.ParsePeriod` is now the one period parser. DM `/cleanup`
-  preview rewritten (grouped, named, honest empty states; confirm
-  kicks proven-stale only).
-- **Daily lifecycle** (`internal/domain/gracekick` + `gracekick` bbolt
-  bucket + `App.runDailyCleanup` scheduler + `CLEANUP_DAILY_*` config):
-  opt-in, OFF by default; public tag -> 3-day grace -> kick; saved by
-  message OR reaction; proven-stale only; announce-fail persists no
-  ticket; affirmative-safety pick filter; UTF-16-bounded one-message
-  announce; inFlight-tracked scheduler.
+- DM `/cleanup <period>`: evidence-graded preview (proven-stale vs
+  no-data). Confirm **does NOT kick** - it `gracekick.Seed`s the
+  proven-stale list as a per-chat **campaign** (`queued`). `NoEvidence`
+  never seeded.
+- The always-on daily scheduler drives the campaign per chat:
+  promote `Batch` `queued`->`tagged` (one public @-tag message, grace
+  `CLEANUP_GRACE` default 72h), spare anyone who wrote/reacted, kick the
+  still-silent after grace, until the seeded list is exhausted.
+- `/cleanup stop` cancels the chat's campaign; re-running `/cleanup`
+  while active is refused.
+- `RunDaily` is 3-phase, per-chat mutex; throttled kick loop runs
+  outside the lock so `/cleanup stop` stays responsive.
+- The legacy immediate-kick `CleanupExecutor` (+`cleanupRuns`,
+  `dm:abort`) was **removed** - the campaign is the only ban path.
+- Config: no enable flag; `CLEANUP_DAILY_ENABLED`/`CLEANUP_THRESHOLD`
+  dropped; `CLEANUP_DAILY_AT`/`GRACE`/`BATCH` only tune pacing.
 
 ## Known follow-ups / limitations (documented, not silent)
 
-1. **Daily lifecycle reverses the DM-only privacy invariant** - owner
-   decision, scoped by opt-in + proven-stale-only + batch cap + grace.
-   Recorded in `10_scope.md` / `40_moderation.md`;
-   `ux_moderation_privacy` memory now has the documented exception.
-2. **Privacy-mode caveat.** Under BotFather privacy ON the bot does not
-   see ordinary messages; it sees reactions and replies-to-itself. The
-   tag copy asks members to reply or react; "reappeared" reads
-   membership timestamps, which update from whatever the bot may see.
-3. **Restart-window double-run.** A restart in the narrow window around
-   `CLEANUP_DAILY_AT` can run the daily tick twice; the lifecycle
-   absorbs it (sweep only acts past a deadline, tag skips ticketed
-   members, batch-capped). No restart-persistence by design.
-4. **N2 (deferred):** no shared per-chat lock between the daily
-   scheduler and DM `/cleanup`. Concurrent runs on one chat are
-   redundant API, not a wrong-kick (getChatMember pre-check). Add a
-   shared chat-claim if it ever matters.
+1. **Campaign is PUBLIC by design**, an owner-approved override of the
+   DM-only invariant - but now strictly command-initiated (no
+   autonomous trigger). `10_scope.md` / `40_moderation.md` /
+   `ux_moderation_privacy` memory record the exception.
+2. **Privacy-mode caveat.** Privacy ON: bot sees reactions + replies to
+   itself, not ordinary messages. Tag copy asks reply-or-react;
+   "active" read from membership timestamps.
+3. **S4 (accepted):** a permanently-unreadable `queued` row (one corrupt
+   bbolt membership row) keeps the campaign non-empty -> `/cleanup`
+   re-run refused. Escape is the documented `/cleanup stop` (refusal
+   copy says so). Optional future: stuck-row age cap.
+4. **Restart window:** a restart around `CLEANUP_DAILY_AT` may double-
+   tick; absorbed (sweep only past deadline, promote skips ticketed,
+   batch-capped). No restart-persistence by design.
+5. `/summarize` (GLM) is OFF unless `GLM_API_KEY` set.
 
 ## Immediate next steps
 
-1. **Push + deploy.** Local `master` (`8c17737`) = origin/master +
-   cleanup + summarize merge, 4 ahead / 0 behind, green. Owner to
-   confirm `git push origin master` (prod is live), then standard
-   deploy. Both heavy features are OFF by default: the daily lifecycle
-   needs `CLEANUP_DAILY_ENABLED`; `/summarize` needs `GLM_API_KEY`.
-   Enabling either is a separate, explicit step.
-2. **Operator manual verification** in the test chat (Claude cannot
-   drive Telegram). See below.
-3. Separate item the owner flagged: the YouTube si= sanitizer "does not
-   delete the original, only reposts". Diagnosis: `handleSanitize`
-   reposts then deletes; if the original survives, `DeleteMessage` is
-   failing - almost certainly the bot lacks the **Delete Messages**
-   admin right in that chat (logged, defensive by design). Verify the
-   bot's admin rights; not a code bug on this branch.
+1. **Push + deploy.** Local `master` is ahead of `origin/master`,
+   green. Owner confirms `git push origin master` (prod live), then
+   standard deploy. No feature auto-activates: a campaign needs an admin
+   `/cleanup`; `/summarize` needs `GLM_API_KEY`.
+2. **Operator manual verification** (Claude cannot drive Telegram) -
+   below.
+3. Owner-flagged separate item: YouTube si= sanitizer "doesn't delete
+   original" - almost certainly the bot lacks the **Delete Messages**
+   admin right in that chat (code logs + degrades by design). Verify
+   bot rights; not a code bug on this branch.
 
-## Manual verification (operator must run; Claude cannot click Telegram)
+## Manual verification (operator must run)
 
-In the test chat (bot = admin with restrict + delete rights) + a DM:
+Test chat, bot = admin with restrict + delete + (ideally) low
+`CLEANUP_DAILY_AT` and small `CLEANUP_GRACE` for a fast loop:
 
 1. DM `/cleanup 6mo` after an import: names/@handles show; two groups
-   ("молчат давно" vs "активность не зафиксирована"); the loud window
-   warning fires when 6mo exceeds the data window; confirm kicks only
-   the proven-stale group.
-2. Enable `CLEANUP_DAILY_ENABLED=true` + a near-future `CLEANUP_DAILY_AT`
-   in the test chat. Confirm: one public message tags proven-stale only
-   (never the no-evidence members); a tagged member who reacts or
-   writes is spared at the next tick; one who stays silent past
-   `CLEANUP_GRACE` is kicked; the message is not re-posted for members
-   still inside their grace window.
-3. `--check-config` rejects a bad `CLEANUP_DAILY_AT` / threshold /
-   grace / batch when enabled.
+   ("молчат давно" vs "активность не зафиксирована"); window warning if
+   6mo > data; confirm replies "запущено N", **no immediate kick**.
+2. Wait for the daily tick: ONE public message @-tags up to `BATCH`
+   proven-stale (never the no-evidence group). A tagged member who
+   writes/reacts is spared at the next tick; a still-silent one is
+   kicked after `CLEANUP_GRACE`; batches continue until the list ends.
+3. `/cleanup` again while active -> refused with status. `/cleanup stop`
+   -> campaign cleared.
+4. `--check-config` rejects a bad explicit `CLEANUP_DAILY_AT` /
+   `CLEANUP_GRACE` / `CLEANUP_DAILY_BATCH`.
 
 ## Read before starting
 
-- `docs/llm/40_moderation.md` (cleanup grading + daily lifecycle)
-- `docs/llm/10_scope.md` (privacy-invariant exception, env vars)
-- `docs/llm/35_history_import.md` ("Resolved 2026-05-15" note)
-- `docs/llm/devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md`
+- `docs/llm/40_moderation.md` (campaign spec)
+- `docs/llm/10_scope.md` (privacy exception, env)
+- `docs/llm/devlog/06_cleanup_campaign_rework.md` (+ 05 for grading)
 - memory: `bydlokod-import-workflow`, `project_direction`,
   `ux_moderation_privacy`
 
 ## Anti-patterns
 
-1. NEVER auto-tag or auto-kick `Preview.NoEvidence`, nor any
-   unresolved/not-present/protected member. Publicly tagging a member
-   the bot has no evidence against is the exact failure this session
-   fixed. The gracekick pick filter is affirmative-safety only.
-2. Do NOT claim "everyone active" when only a data gap exists - the
-   empty-state copy distinguishes the three cases on purpose.
-3. Do NOT re-`EscapeHTML` `UserDisplayFull` / `mention` output
-   (double-escape); they are already HTML-safe.
-4. Do NOT persist a grace ticket before the public announcement
-   succeeded (else a member is kicked for a warning never delivered).
-5. Keep `cleanup.ParsePeriod` the single period parser.
-6. Telegram message limits are UTF-16 code units, not runes - keep the
-   `utf16Len` budget in `gracekick.fitOneMessage`.
-7. All public sends through the rate-limited `tgclient` wrapper.
+1. NEVER seed/tag/kick `Preview.NoEvidence` or any
+   unresolved/not-present/protected member. Proven-stale only.
+2. `/cleanup` confirm must SEED, never kick immediately. Do not
+   reintroduce an immediate-kick path or re-register a public
+   cleanup executor.
+3. Timestamp comparisons for "active since" are inclusive (`>=`,
+   `seenAtOrAfter`) - second-granular Telegram ts; strict `>` kicks a
+   member who responded in the boundary second.
+4. Never persist a `tagged` record before the public announce
+   succeeded (else a kick without a delivered warning).
+5. Keep `RunDaily`'s 3-phase locking: kick loop OUTSIDE the per-chat
+   mutex, phase C re-lists so a concurrent stop resurrects nothing.
+6. Do not re-`EscapeHTML` `mention`/`UserDisplayFull` output.
+7. Keep `cleanup.ParsePeriod` the single period parser; Telegram length
+   is UTF-16 units (`utf16Len`); all public sends via rate-limited
+   `tgclient`.

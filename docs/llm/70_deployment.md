@@ -99,22 +99,19 @@ Optional:
   it for this bot is an operator/ToS decision. See
   [45_summarize.md](45_summarize.md).
 
-Daily inactive cleanup (all optional; the feature is OFF until
-`CLEANUP_DAILY_ENABLED` is truthy). This is the only feature that posts
-publicly and removes members on the bot's own schedule - leave it off
-until the operator has reviewed a manual `/cleanup` preview and trusts
-the candidate list.
+Inactive-cleanup campaign (all optional; only **tune** the lifecycle).
+There is **no enable flag**: the campaign is started per-chat by an
+admin's DM `/cleanup <period>` confirm and stopped by `/cleanup stop`.
+The daily scheduler is always running but does nothing until a campaign
+exists. The period is the `/cleanup` argument, not env. Bad explicitly-
+set values fail `--check-config` / startup; unset = safe default.
 
-- `CLEANUP_DAILY_ENABLED` -- `true`/`1`/`yes`/`on` to enable. Default
-  off. When enabled the other four are validated at startup and the bot
-  exits non-zero on a bad value.
-- `CLEANUP_DAILY_AT` -- UTC `HH:MM` the daily run fires. Default `10:00`.
-- `CLEANUP_DAILY_THRESHOLD` -- inactivity window: `30d` | `6mo` | `1y`
-  or a Go duration. Default `6mo`. Must parse within 1 day .. 5 years.
+- `CLEANUP_DAILY_AT` -- UTC `HH:MM` the daily campaign tick fires.
+  Default `10:00`. Bad explicit value (e.g. `99:99`) is rejected.
 - `CLEANUP_GRACE` -- delay between the public tag and the kick. Default
   `72h` (the owner's 3-day decision). Must parse within 1h .. 720h.
-- `CLEANUP_DAILY_BATCH` -- max members tagged per chat per day. Default
-  `15`. Range 1 .. 100.
+- `CLEANUP_DAILY_BATCH` -- max members publicly tagged per chat per day.
+  Default `15`. Range 1 .. 50.
 
 ## First deploy
 

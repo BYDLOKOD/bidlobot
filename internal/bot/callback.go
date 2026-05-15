@@ -275,3 +275,9 @@ func parseCallbackData(data string) (verb, id string, ok bool) {
 func MakeCallback(verb, id string) string {
 	return callbackNamespace + verb + ":" + id
 }
+
+// emptyKeyboard is an inline markup with no buttons - used to strip a
+// keyboard off a message on edit (games end screens, etc.).
+func emptyKeyboard() *telego.InlineKeyboardMarkup {
+	return &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
+}

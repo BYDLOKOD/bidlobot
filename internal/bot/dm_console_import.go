@@ -61,8 +61,8 @@ type parkedImport struct {
 // abandoned.
 const parkedTTL = dmsession.ImportAwaitTTL
 
-// importRuns mirrors cleanupRuns: a per-chat single-flight guard plus a
-// cancel func per run id, extended with a parked-job registry so the
+// importRuns is a per-chat single-flight guard plus a cancel func per
+// run id, extended with a parked-job registry so the
 // pre-commit confirm can resume the (already downloaded+parsed) import
 // without re-downloading. A chat stays claimed from start() until a
 // terminal transition (finishParked / abort / failed download), so a

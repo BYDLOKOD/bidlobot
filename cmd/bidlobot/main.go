@@ -148,10 +148,11 @@ func main() {
 	// a 200-candidate sweep never trips Telegram's per-chat budget and
 	// transient 429/5xx don't kill the worker mid-flight. Progress
 	// EditMessageText calls go through the wrapper for the same reason.
+	// cleanupSvc is the evidence-graded previewer + ban+unban executor.
+	// It is driven by the DM /cleanup campaign (gracekick), never by a
+	// public callback - the old immediate-kick CleanupExecutor was
+	// removed (the owner's model is the daily public grace lifecycle).
 	cleanupSvc := cleanup.NewService(memberRepo, tgClient, log)
-	cleanupExecutor := bot.NewCleanupExecutor(cleanupSvc, pendingRepo, tgClient, log)
-	cleanupExecutor.RegisterAll(dispatcher)
-	// SetAppContext is called below once the signal-aware context exists.
 
 	// Optional chat summarization via GLM (Zhipu bigmodel.cn). Disabled
 	// when GLM_API_KEY is unset: the bot starts normally without it. The
@@ -228,35 +229,31 @@ func main() {
 		app.AttachSummarize(summarizeSvc, tgClient)
 	}
 
-	// Daily inactive lifecycle (tag -> grace -> kick). OFF unless the
-	// operator opts in: it is the only feature that posts publicly and
-	// removes members automatically. cleanupSvc is reused as both the
-	// evidence-graded previewer and the ban+unban kicker, so the daily
-	// path and manual /cleanup share one engine and one safety model
-	// (proven-stale only; the no-evidence bucket is never auto-touched).
-	if cfg.CleanupDailyEnabled {
-		gkRepo := storage.NewGraceKickRepo(db)
-		gkSvc := gracekick.NewService(
-			gkRepo, cleanupSvc, cleanupSvc, memberRepo, tgClient,
-			gracekick.Config{
-				Threshold: cfg.CleanupThreshold,
-				Grace:     cfg.CleanupGrace,
-				Batch:     cfg.CleanupDailyBatch,
-			},
-			log,
-		)
-		app.AttachDailyCleanup(gkSvc, cfg.CleanupDailyAtMin)
-		log.Info("daily inactive cleanup ENABLED",
-			"at_utc", cfg.CleanupDailyAtRaw, "threshold", cfg.CleanupThresholdRaw,
-			"grace", cfg.CleanupGraceRaw, "batch", cfg.CleanupDailyBatch)
-	}
+	// Inactive-cleanup campaign. Started per-chat by the DM `/cleanup`
+	// command (which seeds it with the proven-stale, evidence-graded
+	// list - never the no-evidence bucket); the daily scheduler then
+	// drives the public tag -> grace -> kick lifecycle until the seeded
+	// list is exhausted. Always wired: it does nothing until an admin
+	// runs `/cleanup`. cleanupSvc is the ban+unban kicker.
+	gkRepo := storage.NewGraceKickRepo(db)
+	gkSvc := gracekick.NewService(
+		gkRepo, cleanupSvc, memberRepo, tgClient,
+		gracekick.Config{
+			Grace: cfg.CleanupGrace,
+			Batch: cfg.CleanupDailyBatch,
+		},
+		log,
+	)
+	dmConsole.SetGraceKick(gkSvc)
+	app.AttachDailyCleanup(gkSvc, cfg.CleanupDailyAtMin)
+	log.Info("inactive-cleanup campaign wired (command-driven)",
+		"daily_at_utc", cfg.CleanupDailyAtRaw,
+		"grace", cfg.CleanupGraceRaw, "batch", cfg.CleanupDailyBatch)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Cleanup workers must abort with the app, not orphan after Stop().
-	cleanupExecutor.SetAppContext(ctx)
-	cleanupExecutor.AttachWaitGroup(app.InFlight())
+	// DM console workers must abort with the app, not orphan after Stop().
 	dmConsole.SetAppContext(ctx)
 	dmConsole.AttachWaitGroup(app.InFlight())
 	if summarizeSvc != nil {

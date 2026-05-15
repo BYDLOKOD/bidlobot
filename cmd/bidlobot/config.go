@@ -22,20 +22,17 @@ type Config struct {
 	HealthPort int    // 0 disables; -1 means "unset, use default"
 	LogLevel   string // debug|info|warn|error
 
-	// --- daily inactive cleanup (opt-in, OFF by default) ---
+	// --- inactive-cleanup campaign tuning ---
 	//
-	// This is the only feature that posts publicly and removes members
-	// automatically, so it stays disabled unless the operator explicitly
-	// turns it on. Raw strings are kept beside parsed values so
+	// The campaign is started per-chat by the DM `/cleanup` command, not
+	// by env. These only tune how the daily public lifecycle paces once
+	// an admin has started it. Raw strings kept beside parsed values so
 	// --check-config can report a bad value precisely.
-	CleanupDailyEnabled bool
-	CleanupDailyAtRaw   string // "HH:MM" UTC
-	CleanupDailyAtMin   int    // minutes past 00:00 UTC; -1 = unparseable
-	CleanupThresholdRaw string // inactivity window, e.g. "6mo"
-	CleanupThreshold    time.Duration
-	CleanupGraceRaw     string // tag->kick delay, e.g. "72h"
-	CleanupGrace        time.Duration
-	CleanupDailyBatch   int // max members tagged per chat per run
+	CleanupDailyAtRaw string // "HH:MM" UTC - when the daily tick fires
+	CleanupDailyAtMin int    // minutes past 00:00 UTC; -1 = unparseable
+	CleanupGraceRaw   string // tag->kick delay, e.g. "72h"
+	CleanupGrace      time.Duration
+	CleanupDailyBatch int // max members tagged per chat per daily run
 
 	// Optional GLM (Zhipu bigmodel.cn) summarization. Empty GLMAPIKey
 	// disables the feature entirely; the bot still starts. BaseURL/Model
@@ -51,10 +48,8 @@ type Config struct {
 // it via --check-config.
 func loadConfig() Config {
 	atRaw := envOr("CLEANUP_DAILY_AT", "10:00")
-	thrRaw := envOr("CLEANUP_DAILY_THRESHOLD", "6mo")
 	graceRaw := envOr("CLEANUP_GRACE", "72h")
 
-	thr, _ := cleanup.ParsePeriod(thrRaw)
 	grace, _ := cleanup.ParsePeriod(graceRaw)
 
 	return Config{
@@ -63,14 +58,11 @@ func loadConfig() Config {
 		HealthPort: parseHealthPortRaw(os.Getenv("HEALTH_PORT")),
 		LogLevel:   envOr("LOG_LEVEL", "info"),
 
-		CleanupDailyEnabled: envBool("CLEANUP_DAILY_ENABLED", false),
-		CleanupDailyAtRaw:   atRaw,
-		CleanupDailyAtMin:   parseHHMM(atRaw),
-		CleanupThresholdRaw: thrRaw,
-		CleanupThreshold:    thr,
-		CleanupGraceRaw:     graceRaw,
-		CleanupGrace:        grace,
-		CleanupDailyBatch:   envInt("CLEANUP_DAILY_BATCH", 15),
+		CleanupDailyAtRaw: atRaw,
+		CleanupDailyAtMin: parseHHMM(atRaw),
+		CleanupGraceRaw:   graceRaw,
+		CleanupGrace:      grace,
+		CleanupDailyBatch: envInt("CLEANUP_DAILY_BATCH", 15),
 
 		GLMAPIKey:  strings.TrimSpace(os.Getenv("GLM_API_KEY")),
 		GLMBaseURL: strings.TrimSpace(os.Getenv("GLM_BASE_URL")),
@@ -174,20 +166,21 @@ func (c Config) Validate() error {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL: must be one of debug|info|warn|error, got %q", c.LogLevel))
 	}
 
-	if c.CleanupDailyEnabled {
-		if c.CleanupDailyAtMin < 0 {
-			errs = append(errs, fmt.Errorf("CLEANUP_DAILY_AT: must be HH:MM 24h UTC, got %q", c.CleanupDailyAtRaw))
-		}
-		if c.CleanupThreshold < cleanup.MinThreshold || c.CleanupThreshold > cleanup.MaxThreshold {
-			errs = append(errs, fmt.Errorf("CLEANUP_DAILY_THRESHOLD: must parse to %s..%s, got %q",
-				cleanup.MinThreshold, cleanup.MaxThreshold, c.CleanupThresholdRaw))
-		}
-		if c.CleanupGrace < time.Hour || c.CleanupGrace > 30*24*time.Hour {
-			errs = append(errs, fmt.Errorf("CLEANUP_GRACE: must parse to 1h..720h, got %q", c.CleanupGraceRaw))
-		}
-		if c.CleanupDailyBatch < 1 || c.CleanupDailyBatch > 50 {
-			errs = append(errs, fmt.Errorf("CLEANUP_DAILY_BATCH: must be 1..50, got %d", c.CleanupDailyBatch))
-		}
+	// The campaign is command-driven (no enable flag); the daily
+	// scheduler is always live, so these tunables are always validated.
+	// They have safe defaults, so an error only fires when the operator
+	// set a bad value explicitly.
+	// Zero / empty means "unset" - safe defaults apply downstream
+	// (gracekick.Config.normalized + AttachDailyCleanup). Only an
+	// explicitly-supplied bad value is an error.
+	if c.CleanupDailyAtMin < 0 {
+		errs = append(errs, fmt.Errorf("CLEANUP_DAILY_AT: must be HH:MM 24h UTC, got %q", c.CleanupDailyAtRaw))
+	}
+	if c.CleanupGraceRaw != "" && (c.CleanupGrace < time.Hour || c.CleanupGrace > 30*24*time.Hour) {
+		errs = append(errs, fmt.Errorf("CLEANUP_GRACE: must parse to 1h..720h, got %q", c.CleanupGraceRaw))
+	}
+	if c.CleanupDailyBatch != 0 && (c.CleanupDailyBatch < 1 || c.CleanupDailyBatch > 50) {
+		errs = append(errs, fmt.Errorf("CLEANUP_DAILY_BATCH: must be 1..50, got %d", c.CleanupDailyBatch))
 	}
 
 	if len(errs) == 0 {

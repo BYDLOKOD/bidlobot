@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -18,61 +17,10 @@ import (
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
-// cleanupRuns tracks running cleanup workers so the in-DM "Stop" button
-// can cancel a 200-person purge mid-flight, and so a second admin
-// cannot launch a concurrent purge on the same chat (double API load,
-// contradictory progress). cleanup.Service aborts between kicks on
-// ctx.Done(); we hold a cancel func per run id and the set of chats
-// with an active run.
-//
-// start() must be called BEFORE the Stop button is rendered, so a tap
-// in the registration window cancels a real run instead of getting a
-// false "already finished" - that was a silent destructive-abort
-// failure.
-type cleanupRuns struct {
-	mu          sync.Mutex
-	runs        map[string]context.CancelFunc
-	activeChats map[int64]bool
-}
-
-func newCleanupRuns() *cleanupRuns {
-	return &cleanupRuns{
-		runs:        make(map[string]context.CancelFunc),
-		activeChats: make(map[int64]bool),
-	}
-}
-
-// start atomically registers a run id + its cancel func and claims the
-// chat. Returns false if the chat already has an active cleanup, in
-// which case nothing is registered and the caller must not proceed.
-func (c *cleanupRuns) start(id string, absChatID int64, cancel context.CancelFunc) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.activeChats[absChatID] {
-		return false
-	}
-	c.runs[id] = cancel
-	c.activeChats[absChatID] = true
-	return true
-}
-
-func (c *cleanupRuns) cancel(id string) bool {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if fn, ok := c.runs[id]; ok {
-		fn()
-		delete(c.runs, id)
-		return true
-	}
-	return false
-}
-
-func (c *cleanupRuns) done(id string, absChatID int64) {
-	c.mu.Lock()
-	delete(c.runs, id)
-	delete(c.activeChats, absChatID)
-	c.mu.Unlock()
-}
+// The legacy in-DM "Stop button" worker registry (cleanupRuns) was
+// removed with the immediate-kick flow: /cleanup now seeds a campaign
+// driven by the daily scheduler, and the only stop is `/cleanup stop`
+// (gracekick.Cancel). gracekick serializes per-chat work internally.
 
 // handleCleanup: /cleanup <period>. Builds a preview in the DM, then a
 // confirm. The actual kick loop runs after confirmation, entirely in
@@ -82,9 +30,36 @@ func (d *DMConsole) handleCleanup(ctx context.Context, caller, abs int64, args [
 		d.send(ctx, caller, msgDMCleanupUsage, nil)
 		return nil
 	}
+	if d.gracekik == nil {
+		d.send(ctx, caller, msgDMCleanupUnavailable, nil)
+		return nil
+	}
+
+	switch strings.ToLower(strings.TrimSpace(args[0])) {
+	case "stop", "cancel", "стоп", "отмена":
+		n, cerr := d.gracekik.Cancel(ctx, abs)
+		if cerr != nil {
+			d.send(ctx, caller, msgDMError, nil)
+			return nil
+		}
+		if n == 0 {
+			d.send(ctx, caller, msgDMCleanupNoCampaign, nil)
+			return nil
+		}
+		d.send(ctx, caller, fmt.Sprintf(msgDMCleanupStopped, n), nil)
+		return nil
+	}
+
 	threshold, err := parseCleanupPeriod(args[0])
 	if err != nil {
 		d.send(ctx, caller, msgDMCleanupBadPeriod, nil)
+		return nil
+	}
+
+	// One campaign per chat: a confirmed /cleanup starts the daily
+	// public lifecycle; do not silently stack a second over the first.
+	if n, cerr := d.gracekik.CampaignSize(ctx, abs); cerr == nil && n > 0 {
+		d.send(ctx, caller, fmt.Sprintf(msgDMCleanupCampaignActive, n), nil)
 		return nil
 	}
 
@@ -288,14 +263,6 @@ func (d *DMConsole) HandleCallback(thctx *th.Context, q telego.CallbackQuery) er
 		d.editText(ctx, q, msgDMCancelled)
 		return nil
 
-	case "abort":
-		if d.runs.cancel(arg) {
-			d.answer(ctx, q, "Останавливаю...", false)
-		} else {
-			d.answer(ctx, q, "Уже завершено.", false)
-		}
-		return nil
-
 	case "abort_imp":
 		// Cancels a running download/ingest goroutine if any, and drops
 		// + cleans a parked (awaiting-confirm) job. Idempotent.
@@ -367,79 +334,75 @@ func (d *DMConsole) applyPending(ctx context.Context, q telego.CallbackQuery, ca
 
 	case pending.KindCleanup:
 		_ = d.pending.Delete(ctx, id)
-		return d.runCleanup(ctx, q, caller, id, act)
+		return d.startCleanupCampaign(ctx, q, caller, id, act)
 	}
 	d.answer(ctx, q, "Неизвестный тип действия.", true)
 	return nil
 }
 
-// runCleanup executes the kick loop with a Stop button. The cancelable
-// context is registered (and the chat claimed) BEFORE the Stop button
-// is rendered, so a tap in the registration window cancels the real run
-// instead of getting a false "already finished" - a silent abort
-// failure on an irreversible 200-person purge.
-func (d *DMConsole) runCleanup(ctx context.Context, q telego.CallbackQuery, caller int64, id string, act *pending.Action) error {
-	msgID := q.Message.GetMessageID()
-	chatID := q.Message.GetChat().ID
+// startCleanupCampaign is the /cleanup confirm action. It does NOT kick
+// now: it seeds the per-chat campaign with the freshly recomputed
+// proven-stale list (names resolved live so the public tag is readable),
+// after which the daily scheduler drives the tag -> grace -> kick
+// lifecycle. NoEvidence is never seeded. Re-running /cleanup needs an
+// explicit /cleanup stop first.
+func (d *DMConsole) startCleanupCampaign(ctx context.Context, q telego.CallbackQuery, caller int64, id string, act *pending.Action) error {
+	_, _ = caller, id
+	if d.gracekik == nil {
+		d.answer(ctx, q, "Недоступно.", true)
+		d.editText(ctx, q, msgDMCleanupUnavailable)
+		return nil
+	}
+	abs := act.AbsChatID
+	now := time.Now().UTC()
 
-	// Register the run + claim the chat FIRST. If another admin already
-	// has a cleanup running on this chat, refuse - two concurrent kick
-	// loops double the API load and show contradictory progress.
-	runCtx, cancel := context.WithCancel(d.appCtx())
-	if !d.runs.start(id, act.AbsChatID, cancel) {
-		cancel()
-		d.answer(ctx, q, "Чистка по этому чату уже идёт.", true)
-		d.editText(ctx, q, msgDMCleanupAlreadyRunning)
+	// A second admin may have started a campaign between preview and
+	// this confirm - do not stack.
+	if n, cerr := d.gracekik.CampaignSize(ctx, abs); cerr == nil && n > 0 {
+		d.answer(ctx, q, "Уже идёт.", true)
+		d.editText(ctx, q, fmt.Sprintf(msgDMCleanupCampaignActive, n))
 		return nil
 	}
 
-	prev, err := d.cleanup.PreviewInactive(ctx, act.AbsChatID, act.Threshold, time.Now().UTC())
+	// Recompute proven-stale fresh: anyone active in the confirm window
+	// is naturally excluded. NoEvidence is never seeded.
+	prev, err := d.cleanup.PreviewInactive(ctx, abs, act.Threshold, now)
 	if err != nil || prev == nil || len(prev.Candidates) == 0 {
-		d.runs.done(id, act.AbsChatID)
-		cancel()
 		d.answer(ctx, q, "Кандидатов не осталось.", false)
 		d.editText(ctx, q, msgDMCleanupNothingLeft)
 		return nil
 	}
-	total := len(prev.Candidates)
-	d.answer(ctx, q, "Чистка запущена.", false)
 
-	d.editTextKB(ctx, chatID, msgID,
-		fmt.Sprintf(msgDMCleanupRunning, 0, total),
-		&telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{{
-			{Text: "✕ Остановить", CallbackData: dmCBNamespace + "abort:" + id},
-		}}})
-
-	d.wg().Add(1)
-	go func() {
-		defer d.wg().Done()
-		defer d.runs.done(id, act.AbsChatID)
-		defer cancel()
-
-		var lastEdit time.Time
-		report, _ := d.cleanup.ExecuteCleanup(runCtx, dmSignedChat(act.AbsChatID), prev.Candidates,
-			func(done, tot int, _ cleanup.ExecutionEntry) {
-				if time.Since(lastEdit) < 3*time.Second && done < tot {
-					return
-				}
-				lastEdit = time.Now()
-				d.editTextKB(context.Background(), chatID, msgID,
-					fmt.Sprintf(msgDMCleanupRunning, done, tot),
-					&telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{{
-						{Text: "✕ Остановить", CallbackData: dmCBNamespace + "abort:" + id},
-					}}})
-			})
-
-		final := msgDMCleanupDone
-		if report != nil {
-			final = fmt.Sprintf(msgDMCleanupReport, report.Kicked, report.Skipped, report.Failed)
-			if runCtx.Err() != nil {
-				final = fmt.Sprintf(msgDMCleanupAborted, report.Kicked, report.Skipped+report.Failed)
-			}
+	// Resolve names now so the public tag is readable (the export has
+	// none); skip admins/bots and anyone already gone. Unresolved-but-
+	// proven-stale are still seeded - the daily promote re-checks live
+	// status and tags by id-link, which still pings.
+	resolved := d.cleanup.ResolveIdentities(ctx, abs, prev.Candidates, len(prev.Candidates))
+	seed := make([]membership.Member, 0, len(resolved))
+	for _, rm := range resolved {
+		if rm.Protected || (rm.Resolved && !rm.Present) {
+			continue
 		}
-		d.editTextKB(context.Background(), chatID, msgID, final, emptyMarkup())
-	}()
-	_ = caller
+		seed = append(seed, membership.Member{
+			AbsChatID: abs, UserID: rm.UserID,
+			Username: rm.Username, FirstName: rm.FirstName,
+		})
+	}
+	if len(seed) == 0 {
+		d.answer(ctx, q, "Кандидатов не осталось.", false)
+		d.editText(ctx, q, msgDMCleanupNothingLeft)
+		return nil
+	}
+
+	n, serr := d.gracekik.Seed(ctx, abs, seed, now)
+	if serr != nil {
+		d.log.Warn("cleanup: seed campaign failed", "chat", abs, "error", serr)
+		d.answer(ctx, q, "Ошибка запуска.", true)
+		d.editText(ctx, q, msgDMError)
+		return nil
+	}
+	d.answer(ctx, q, "Запущено.", false)
+	d.editText(ctx, q, fmt.Sprintf(msgDMCleanupStarted, n))
 	return nil
 }
 

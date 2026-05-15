@@ -11,6 +11,7 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
+	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
@@ -100,9 +101,14 @@ func newDMEnv(t *testing.T) *dmEnv {
 		t.Fatal(err)
 	}
 
+	gkSvc := gracekick.NewService(
+		storage.NewGraceKickRepo(store.DB()), cleanupSvc, memberRepo, api,
+		gracekick.Config{}, log)
+
 	snd := &recSender{}
 	con := NewDMConsole(snd, sessRepo, memberRepo, adminCache, modSvc, cleanupSvc, statsSvc, nil, pendingRepo,
 		nil, nil, nil, nil, nil, log)
+	con.SetGraceKick(gkSvc)
 
 	return &dmEnv{
 		t: t, con: con, snd: snd, api: api,
