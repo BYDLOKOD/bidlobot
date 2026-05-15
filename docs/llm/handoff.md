@@ -5,14 +5,30 @@ kind: guide
 
 # Handoff: next session action plan
 
-Last updated: 2026-05-15, after the privacy-driven UX rework (DM
-console) + history import + two critic passes.
+Last updated: 2026-05-15, after the load/correctness audit + three
+fixes, shipped and deployed to <deploy-host> (commit `be90a00`).
 
 ## Current state
 
-Branch: `master`. `go test -race ./...` green across 14 test packages.
-Image builds; ships `bidlobot` + `bidlobot-backup` + `bidlobot-probe` +
-`bidlobot-import`.
+Branch: `master`, pushed. `go test -race ./...` green (~250 tests,
+57.7% stmt). Image builds; ships `bidlobot` + `bidlobot-backup` +
+`bidlobot-probe` + `bidlobot-import`. Deployed container healthy,
+polling.
+
+Load audit (30+ active users) found and fixed three hot-path defects
+(commit `be90a00`):
+
+- **Rate limiter now covers the public path.** Games, `/stats`, help,
+  onboarding and the mod-redirect previously sent via the raw
+  `*telego.Bot`, bypassing the per-chat 15/min budget + retry. They
+  now go through `tgclient` (`App.sender` is a required `NewApp`
+  param; games via `GamesSender`, stats via `MessageSender`;
+  `Client.SendDice` added). DM console / inline-answer / v1 callback
+  dispatcher stay raw by design (single-chat / no-chat-id / per-tap).
+- **cooldown init race fixed.** Eager-init in `NewApp`; lazy nil-check
+  removed. `-race` test added.
+- **`go bh.Start()` zombie fixed.** Error surfaced via a select so the
+  app shuts down instead of hanging silently.
 
 Architecture after the rework:
 
@@ -28,10 +44,17 @@ Architecture after the rework:
   Moderation never executes publicly.
 - **Inline** moderation verbs -> generic "use DM" hint, no pending
   (inline is not private; that premise was wrong).
-- **History bootstrap**: `cmd/bidlobot-import` streams a Telegram
-  Desktop "Export chat history" JSON into the members bucket so
-  `/cleanup` works on pre-bot history. Bot must be stopped for a real
-  import (bbolt lock); `--dry-run` is safe live.
+- **History bootstrap + cleanup operating model**: `cmd/bidlobot-import`
+  streams a Telegram Desktop "Export chat history" JSON into the members
+  bucket so `/cleanup` works on pre-bot history. Bot must be stopped for
+  a real import (bbolt lock); `--dry-run` is safe live. **Privacy mode
+  does NOT need disabling** - recommended model is periodic &
+  import-driven: keep `/setprivacy` ON, run "fresh export -> import ->
+  `/cleanup` immediately", keep the bot admin so reactions still flow.
+  Disable privacy only for continuous live message stats. Full rationale
+  + false-positive corner cases in `35_history_import.md` "Operating
+  model". `cleanup` is human-in-the-loop (preview+confirm +
+  ObservationWindow) precisely because import data is partial.
 - Onboarding message on bot promotion. All user copy Russian.
 
 ## What does NOT exist / known follow-ups
@@ -46,6 +69,23 @@ Architecture after the rework:
 - Public `/ban` has an unavoidable ~200-500ms visibility window before
   the redirect deletes it (delete-after-the-fact). Onboarding trains
   admins away from this.
+- **Prod is privacy ON** (`getMe can_read_all=false`, verified
+  2026-05-15). This is an operating *choice*, not a bug: live message
+  stats are limited; cleanup works via the periodic import model. Only
+  a BotFather flip + re-add (operator action, not code) changes it.
+- **FINDING #3 (deferred, not a correctness bug):** membership writes
+  one synchronous fsync'd bbolt txn per event (stats is buffered, this
+  is not). Bounded by telego's 100-deep update channel; optimize later
+  via `db.Batch()` if a very high-traffic chat needs it.
+- **Test reality:** ~250 component/unit tests, `-race` green; strong
+  per-component coverage incl. the new sender-routing + cooldown-race
+  regressions. NOT covered: full-stack replay through the real telego
+  router; `testdata/session{1,2}.jsonl` are stale Clojure/profiles-era
+  fixtures (the replay test only feeds the membership domain, asserts
+  little). No recording of real current-bot traffic exists (server
+  `RECORD_UPDATES` unset). The legacy `~/org/legacy/chat-export.org`
+  counting methodology was NOT cross-checked against the implemented
+  `LastMessageAt OR LastReactionAt` rule (operator declined the read).
 
 ## Immediate next steps (options)
 
@@ -54,6 +94,11 @@ Architecture after the rework:
 2. Implement `resolveUsername` (issuer display in warning lists).
 3. MTProto member sync (`channels.getParticipants`) to catch ghost
    members never seen by the bot or export.
+4. Enable `RECORD_UPDATES` (compose bind-mount) to capture real
+   current-bot traffic, then replace the stale `testdata/session*`
+   fixtures and add a full-stack replay through the real router.
+5. `db.Batch()` for the per-event membership write (FINDING #3) if a
+   high-traffic chat warrants it.
 
 ## Manual verification in @testovaya22222222222222222222
 

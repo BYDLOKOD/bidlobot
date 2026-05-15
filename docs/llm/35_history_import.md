@@ -99,3 +99,45 @@ docker compose start bot
 `--chat-id` is mandatory (signed form) as a guard against importing an
 export into the wrong chat. `--dry-run` parses and reports without
 opening the DB, so it is safe while the bot is live.
+
+## Operating model: privacy mode does NOT need disabling
+
+The Bot API offers no "metadata-only" mode: BotFather privacy is either
+ON (bot sees commands / @-mentions / replies only) or OFF (bot sees the
+full text of every message). `cleanup` only needs a per-user *activity
+timestamp*, never content - but the platform forces all-or-nothing.
+
+Two valid models; pick by cadence, not by default:
+
+- **Periodic, import-driven (recommended; matches the historical
+  ~3×/year `chat-rewind` cadence).** Keep privacy **ON**. Discipline:
+  fresh Desktop export -> `bidlobot-import` -> run `/cleanup`
+  *immediately*. A fresh export carries every writer's last message,
+  so `LastMessageAt` is current at run time -> no false positives for
+  writers. The bot must be **admin** so live `message_reaction`
+  updates keep `LastReactionAt` fresh for react-only members (privacy
+  gates messages, not reactions). No message content ever reaches the
+  bot.
+- **Continuous live stats.** Disable `/setprivacy` + remove/re-add the
+  bot. Live `LastMessageAt` for everyone, no import needed. Cost: full
+  message content transits the bot process (it persists only
+  id+timestamp+counter and never logs text - audited invariant) plus a
+  per-message bbolt write.
+
+Bot cannot self-export: no Bot API method exists for chat export,
+message history, or member enumeration. The manual Desktop step is a
+platform boundary, not a TODO; automating it requires an MTProto user
+session (out of scope, see Ghost members).
+
+### False positives under the periodic model (why preview+confirm is load-bearing)
+
+`cleanup` is deliberately human-in-the-loop. Even with a fresh import,
+two classes can wrongly surface as candidates - the admin must catch
+them by reading the preview list + ObservationWindow before
+confirming:
+
+- a react-only member the bot never observed reacting *before* the
+  import (export has no reactions, and `LastReactionAt` is only set
+  from live events while the bot was admin);
+- a brand-new member who joined but has not written yet
+  (`LastMessageAt` zero -> looks inactive).

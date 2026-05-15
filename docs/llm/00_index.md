@@ -23,6 +23,7 @@ Each entry declares `id` and `kind` in front-matter.
 
 - [devlog/01_dockerization_and_deploy.md](devlog/01_dockerization_and_deploy.md) - 2026-05-14/15: critic-driven hardening, Docker stack, public release, deploy to <deploy-host>.
 - [devlog/02_privacy_ux_rework.md](devlog/02_privacy_ux_rework.md) - 2026-05-15: history import + DM-only moderation rework after two opus critic passes.
+- [devlog/03_load_audit_and_privacy_model.md](devlog/03_load_audit_and_privacy_model.md) - 2026-05-15: load/correctness audit, hot-path fixes (rate-limit/cooldown/zombie), cleanup operating model.
 
 ## Archived (not part of current scope)
 

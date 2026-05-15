@@ -13,9 +13,18 @@ non-root container with tini as PID 1.
 
 - Linux host with Docker 24+ and Compose v2 (`docker compose version`).
 - A bot token from `@BotFather`.
-- `/setprivacy` Disabled and bot re-added to the chat (otherwise the
-  bot only sees commands and @-mentions; stats and membership stay
-  empty). `/setinline` Enabled with a placeholder string.
+- `/setinline` Enabled with a placeholder string.
+- `/setprivacy` is a deliberate operating choice, NOT a hard
+  prerequisite (see [35_history_import.md](35_history_import.md)
+  "Operating model"):
+  - **Privacy ON (default, recommended for periodic cleanup):** bot
+    sees only commands / @-mentions / replies. Live message stats are
+    limited, but the import-driven periodic model needs no message
+    feed. Keep the bot **admin** so reactions still flow.
+  - **Privacy OFF + bot re-added:** bot sees every message -> full
+    live `LastMessageAt`/stats, no import needed, at the cost of all
+    message content transiting the bot. Choose this only for
+    continuous (non-periodic) live stats.
 
 ## Image
 
@@ -93,11 +102,13 @@ docker compose logs -f bot
 Expect, in order:
 
 1. `starting build=...`
-2. `authenticated bot=<name> id=<n> can_read_all=true supports_inline=true`
+2. `authenticated bot=<name> id=<n> can_read_all=<true|false> supports_inline=true`
 3. `health server listening addr=:8080`
 4. `bot started, polling for updates`
 
-If `can_read_all=false`, fix BotFather then `docker compose restart bot`.
+`can_read_all=false` is privacy ON - expected and fine for the
+import-driven periodic model. Only flip BotFather + restart if you
+deliberately want continuous live message stats (see Prerequisites).
 
 ## Health and version
 
