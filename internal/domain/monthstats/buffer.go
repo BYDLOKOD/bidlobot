@@ -40,6 +40,7 @@ type Buffer struct {
 	// importer uses to avoid double-counting messages already seen live.
 	liveStart     map[int64]time.Time
 	liveStartDone map[int64]bool
+	liveStartKick map[int64]bool // first-Add async-persist fired once per chat
 }
 
 func NewBuffer(store Store, log *slog.Logger) *Buffer {
@@ -50,6 +51,7 @@ func NewBuffer(store Store, log *slog.Logger) *Buffer {
 		stopCh:        make(chan struct{}),
 		liveStart:     make(map[int64]time.Time),
 		liveStartDone: make(map[int64]bool),
+		liveStartKick: make(map[int64]bool),
 	}
 }
 
@@ -61,6 +63,22 @@ func (b *Buffer) Add(s Sample) {
 
 	if ls, ok := b.liveStart[s.AbsChatID]; !ok || s.TS.Before(ls) {
 		b.liveStart[s.AbsChatID] = s.TS
+	}
+	// Persist LiveTrackStart eagerly on the FIRST message for a chat
+	// (atomic, off the hot path) so the <=60s gap to the first flush
+	// cannot let a concurrent /import double-count the overlap window.
+	// Fired at most once per chat per process; the flush path is the
+	// backstop if this goroutine loses on shutdown.
+	if !b.liveStartKick[s.AbsChatID] {
+		b.liveStartKick[s.AbsChatID] = true
+		chat, ts := s.AbsChatID, s.TS
+		go func() {
+			if b.store.SetLiveTrackStart(context.Background(), chat, ts) == nil {
+				b.mu.Lock()
+				b.liveStartDone[chat] = true
+				b.mu.Unlock()
+			}
+		}()
 	}
 
 	uk := FlushKey{AbsChatID: s.AbsChatID, Month: s.Month, UserID: s.UserID}
@@ -192,21 +210,15 @@ func (b *Buffer) flush(ctx context.Context) {
 		return
 	}
 
-	// Flush succeeded: persist LiveTrackStart once per chat. A failure
-	// here is non-fatal (retried next flush) and never loses counts.
+	// Flush succeeded: persist LiveTrackStart once per chat via the
+	// atomic single-txn setter. A read-modify-write here
+	// (GetState/PutState) would clobber a concurrently-advanced
+	// ImportHWM/Sealed back to zero and silently double-count a later
+	// re-import. Non-fatal on error (retried next flush; the first-Add
+	// goroutine is the other backstop).
 	for chat, earliest := range starts {
-		st, err := b.store.GetState(ctx, chat)
-		if err == ErrNotFound {
-			st = &MonthState{AbsChatID: chat}
-		} else if err != nil {
+		if err := b.store.SetLiveTrackStart(ctx, chat, earliest); err != nil {
 			continue
-		}
-		if st.LiveTrackStart.IsZero() {
-			st.LiveTrackStart = earliest
-			st.UpdatedAt = time.Now().UTC()
-			if err := b.store.PutState(ctx, st); err != nil {
-				continue
-			}
 		}
 		b.mu.Lock()
 		b.liveStartDone[chat] = true

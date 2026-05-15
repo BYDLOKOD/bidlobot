@@ -437,40 +437,23 @@ func handleSanitize(
 		return
 	}
 
-	// Best-effort delete of the original. If the bot lacks Delete
-	// Messages we must NOT lose the correction: fall back to a reply.
-	delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
-		ChatID:    telego.ChatID{ID: msg.Chat.ID},
-		MessageID: msg.GetMessageID(),
-	})
-	if delErr != nil {
-		log.Info("youtube sanitizer: delete failed, replying with cleaned link instead",
-			"chat_id", msg.Chat.ID, "message_id", msg.GetMessageID(), "error", delErr)
-		replyFallback(ctx, snd, log, msg, cleanedLinks)
+	// Repost FIRST, delete only on success. A failed repost must never
+	// destroy the user's message - a stale si= link is strictly better
+	// than lost content.
+	if err := repost(ctx, snd, msg, header, newText, newCaption); err != nil {
+		log.Warn("youtube sanitizer: repost failed; leaving original intact (no delete)",
+			"chat_id", msg.Chat.ID, "message_id", msg.GetMessageID(), "error", err)
 		return
 	}
-
-	if err := repost(ctx, snd, msg, header, newText, newCaption); err != nil {
-		// The original is already deleted at this point; a failed
-		// repost would silently drop the user's message. Post the
-		// cleaned content as a plain (non-reply, the original is gone)
-		// message so nothing is lost.
-		log.Warn("youtube sanitizer: repost failed after delete; posting text fallback",
-			"chat_id", msg.Chat.ID, "error", err)
-		text := header
-		if body := firstNonEmpty(newText, newCaption); body != "" {
-			text += "\n" + shared.EscapeHTML(body)
-		} else if len(cleanedLinks) > 0 {
-			text += "\n" + shared.EscapeHTML(strings.Join(cleanedLinks, "\n"))
-		}
-		if _, serr := snd.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID:    telego.ChatID{ID: msg.Chat.ID},
-			Text:      text,
-			ParseMode: telego.ModeHTML,
-		}); serr != nil {
-			log.Error("youtube sanitizer: text fallback also failed; message lost",
-				"chat_id", msg.Chat.ID, "error", serr)
-		}
+	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
+		ChatID:    telego.ChatID{ID: msg.Chat.ID},
+		MessageID: msg.GetMessageID(),
+	}); delErr != nil {
+		// Reposted copy is already live; we just can't remove the
+		// original (no Delete right). A visible duplicate carrying the
+		// tracked link is the lesser evil vs. destroying content.
+		log.Info("youtube sanitizer: reposted but delete failed; original kept",
+			"chat_id", msg.Chat.ID, "message_id", msg.GetMessageID(), "error", delErr)
 	}
 }
 

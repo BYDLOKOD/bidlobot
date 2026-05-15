@@ -131,6 +131,14 @@ type Store interface {
 
 	GetState(ctx context.Context, absChatID int64) (*MonthState, error)
 	PutState(ctx context.Context, st *MonthState) error
+	// SetLiveTrackStart atomically sets LiveTrackStart (and UpdatedAt)
+	// for a chat ONLY if it is currently zero, in a single transaction
+	// that preserves every other MonthState field. This is the only safe
+	// way for the live buffer to record the boundary without racing the
+	// importer's ApplyImport (a read-modify-write via GetState/PutState
+	// would clobber a concurrently-advanced ImportHWM/Sealed back to
+	// zero, silently double-counting a later re-import).
+	SetLiveTrackStart(ctx context.Context, absChatID int64, ts time.Time) error
 
 	GetSummary(ctx context.Context, absChatID int64, month string) (*MonthSummary, error)
 	PutSummary(ctx context.Context, s *MonthSummary) error

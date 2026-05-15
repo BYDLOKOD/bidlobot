@@ -91,6 +91,22 @@ func (s *memStore) PutState(_ context.Context, st *MonthState) error {
 	return nil
 }
 
+func (s *memStore) SetLiveTrackStart(_ context.Context, chat int64, ts time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st, ok := s.state[chat]
+	if !ok {
+		st = &MonthState{AbsChatID: chat}
+		s.state[chat] = st
+	}
+	if !st.LiveTrackStart.IsZero() {
+		return nil // already set; never overwrite (preserves importer fields)
+	}
+	st.LiveTrackStart = ts
+	st.UpdatedAt = time.Now().UTC()
+	return nil
+}
+
 func (s *memStore) GetSummary(_ context.Context, chat int64, month string) (*MonthSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

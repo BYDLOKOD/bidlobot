@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"sort"
+	"time"
 
 	bolt "go.etcd.io/bbolt"
 
@@ -112,6 +113,34 @@ func (r *MonthStatsRepo) PutState(_ context.Context, st *monthstats.MonthState) 
 	}
 	return r.db.Update(func(tx *bolt.Tx) error {
 		return tx.Bucket(bktMonthState).Put(MonthStatsStateKey(st.AbsChatID), data)
+	})
+}
+
+// SetLiveTrackStart sets LiveTrackStart only when currently zero, inside
+// one txn that preserves all other fields - so it composes correctly
+// with ApplyImport (each writer touches a disjoint subset under its own
+// transaction; neither clobbers the other).
+func (r *MonthStatsRepo) SetLiveTrackStart(_ context.Context, absChatID int64, ts time.Time) error {
+	return r.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bktMonthState)
+		key := MonthStatsStateKey(absChatID)
+		var st monthstats.MonthState
+		if data := b.Get(key); data != nil {
+			if err := json.Unmarshal(data, &st); err != nil {
+				return err
+			}
+		}
+		if !st.LiveTrackStart.IsZero() {
+			return nil // already set; never overwrite
+		}
+		st.AbsChatID = absChatID
+		st.LiveTrackStart = ts
+		st.UpdatedAt = time.Now().UTC()
+		data, err := json.Marshal(&st)
+		if err != nil {
+			return err
+		}
+		return b.Put(key, data)
 	})
 }
 

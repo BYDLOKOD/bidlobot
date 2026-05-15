@@ -401,28 +401,33 @@ func TestHandleSanitizeVideoRepostByFileID(t *testing.T) {
 	}
 }
 
-func TestHandleSanitizeDeleteFailsFallbackReply(t *testing.T) {
+// Repost-first contract (critic S1): the cleaned copy is posted BEFORE
+// any delete, so a missing Delete right can never destroy content - the
+// repost stands and the original is simply kept (a stale si= duplicate
+// is the lesser evil vs. data loss).
+func TestHandleSanitizeDeleteFailsRepostStandsOriginalKept(t *testing.T) {
 	snd := &recYTSender{DeleteErr: errors.New("not enough rights to delete")}
 	msg := ytTestMessage("look https://youtu.be/ID?si=trk")
 	newText, _ := SanitizeMessageText(msg.Text, msg.Entities)
 
 	handleSanitize(context.Background(), snd, testLogger(), msg, newText, "")
 
-	if len(snd.Deletes) != 1 {
-		t.Fatalf("expected delete attempt, got %d", len(snd.Deletes))
-	}
+	// Exactly one send: the reposted cleaned copy (no second text
+	// fallback - the repost already succeeded).
 	if len(snd.Messages) != 1 {
-		t.Fatalf("expected fallback reply, got %d", len(snd.Messages))
+		t.Fatalf("expected the reposted cleaned copy, got %d messages", len(snd.Messages))
+	}
+	// Delete was attempted after the successful repost and failed; the
+	// original is therefore kept (not lost).
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("expected a delete attempt after repost, got %d", len(snd.Deletes))
 	}
 	m := snd.Messages[0]
-	if m.ReplyParameters == nil || m.ReplyParameters.MessageID != 42 {
-		t.Errorf("fallback must reply to the original message, got %+v", m.ReplyParameters)
-	}
 	if !strings.Contains(m.Text, "https://youtu.be/ID") || strings.Contains(m.Text, "si=trk") {
-		t.Errorf("fallback should contain cleaned link, got %q", m.Text)
+		t.Errorf("repost should carry the cleaned link without si=, got %q", m.Text)
 	}
-	if !strings.Contains(m.Text, "si") { // the note mentions "si удалён"
-		t.Errorf("fallback should contain the explanatory note, got %q", m.Text)
+	if !strings.Contains(m.Text, "писал") {
+		t.Errorf("repost should carry the attribution header, got %q", m.Text)
 	}
 }
 

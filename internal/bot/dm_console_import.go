@@ -147,6 +147,18 @@ func (c *importRuns) park(id string, p parkedImport) {
 	c.mu.Unlock()
 }
 
+// peekParked returns a parked job WITHOUT removing it, for the
+// authorization checks (initiator / not-found). The single-use claim is
+// takeParked. Splitting peek from take removes the take-then-re-park
+// window that could race a concurrent cancel into a leaked chat claim +
+// orphaned temp file.
+func (c *importRuns) peekParked(id string) (parkedImport, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	p, ok := c.parked[id]
+	return p, ok
+}
+
 // takeParked atomically removes and returns a parked job (single-use:
 // double-tap of "load" must not ingest twice from the registry side).
 func (c *importRuns) takeParked(id string) (parkedImport, bool) {
@@ -455,7 +467,23 @@ func (d *DMConsole) parseForPreview(ctx context.Context, tmpPath string) (*histi
 // acceptable - histimport.Ingest is idempotent (message-id watermark +
 // atomic ApplyImport), so a re-tap or a re-upload re-skips correctly.
 func (d *DMConsole) finishParked(ctx context.Context, q telego.CallbackQuery, id string) error {
-	p, ok := d.imports.takeParked(id)
+	// Peek (no removal) for the authorization checks so the
+	// initiator-only rejection cannot race a concurrent cancel/abort
+	// into a leaked claim + orphaned temp file.
+	p, ok := d.imports.peekParked(id)
+	if !ok {
+		d.answer(ctx, q, "Нечего загружать - возможно, уже выполнено или отменено.", true)
+		return nil
+	}
+	if q.From.ID != p.caller {
+		// Pure read above: nothing was removed, nothing to re-park.
+		d.answer(ctx, q, "Подтвердить может только инициатор.", true)
+		return nil
+	}
+	// Initiator confirmed: now atomically claim the single-use job. If a
+	// concurrent abort/cancel won the race it already cleaned up (temp
+	// removed, chat released), so an empty take is a clean no-op.
+	p, ok = d.imports.takeParked(id)
 	if !ok {
 		d.answer(ctx, q, "Нечего загружать - возможно, уже выполнено или отменено.", true)
 		return nil
@@ -467,13 +495,6 @@ func (d *DMConsole) finishParked(ctx context.Context, q telego.CallbackQuery, id
 		d.imports.releaseChat(id, p.absChatID)
 		d.answer(ctx, q, "Вы больше не админ в этом чате.", true)
 		d.editProgress(p.chatID, p.msgID, msgDMLostAdmin, emptyMarkup())
-		return nil
-	}
-	if q.From.ID != p.caller {
-		// Re-park so the real initiator can still confirm; only the
-		// initiator may trigger the write.
-		d.imports.park(id, p)
-		d.answer(ctx, q, "Подтвердить может только инициатор.", true)
 		return nil
 	}
 
