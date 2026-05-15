@@ -85,6 +85,17 @@ Outgoing: bot limits itself to 15 messages/min per chat (below Telegram's 20/min
 
 Telegram 429 error: respect `retry_after` field (seconds) + 10% jitter. `retry_after` is per-chat since Feb 2025.
 
+Per-user command cooldown (`internal/bot/cooldown.go`, applied by
+`gateMsg` to games + `/stats` + `/summarize`): a user may trigger a
+given command once per its window (5-30s). An over-frequency call is
+dropped (handler not run) but is **not** fully silent: exactly **one**
+"slow down" notice is sent per window per (user,command) - bounded so a
+flooder cannot amplify (<=1 result + <=1 notice per window, then silence),
+while a normal user still gets feedback instead of assuming the bot is
+broken. A fresh allowed call resets the notice state. The notice goes
+through the rate-limited sender; absent sender (minimal/test app) -> no
+notice, drop stays silent.
+
 ## Message formatting
 
 HTML parse mode. Escape `<`, `>`, `&` in user-provided text. Max message length: 4096 chars.

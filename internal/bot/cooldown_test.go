@@ -48,7 +48,7 @@ func TestGateMsgConcurrentSafe(t *testing.T) {
 
 	// Each distinct user's first call was allowed; an immediate second
 	// call by user 1 must be blocked by the (now race-free) gate.
-	if a.cooldown.allow(1, "dice", time.Hour) {
+	if allowed, _ := a.cooldown.gate(1, "dice", time.Hour); allowed {
 		t.Fatal("user 1 already consumed its slot; second call must be blocked")
 	}
 	count := 0
@@ -60,20 +60,32 @@ func TestGateMsgConcurrentSafe(t *testing.T) {
 
 func TestCooldownGate(t *testing.T) {
 	c := newCooldown()
-	if !c.allow(1, "dice", time.Hour) {
-		t.Fatal("first call must pass")
+	if a, n := c.gate(1, "dice", time.Hour); !a || n {
+		t.Fatalf("first call must pass without a notice, got allowed=%v notify=%v", a, n)
 	}
-	if c.allow(1, "dice", time.Hour) {
-		t.Fatal("immediate second call by same user must be blocked")
+	// First over-frequency call: blocked AND emits exactly one notice.
+	if a, n := c.gate(1, "dice", time.Hour); a || !n {
+		t.Fatalf("second call must be blocked with a notice, got allowed=%v notify=%v", a, n)
 	}
-	if !c.allow(2, "dice", time.Hour) {
+	// Further rapid repeats in the same window: blocked but SILENT
+	// (notice bounded to one per window - no notice spam from a flood).
+	if a, n := c.gate(1, "dice", time.Hour); a || n {
+		t.Fatalf("third rapid call must be blocked and silent, got allowed=%v notify=%v", a, n)
+	}
+	if _, n := c.gate(1, "dice", time.Hour); n {
+		t.Fatal("the notice must not repeat within the same window")
+	}
+	if a, _ := c.gate(2, "dice", time.Hour); !a {
 		t.Fatal("a different user must not be blocked by user 1's cooldown")
 	}
-	if !c.allow(1, "quiz", time.Hour) {
+	if a, _ := c.gate(1, "quiz", time.Hour); !a {
 		t.Fatal("a different command must have its own cooldown")
 	}
-	if !c.allow(1, "dice", time.Nanosecond) {
-		t.Fatal("after the interval elapses the call must pass again")
+	// Once the interval elapses the call passes again and the notice
+	// state resets (a fresh allow clears it, so the next burst is
+	// acknowledged once more).
+	if a, n := c.gate(1, "dice", time.Nanosecond); !a || n {
+		t.Fatalf("after the interval the call must pass again, got allowed=%v notify=%v", a, n)
 	}
 }
 
