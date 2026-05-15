@@ -202,6 +202,113 @@ func (c *Client) SendDice(ctx context.Context, params *telego.SendDiceParams) (*
 	return msg, err
 }
 
+// SendPoll wraps telego.Bot.SendPoll. A poll is a chat-visible message
+// so it shares the per-chat rate budget like the other public games.
+func (c *Client) SendPoll(ctx context.Context, params *telego.SendPollParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendPoll",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendPoll(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
+// SendPhoto wraps telego.Bot.SendPhoto. A photo is a chat-visible
+// message so it shares the per-chat rate budget; the YouTube link
+// sanitizer reposts media by file_id through this path rather than the
+// raw bot so a burst of sanitized posts cannot exceed 15/min/chat.
+func (c *Client) SendPhoto(ctx context.Context, params *telego.SendPhotoParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendPhoto",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendPhoto(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
+// SendVideo wraps telego.Bot.SendVideo. See SendPhoto for the
+// rate-budget rationale.
+func (c *Client) SendVideo(ctx context.Context, params *telego.SendVideoParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendVideo",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendVideo(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
+// SendAnimation wraps telego.Bot.SendAnimation. See SendPhoto for the
+// rate-budget rationale.
+func (c *Client) SendAnimation(ctx context.Context, params *telego.SendAnimationParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendAnimation",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendAnimation(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
+// SendDocument wraps telego.Bot.SendDocument. See SendPhoto for the
+// rate-budget rationale.
+func (c *Client) SendDocument(ctx context.Context, params *telego.SendDocumentParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendDocument",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendDocument(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
 // EditMessageText wraps telego.Bot.EditMessageText.
 func (c *Client) EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
 	if params == nil {

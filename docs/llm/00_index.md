@@ -12,7 +12,7 @@ Each entry declares `id` and `kind` in front-matter.
 
 - [10_scope.md](10_scope.md) - current scope, command surfaces (DM-only moderation), dropped/archived features, ID scheme
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, display commands
-- [35_history_import.md](35_history_import.md) - Telegram Desktop chat-export bootstrap that seeds membership for cleanup
+- [35_history_import.md](35_history_import.md) - in-process DM `/import` bootstrap: Telegram Desktop chat-export seeds membership (cleanup) + monthly stats
 - [40_moderation.md](40_moderation.md) - DM console: warn/mute/ban/cleanup, admin model, destructive-action safety
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits, error handling, onboarding, shutdown
 - [60_architecture.md](60_architecture.md) - layered composition (DM console + legacy dispatcher), bbolt schema, invariants, failure matrix

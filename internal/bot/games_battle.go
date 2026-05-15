@@ -31,7 +31,7 @@ type battleClock interface {
 
 type realClock struct{}
 
-func (realClock) Now() time.Time                     { return time.Now().UTC() }
+func (realClock) Now() time.Time                         { return time.Now().UTC() }
 func (realClock) After(d time.Duration) <-chan time.Time { return time.After(d) }
 
 // BattleHandler implements /battle X Y. It posts two side messages,

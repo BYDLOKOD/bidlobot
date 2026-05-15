@@ -260,7 +260,6 @@ func (s *InlineService) Handler() th.InlineQueryHandler {
 	}
 }
 
-
 // htmlEscape and formatDuration are shared rendering helpers used by the
 // callback executors (kept here after the inline destructive previews
 // were removed; they are not inline-specific).

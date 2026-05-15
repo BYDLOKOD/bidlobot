@@ -2,38 +2,29 @@ package main
 
 import (
 	"log/slog"
+	"math/rand"
+	"time"
 
 	"go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
 	"github.com/veschin/bidlobot/internal/games/battle"
 	"github.com/veschin/bidlobot/internal/games/dice"
+	"github.com/veschin/bidlobot/internal/games/guess"
+	"github.com/veschin/bidlobot/internal/games/hangman"
 	"github.com/veschin/bidlobot/internal/games/quiz"
+	"github.com/veschin/bidlobot/internal/shared/tgclient"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
-// buildGames constructs the GamesRegistry that backs Phase 4 mini-games
-// (dice, battle, quiz). Returns a registry that may have only a subset
-// of fields populated as additional games land. The function is
-// idempotent and has no side effects beyond the constructor calls; safe
-// to invoke multiple times in tests.
-//
-// HOW TO WIRE THIS INTO THE BOT
-//
-// At runtime the registry is attached to the App via AttachGames. The
-// expected placement in cmd/bidlobot/main.go (currently at line 89,
-// right after the App is constructed) is:
-//
-//	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
-//	app.AttachGames(buildGames(db, tgClient, log))   // <-- add this line
-//
-// AttachGames also wires the inline router into inlineSvc, so call
-// AttachGames after the inlineSvc is already constructed (which is the
-// case at line 80+).
-//
-// The wiring is split out so adding new games does not require editing
-// main.go beyond the single AttachGames invocation.
-func buildGames(db *bbolt.DB, sender bot.GamesSender, log *slog.Logger) *bot.GamesRegistry {
+// buildGames constructs the GamesRegistry. It takes the concrete
+// rate-limited *tgclient.Client (not bot.GamesSender) because the newer
+// games need methods outside that narrow interface - notably SendPoll -
+// and every send must still go through the per-chat rate budget. Each
+// handler constructor takes its own narrow sender interface, all of which
+// *tgclient.Client satisfies. botUsername (from GetMe) lets /duel reject
+// a duel against the bot itself; "" disables that guard.
+func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, log *slog.Logger) *bot.GamesRegistry {
 	diceRepo := storage.NewDiceRepo(db)
 	diceSvc := dice.NewService(diceRepo, log)
 	diceHandler := bot.NewDiceHandler(diceSvc, sender, log)
@@ -44,6 +35,24 @@ func buildGames(db *bbolt.DB, sender bot.GamesSender, log *slog.Logger) *bot.Gam
 	quizRepo := storage.NewQuizRepo(db)
 	quizActive := quiz.NewActiveQuizzes()
 	quizHandler := bot.NewQuizHandler(quizActive, quizRepo, sender, log)
+
+	// Phase 5 mini-games.
+	pollHandler := bot.NewPollHandler(sender, log)
+	eightBallHandler := bot.NewEightBallHandler(sender, log)
+	quipHandler := bot.NewQuipHandler(sender, log)
+
+	guessRepo := storage.NewGuessRepo(db)
+	guessSvc := guess.NewService(guessRepo, rand.New(rand.NewSource(time.Now().UnixNano())), log)
+	guessHandler := bot.NewGuessHandler(guessSvc, sender, log)
+
+	hangmanRepo := storage.NewHangmanRepo(db)
+	hangmanSvc := hangman.NewService(hangmanRepo, rand.New(rand.NewSource(time.Now().UnixNano())), log)
+	hangmanHandler := bot.NewHangmanHandler(hangmanSvc, sender, log)
+
+	duelHandler := bot.NewDuelHandler(sender, botUsername, log)
+
+	// Trivia reuses the same per-chat quiz leaderboard store as /quiz.
+	triviaHandler := bot.NewTriviaHandler(quizRepo, sender, log)
 
 	return &bot.GamesRegistry{
 		Dice: diceHandler,
@@ -57,5 +66,17 @@ func buildGames(db *bbolt.DB, sender bot.GamesSender, log *slog.Logger) *bot.Gam
 			CallbackPredicate: bot.QuizCallbackPredicate(),
 		},
 		InlineRouter: bot.NewGamesInlineRouter(),
+
+		Poll:      pollHandler,
+		EightBall: eightBallHandler,
+		Quip:      quipHandler,
+		Guess:     guessHandler.HandleGuess,
+		Hangman:   hangmanHandler.HandleHangman,
+		Duel:      duelHandler.HandleDuel,
+		Trivia: bot.TriviaRoutes{
+			Slash:             triviaHandler.HandleTrivia,
+			Callback:          triviaHandler.HandleCallback,
+			CallbackPredicate: bot.TriviaCallbackPredicate(),
+		},
 	}
 }

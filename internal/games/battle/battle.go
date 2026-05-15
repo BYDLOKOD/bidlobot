@@ -64,23 +64,23 @@ type Battle struct {
 	StartedAt time.Time
 	EndsAt    time.Time
 
-	mu        sync.Mutex
+	mu          sync.Mutex
 	leftVoters  map[int64]struct{}
 	rightVoters map[int64]struct{}
 }
 
 // Result is what Tally returns at the end of a battle.
 type Result struct {
-	BattleID    string
-	LeftLabel   string
-	RightLabel  string
-	LeftVotes   int
-	RightVotes  int
-	WinnerSide  Side  // SideLeft or SideRight; ignored when Tied
-	Tied        bool
-	NoVotes     bool  // true when LeftVotes==RightVotes==0
-	StartedAt   time.Time
-	FinishedAt  time.Time
+	BattleID   string
+	LeftLabel  string
+	RightLabel string
+	LeftVotes  int
+	RightVotes int
+	WinnerSide Side // SideLeft or SideRight; ignored when Tied
+	Tied       bool
+	NoVotes    bool // true when LeftVotes==RightVotes==0
+	StartedAt  time.Time
+	FinishedAt time.Time
 }
 
 // NewBattle constructs a Battle and its empty voter sets. ID generation
@@ -180,8 +180,8 @@ func (b *Battle) IsRightMessage(msgID int) bool { return msgID != 0 && msgID == 
 // finishes them) and by their per-side message ID (for the reaction
 // observer).
 type Registry struct {
-	mu       sync.RWMutex
-	byID     map[string]*Battle
+	mu         sync.RWMutex
+	byID       map[string]*Battle
 	byLeftMsg  map[int]*Battle
 	byRightMsg map[int]*Battle
 }

@@ -107,7 +107,6 @@ func (c *AdminCache) getOrFetch(absChatID int64) (*adminEntry, error) {
 	return entry, nil
 }
 
-
 func IsAnonymousAdmin(userID int64) bool {
 	return userID == groupAnonymousBotID
 }

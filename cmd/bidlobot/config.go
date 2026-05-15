@@ -14,10 +14,10 @@ import (
 // Config bundles every operator-supplied input. Loading from env is split
 // from validation so tests can inject Config{} literals.
 type Config struct {
-	Token     string
-	DBPath    string
+	Token      string
+	DBPath     string
 	HealthPort int    // 0 disables; -1 means "unset, use default"
-	LogLevel  string // debug|info|warn|error
+	LogLevel   string // debug|info|warn|error
 }
 
 // loadConfig reads Config from environment without performing validation.

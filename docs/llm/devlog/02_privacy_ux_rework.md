@@ -33,10 +33,14 @@ nobody. The operator's real workflow is a Telegram Desktop chat export.
   (`redirectModerationToDM`). Moderation never executes publicly.
 - Inline catalog trimmed: it no longer advertises moderation verbs
   (they cannot run in-chat - inline results post publicly).
-- New `cmd/bidlobot-import`: streaming parser for the Desktop "Export
-  chat history" JSON, seeds the `members` bucket (max() count
-  semantics, idempotent). Bot stopped for a real import; `--dry-run`
-  safe live.
+- New standalone import CLI under `cmd/`: streaming parser for the
+  Desktop "Export chat history" JSON, seeds the `members` bucket
+  (max() count semantics, idempotent); a real import needed the bot
+  stopped (bbolt flock). **Superseded later the same day:** the CLI
+  was removed and the reusable engine extracted to
+  `internal/histimport`, driven in-process by a DM `/import` (shares
+  the bot's open bbolt handle - no flock conflict, no restart). See
+  `35_history_import.md` for the current model.
 - bbolt gained `dm_sessions`; cooldown self-evicts; cleanup Stop
   registered before render (race fix); two opus critic passes,
   must-fix holes closed.

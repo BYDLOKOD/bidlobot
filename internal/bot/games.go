@@ -49,6 +49,24 @@ type GamesRegistry struct {
 	// "@bidlobot dice/battle/quiz" inline queries surface as result
 	// suggestions.
 	InlineRouter InlineGameRouter
+
+	// Phase 5 mini-games. Any field may be nil/zero to disable it.
+	Poll      *PollHandler      // "/poll Q | a | b" (+ "/poll quiz ...")
+	EightBall *EightBallHandler // "/8ball <question>"
+	Quip      *QuipHandler      // "/roast [@user]" / "/praise [@user]"
+	Guess     th.MessageHandler // "/guess", "/guess N", "/guess top"
+	Hangman   th.MessageHandler // "/hangman", "/hangman X"
+	Duel      th.MessageHandler // "/duel @user"
+	Trivia    TriviaRoutes      // "/trivia" / "/trivia top" + its callback
+}
+
+// TriviaRoutes mirrors QuizRoutes: slash + a prefix-scoped callback that
+// must register before the broader quiz callback (telego is
+// first-match-wins).
+type TriviaRoutes struct {
+	Slash             th.MessageHandler
+	Callback          th.CallbackQueryHandler
+	CallbackPredicate th.Predicate
 }
 
 // BattleRoutes exposes only the surface registerGameRoutes needs from
@@ -93,6 +111,34 @@ func registerGameRoutes(bh *th.BotHandler, sgGroup *th.HandlerGroup, a *App) {
 	}
 	if g.Quiz.Slash != nil {
 		sgGroup.HandleMessage(a.gateMsg("quiz", 8*time.Second, g.Quiz.Slash), th.CommandEqual("quiz"))
+	}
+	if g.Poll != nil {
+		sgGroup.HandleMessage(a.gateMsg("poll", 10*time.Second, g.Poll.HandlePoll), th.CommandEqual("poll"))
+	}
+	if g.EightBall != nil {
+		sgGroup.HandleMessage(a.gateMsg("8ball", 5*time.Second, g.EightBall.HandleEightBall), th.CommandEqual("8ball"))
+	}
+	if g.Quip != nil {
+		sgGroup.HandleMessage(a.gateMsg("roast", 8*time.Second, g.Quip.HandleRoast), th.CommandEqual("roast"))
+		sgGroup.HandleMessage(a.gateMsg("praise", 8*time.Second, g.Quip.HandlePraise), th.CommandEqual("praise"))
+	}
+	if g.Guess != nil {
+		sgGroup.HandleMessage(a.gateMsg("guess", 5*time.Second, g.Guess), th.CommandEqual("guess"))
+	}
+	if g.Hangman != nil {
+		sgGroup.HandleMessage(a.gateMsg("hangman", 5*time.Second, g.Hangman), th.CommandEqual("hangman"))
+	}
+	if g.Duel != nil {
+		sgGroup.HandleMessage(a.gateMsg("duel", 15*time.Second, g.Duel), th.CommandEqual("duel"))
+	}
+	if g.Trivia.Slash != nil {
+		sgGroup.HandleMessage(a.gateMsg("trivia", 8*time.Second, g.Trivia.Slash), th.CommandEqual("trivia"))
+	}
+	if g.Trivia.Callback != nil && g.Trivia.CallbackPredicate != nil {
+		// Trivia's narrow predicate must register BEFORE the quiz callback
+		// (whose predicate matches the broader "g1:" prefix) and before
+		// the pending-action dispatcher - first-match-wins routing.
+		bh.HandleCallbackQuery(g.Trivia.Callback, g.Trivia.CallbackPredicate)
 	}
 	if g.Quiz.Callback != nil && g.Quiz.CallbackPredicate != nil {
 		// Quiz callbacks must be registered BEFORE the pending-action

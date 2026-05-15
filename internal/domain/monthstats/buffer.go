@@ -13,12 +13,12 @@ import (
 // fields carry the longest-message candidate. This dual use mirrors
 // FlushDelta and keeps the buffer one flat map like stats.Buffer.
 type bufferEntry struct {
-	msg, runes                          int64
-	custom, code, mention, botcmd, kw   int64
-	firstSeen                           time.Time
-	longestRunes, longestUser           int64
-	longestExcerpt                      string
-	longestFull                         bool
+	msg, runes                        int64
+	custom, code, mention, botcmd, kw int64
+	firstSeen                         time.Time
+	longestRunes, longestUser         int64
+	longestExcerpt                    string
+	longestFull                       bool
 }
 
 // Buffer is the live accumulation layer. It copies stats.Buffer's proven
@@ -38,8 +38,8 @@ type Buffer struct {
 	// liveStart tracks the earliest live message ts per chat so the first
 	// flush can persist MonthState.LiveTrackStart - the boundary the
 	// importer uses to avoid double-counting messages already seen live.
-	liveStart      map[int64]time.Time
-	liveStartDone  map[int64]bool
+	liveStart     map[int64]time.Time
+	liveStartDone map[int64]bool
 }
 
 func NewBuffer(store Store, log *slog.Logger) *Buffer {
@@ -86,7 +86,7 @@ func (b *Buffer) Add(s Sample) {
 		me = &bufferEntry{}
 		b.pending[mk] = me
 	}
-	me.msg++          // -> TotalMsgs
+	me.msg++            // -> TotalMsgs
 	me.runes += s.Runes // -> TotalRunes
 	if s.Runes > me.longestRunes {
 		me.longestRunes = s.Runes

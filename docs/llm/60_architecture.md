@@ -16,10 +16,11 @@ cmd/
   bidlobot/        production entrypoint; wires everything below
   bidlobot-backup/ online bbolt backup (db.View + WriteTo)
   bidlobot-probe/  one-shot getMe; verifies BotFather config
-  bidlobot-import/ streams a Telegram Desktop chat export into the
-                   members bucket (history bootstrap; see 35_history_import)
 
 internal/
+  histimport/      streams a Telegram Desktop chat export (with .gz/.zip
+                   decompress) into the members bucket + monthly stats;
+                   driven in-process by DM /import (see 35_history_import)
   bot/
     dm_console*.go    private moderation console (the ONLY mod surface)
     dm_text.go        DM-console Russian copy
@@ -114,14 +115,15 @@ Side-effect axes:
 | `pending_actions` | `pa:<16-hex>` | `pending.Action` JSON; swept past `ExpiresAt` |
 | `dm_sessions` | `dm:<adminUserID>` | `dmsession.Session` (selected chat) |
 
-Buckets created idempotently in `storage.NewBoltStore` (and mirrored in
-`cmd/bidlobot-import`'s `ensureBuckets`). Migration on
-`migrate_to_chat_id` rewrites the substantive buckets in one tx.
+Buckets created idempotently in `storage.NewBoltStore` (the in-process
+`/import` path reuses the same store, so no separate bucket
+bootstrap). Migration on `migrate_to_chat_id` rewrites the substantive
+buckets in one tx.
 
 ## Key invariants
 
 1. **Membership is bottom-up.** No `getChatMembers`; the bot learns a
-   user only from an observed event - or from `bidlobot-import` seeding
+   user only from an observed event - or from a DM `/import` seeding
    history. Cleanup previews always state the observation window.
 2. **Reactions count as activity.** `LastMessageAt OR LastReactionAt`
    vs cutoff; a react-only lurker is preserved.
@@ -172,7 +174,7 @@ invalidation), `message_reaction` (LastReactionAt), `inline_query`.
 |------|-------|
 | New DM admin command | `dm_console.go` HandleMessage switch + service |
 | New public read/game command | `routes.go` + handler; gate with `a.gateMsg` if floodable |
-| New persistent entity | `storage/<e>_repo.go` + bucket in `bolt.go` + `cmd/bidlobot-import` `ensureBuckets` + domain service |
+| New persistent entity | `storage/<e>_repo.go` + bucket in `bolt.go` + domain service (the in-process `/import` path reuses the same store) |
 | New background sweep | `app.go` Run() goroutine, share `App.inFlight` if it must block shutdown |
 | New /health probe | `health.go` healthChecker |
 

@@ -16,7 +16,7 @@ import (
 // goroutine-per-update dispatch - exactly during the flood the gate
 // exists to stop.
 func TestNewAppInitializesCooldown(t *testing.T) {
-	a := NewApp(nil, nil, testLogger(), nil, nil, nil, nil, nil, nil)
+	a := NewApp(nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil)
 	if a.cooldown == nil {
 		t.Fatal("NewApp must eagerly initialize cooldown (race fix)")
 	}
@@ -27,7 +27,7 @@ func TestNewAppInitializesCooldown(t *testing.T) {
 // init it is race-free (run under -race) and the per-user gate still
 // holds: a second immediate call by the same user is dropped.
 func TestGateMsgConcurrentSafe(t *testing.T) {
-	a := NewApp(nil, nil, testLogger(), nil, nil, nil, nil, nil, nil)
+	a := NewApp(nil, nil, testLogger(), nil, nil, nil, nil, nil, nil, nil)
 
 	var passed sync.Map // userID -> firstCallAllowed
 	noop := func(_ *th.Context, _ telego.Message) error { return nil }

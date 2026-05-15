@@ -7,7 +7,7 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("member not found")
+	ErrNotFound     = errors.New("member not found")
 	ErrChatNotFound = errors.New("chat not found")
 )
 

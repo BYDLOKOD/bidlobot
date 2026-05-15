@@ -61,13 +61,13 @@ func TestRenderNominationsAndPercentages(t *testing.T) {
 	for _, want := range []string{
 		"Итоги месяца 2026-04",
 		"Больше всех сообщений",
-		"@oleg - 5 (55%)",   // 5*100/9 = 55 (integer trunc)
+		"@oleg - 5 (55%)",    // 5*100/9 = 55 (integer trunc)
 		"@arsenij - 3 (33%)", // 3*100/9 = 33
 		"@nikita - 1 (11%)",  // 1*100/9 = 11
 		"Лонгрид месяца",
 		"@oleg - 1,459 символов <i>(обрезано)</i>", // !full -> truncation note
-		"Кодер месяца",       // code section present (Олег has 3)
-		"Курсорист месяца",   // keyword section present
+		"Кодер месяца",                             // code section present (Олег has 3)
+		"Курсорист месяца",                         // keyword section present
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered output missing %q\n---\n%s", want, out)

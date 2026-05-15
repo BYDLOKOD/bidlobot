@@ -61,9 +61,9 @@ func TestConfig_RejectsMissingToken(t *testing.T) {
 func TestConfig_RejectsMalformedToken(t *testing.T) {
 	dir := t.TempDir()
 	cases := []string{
-		"abc",                                     // missing colon
-		"123:short",                               // too short
-		"abc:1234567890123456789012345678901234567", // non-numeric prefix
+		"abc",       // missing colon
+		"123:short", // too short
+		"abc:1234567890123456789012345678901234567",  // non-numeric prefix
 		"123: 1234567890123456789012345678901234567", // contains space
 	}
 	for _, tok := range cases {

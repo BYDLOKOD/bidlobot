@@ -33,10 +33,9 @@ non-root container with tini as PID 1.
 - `golang:1.26-alpine` build stage. `CGO_ENABLED=0` because every
   dependency is pure Go. Build cache mounted via BuildKit so warm
   builds stay fast.
-- `alpine:3.20` runtime. Ships `bidlobot`, `bidlobot-backup`,
-  `bidlobot-probe`, and `bidlobot-import` into `/usr/local/bin`. Adds
-  `ca-certificates`, `tzdata`, `wget` (for the healthcheck),
-  `tini` (PID 1).
+- `alpine:3.20` runtime. Ships `bidlobot`, `bidlobot-backup`, and
+  `bidlobot-probe` into `/usr/local/bin`. Adds `ca-certificates`,
+  `tzdata`, `wget` (for the healthcheck), `tini` (PID 1).
 - Runs as `bidlobot` (UID 65532), `WORKDIR /var/lib/bidlobot`. A
   baked `.keep` marker forces a fresh named volume to inherit the
   image's `0750 bidlobot:bidlobot` ownership.
@@ -154,31 +153,36 @@ cron alerts.
 > backup binary's read-only open times out. Use it only after stopping
 > the bot.
 
-## History import (cleanup bootstrap)
+## History import (cleanup + monthly-stats bootstrap)
 
 On a fresh deploy the bot only knows users it observed live, so
-`/cleanup 6mo` finds nobody. Seed history from a Telegram Desktop
-"Export chat history" JSON (per-chat menu -> Export -> format JSON).
-Full rationale + schema in [35_history_import.md](35_history_import.md).
+`/cleanup 6mo` finds nobody and `/stats month` is empty for pre-bot
+months. History is seeded **in-process via a DM `/import`** - no
+server access, no container exec, no restart. Full rationale + schema
+in [35_history_import.md](35_history_import.md).
 
-`bidlobot-import` holds the bbolt write lock, so a real import needs
-the bot stopped; `--dry-run` never opens the DB and is safe live:
+Operator/admin procedure (entirely inside Telegram):
 
-```sh
-# Safe preview against the running bot
-docker compose run --rm -v /path/result.json:/tmp/r.json bot \
-  bidlobot-import --json /tmp/r.json --chat-id -100<abs> --dry-run
+1. Add the bot to the chat as admin with the right to restrict
+   members (required before `/import` - the DM console only manages
+   chats the bot administers).
+2. Telegram Desktop -> open the chat -> `⋯ -> Export chat history ->
+   Format: JSON`.
+3. Compress the export to `.gz` or `.zip` if it exceeds ~20 MB (the
+   Bot API caps a bot file download at 20 MB; a real export is ~31 MB
+   raw / ~4 MB gzipped). An uncompressed file under 20 MB also works.
+4. In a private chat with the bot send `/import`, then send the export
+   file. The bot auto-detects/decompresses and seeds both the
+   membership table (for `/cleanup`) and the monthly statistics (for
+   `/stats month`).
 
-# Real import
-docker compose stop bot
-docker compose run --rm -v /path/result.json:/tmp/r.json bot \
-  bidlobot-import --json /tmp/r.json --chat-id -100<abs>
-docker compose start bot
-```
-
-`--chat-id` (signed form) is mandatory - a guard against importing an
-export into the wrong chat. Re-running the same file is idempotent
-(counts merge with max-semantics).
+Import is idempotent (per-chat message-id high-water-mark + atomic
+state write), so re-sending the same or an overlapping export never
+double-counts; date-sliced multiple sends accumulate. The import
+shares the bot's already-open bbolt handle, so there is no flock
+conflict and the bot keeps running throughout (that flock conflict was
+the only reason the removed standalone import binary required stopping
+the bot).
 
 ## Logs
 

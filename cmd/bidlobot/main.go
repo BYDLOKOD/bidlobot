@@ -19,6 +19,7 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/shared/ratelimit"
@@ -118,7 +119,15 @@ func main() {
 
 	statsBuffer := stats.NewBuffer(statsRepo, log)
 	statsSvc := stats.NewService(statsRepo, statsBuffer, displayResolver, log)
-	statsHandler := stats.NewHandler(statsSvc, statsLookup, tgClient, log)
+
+	// Retroactive monthly nominations (chat-export.org parity). Fed by
+	// the same live message handler and by the DM history import; the
+	// importer's idempotency keeps the two from double-counting.
+	monthRepo := storage.NewMonthStatsRepo(db)
+	monthBuffer := monthstats.NewBuffer(monthRepo, log)
+	monthSvc := monthstats.NewService(monthRepo, monthBuffer, displayResolver, log)
+
+	statsHandler := stats.NewHandler(statsSvc, monthSvc, statsLookup, tgClient, log)
 
 	// Moderation routes its writes through the wrapped client so 429/5xx,
 	// migration, and per-chat rate limits all apply to ban/restrict/etc.
@@ -144,7 +153,7 @@ func main() {
 	// tgClient (rate-limited + retried) is the public-surface sender:
 	// help, onboarding, the moderation-redirect notice - same budget as
 	// games/stats so a busy chat stays inside Telegram's 20 msg/min/chat.
-	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
+	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, monthBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 	if err := app.AttachHealth(
 		// dbOpen probes bbolt with a no-op view txn. Path() returning a
 		// non-empty string is a tautology (it's set at open time and
@@ -171,7 +180,7 @@ func main() {
 
 	// Phase 4 mini-games: dice / battle / quiz. Constructor wires the
 	// inline router and slash handlers; AttachGames installs them on App.
-	app.AttachGames(buildGames(db, tgClient, log))
+	app.AttachGames(buildGames(db, tgClient, botInfo.Username, log))
 
 	// DM moderation console - the only private control surface. Uses
 	// the same domain services as the (now removed) public moderation
@@ -179,7 +188,7 @@ func main() {
 	dmSessionRepo := storage.NewDMSessionRepo(db)
 	dmConsole := bot.NewDMConsole(
 		tgBot, dmSessionRepo, memberRepo, adminCache,
-		modSvc, cleanupSvc, statsSvc, pendingRepo, log,
+		modSvc, cleanupSvc, statsSvc, monthSvc, pendingRepo, log,
 	)
 	app.AttachDMConsole(dmConsole)
 

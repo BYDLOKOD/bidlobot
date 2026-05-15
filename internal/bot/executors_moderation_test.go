@@ -42,7 +42,7 @@ func (s *inMemMembers) put(m membership.Member) {
 	}
 }
 
-func memKey(u, c int64) string   { return "k:" + i64s(u) + ":" + i64s(c) }
+func memKey(u, c int64) string          { return "k:" + i64s(u) + ":" + i64s(c) }
 func unameKey(c int64, u string) string { return "u:" + i64s(c) + ":" + u }
 
 func i64s(n int64) string {

@@ -17,6 +17,7 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/dmsession"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/pending"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
@@ -54,12 +55,13 @@ type DMConsole struct {
 	mod      *moderation.Service
 	cleanup  *cleanup.Service
 	stats    *stats.Service
+	month    *monthstats.Service
 	pending  pending.Store
 	log      *slog.Logger
 
-	runs     *cleanupRuns
-	appCtxV  context.Context
-	wgV      *sync.WaitGroup
+	runs    *cleanupRuns
+	appCtxV context.Context
+	wgV     *sync.WaitGroup
 }
 
 // SetAppContext binds running cleanup workers to the app lifecycle so a
@@ -91,6 +93,7 @@ func NewDMConsole(
 	mod *moderation.Service,
 	clean *cleanup.Service,
 	st *stats.Service,
+	month *monthstats.Service,
 	pendingStore pending.Store,
 	log *slog.Logger,
 ) *DMConsole {
@@ -102,6 +105,7 @@ func NewDMConsole(
 		mod:      mod,
 		cleanup:  clean,
 		stats:    st,
+		month:    month,
 		pending:  pendingStore,
 		log:      log,
 		runs:     newCleanupRuns(),
@@ -298,6 +302,22 @@ func (d *DMConsole) handleStats(ctx context.Context, caller int64, args []string
 		body, err = d.stats.Top(ctx, abs)
 	case args[0] == "today":
 		body, err = d.stats.Today(ctx, abs)
+	case args[0] == "months":
+		if d.month == nil {
+			d.send(ctx, caller, msgDMError, nil)
+			return nil
+		}
+		body, err = d.month.Months(ctx, abs)
+	case args[0] == "month":
+		if d.month == nil {
+			d.send(ctx, caller, msgDMError, nil)
+			return nil
+		}
+		monthArg := ""
+		if len(args) >= 2 {
+			monthArg = args[1]
+		}
+		body, err = d.month.MonthReport(ctx, abs, monthArg)
 	default:
 		uid, _, _, found := d.resolveTarget(ctx, abs, args[0])
 		if !found {

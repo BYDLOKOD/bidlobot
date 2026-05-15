@@ -12,6 +12,7 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/testutil"
@@ -29,6 +30,7 @@ type App struct {
 	handler     *th.BotHandler
 	adminCache  *shared.AdminCache
 	statsBuffer *stats.Buffer
+	monthBuffer *monthstats.Buffer
 	memberSvc   *membership.Service
 	dispatcher  *CallbackDispatcher
 	pendingGC   PendingGC
@@ -76,13 +78,14 @@ type PendingGC interface {
 // chat stays inside Telegram's 20 msg/min/chat budget. It is a
 // constructor parameter (not a setter) so the type system forbids
 // forgetting it.
-func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
+func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, monthBuffer *monthstats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
 	return &App{
 		bot:         bot,
 		sender:      sender,
 		log:         log,
 		adminCache:  adminCache,
 		statsBuffer: statsBuffer,
+		monthBuffer: monthBuffer,
 		memberSvc:   memberSvc,
 		dispatcher:  dispatcher,
 		pendingGC:   pendingGC,
@@ -192,6 +195,9 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	registerRoutes(bh, a, statsH)
 
 	go a.statsBuffer.Run(ctx, 60*time.Second)
+	if a.monthBuffer != nil {
+		go a.monthBuffer.Run(ctx, 60*time.Second)
+	}
 	if a.pendingGC != nil {
 		go a.runPendingGC(ctx, time.Minute)
 	}
@@ -277,6 +283,9 @@ func (a *App) Stop() {
 	}
 
 	a.statsBuffer.Flush()
+	if a.monthBuffer != nil {
+		a.monthBuffer.Flush()
+	}
 
 	if a.healthServer != nil {
 		a.healthServer.Stop()

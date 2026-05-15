@@ -17,10 +17,10 @@ func TestRuneLen(t *testing.T) {
 		want int64
 	}{
 		{"", 0},
-		{"Благодарю", 9},        // chat-export.org: :text-length 9
-		{"abc", 3},              //
-		{"привет мир", 10},      // cyrillic counted as code points
-		{"a😀b", 3},              // astral char = 1 rune (Go), documented divergence
+		{"Благодарю", 9},   // chat-export.org: :text-length 9
+		{"abc", 3},         //
+		{"привет мир", 10}, // cyrillic counted as code points
+		{"a😀b", 3},         // astral char = 1 rune (Go), documented divergence
 		{strings.Repeat("я", 50), 50},
 	}
 	for _, c := range cases {

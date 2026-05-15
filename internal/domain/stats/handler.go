@@ -9,6 +9,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/text"
 )
 
@@ -30,15 +31,18 @@ type MessageSender interface {
 
 type Handler struct {
 	svc    *Service
+	month  *monthstats.Service // nil-safe: month/months reply "not available"
 	lookup UsernameLookup
 	sender MessageSender
 	log    *slog.Logger
 }
 
-// NewHandler создаёт обработчик команды /stats.
-func NewHandler(svc *Service, lookup UsernameLookup, sender MessageSender, log *slog.Logger) *Handler {
+// NewHandler создаёт обработчик команды /stats. month может быть nil -
+// тогда подкоманды month/months недоступны.
+func NewHandler(svc *Service, month *monthstats.Service, lookup UsernameLookup, sender MessageSender, log *slog.Logger) *Handler {
 	return &Handler{
 		svc:    svc,
+		month:  month,
 		lookup: lookup,
 		sender: sender,
 		log:    log,
@@ -70,6 +74,14 @@ func (h *Handler) HandleStats(ctx *th.Context, msg telego.Message) error {
 		return h.handleTop(ctx, msg)
 	case "today":
 		return h.handleToday(ctx, msg)
+	case "months":
+		return h.handleMonths(ctx, msg)
+	case "month":
+		arg := ""
+		if len(parts) >= 3 {
+			arg = parts[2]
+		}
+		return h.handleMonth(ctx, msg, arg)
 	default:
 		if strings.HasPrefix(subcommand, "@") {
 			// Поиск по имени пользователя.
@@ -133,6 +145,38 @@ func (h *Handler) handleToday(ctx *th.Context, msg telego.Message) error {
 	}
 
 	return h.replyHTML(ctx, msg, text)
+}
+
+func (h *Handler) handleMonths(ctx *th.Context, msg telego.Message) error {
+	if h.month == nil {
+		return h.replyError(ctx, msg, text.ErrStatsUnknownSub)
+	}
+	absChatID := msg.Chat.ID
+	if absChatID < 0 {
+		absChatID = -absChatID
+	}
+	body, err := h.month.Months(context.Background(), absChatID)
+	if err != nil {
+		h.log.Error("months stats failed", "error", err)
+		return h.replyError(ctx, msg, "Failed to retrieve monthly statistics.")
+	}
+	return h.replyHTML(ctx, msg, body)
+}
+
+func (h *Handler) handleMonth(ctx *th.Context, msg telego.Message, arg string) error {
+	if h.month == nil {
+		return h.replyError(ctx, msg, text.ErrStatsUnknownSub)
+	}
+	absChatID := msg.Chat.ID
+	if absChatID < 0 {
+		absChatID = -absChatID
+	}
+	body, err := h.month.MonthReport(context.Background(), absChatID, arg)
+	if err != nil {
+		h.log.Error("month stats failed", "error", err, "arg", arg)
+		return h.replyError(ctx, msg, "Failed to retrieve monthly statistics.")
+	}
+	return h.replyHTML(ctx, msg, body)
 }
 
 func (h *Handler) handleUserByID(ctx *th.Context, msg telego.Message, userID int64) error {

@@ -116,13 +116,13 @@ func (d *DMConsole) handleCleanup(ctx context.Context, caller, abs int64, args [
 	}
 	now := time.Now().UTC()
 	if cerr := d.pending.Create(ctx, pending.Action{
-		ID:        id,
-		Kind:      pending.KindCleanup,
-		AbsChatID: abs,
+		ID:          id,
+		Kind:        pending.KindCleanup,
+		AbsChatID:   abs,
 		ActorUserID: caller,
-		Threshold: threshold,
-		CreatedAt: now,
-		ExpiresAt: now.Add(5 * time.Minute),
+		Threshold:   threshold,
+		CreatedAt:   now,
+		ExpiresAt:   now.Add(5 * time.Minute),
 	}); cerr != nil {
 		d.send(ctx, caller, msgDMError, nil)
 		return nil

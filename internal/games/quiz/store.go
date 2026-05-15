@@ -40,8 +40,8 @@ type Store interface {
 // Acceptable trade-off: a code quiz in a 200-member chat resolves in
 // seconds.
 type ActiveQuizzes struct {
-	mu     sync.Mutex
-	byMsg  map[int64]*ActiveQuiz // key: messageID
+	mu    sync.Mutex
+	byMsg map[int64]*ActiveQuiz // key: messageID
 }
 
 // ActiveQuiz captures everything the callback handler needs to validate
@@ -50,11 +50,11 @@ type ActiveQuiz struct {
 	MessageID  int64
 	AbsChatID  int64
 	SnippetIdx int
-	CorrectIdx int        // index into Options (0..3)
-	Options    []Lang     // the four guess buttons in displayed order
+	CorrectIdx int    // index into Options (0..3)
+	Options    []Lang // the four guess buttons in displayed order
 	StartedAt  time.Time
-	WinnerID   int64      // 0 until first correct tap; nonzero after
-	WinnerName string     // display name of the winner
+	WinnerID   int64  // 0 until first correct tap; nonzero after
+	WinnerName string // display name of the winner
 }
 
 func NewActiveQuizzes() *ActiveQuizzes {

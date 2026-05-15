@@ -16,11 +16,11 @@ import (
 // counting primitives (RuneLen, AddEntityType, CountKeyword) live here
 // and are shared by both paths.
 type Sample struct {
-	AbsChatID int64
-	UserID    int64
-	TS        time.Time // UTC
-	Month     string    // TS.Format("2006-01")
-	Runes     int64     // rune length of text + caption (true length, for ranking)
+	AbsChatID   int64
+	UserID      int64
+	TS          time.Time // UTC
+	Month       string    // TS.Format("2006-01")
+	Runes       int64     // rune length of text + caption (true length, for ranking)
 	CustomEmoji int64
 	Code        int64
 	Mention     int64

@@ -174,11 +174,11 @@ func TestHealth_GetMeContextDeadline(t *testing.T) {
 
 func TestHealthPortFromEnv(t *testing.T) {
 	tests := []struct {
-		name         string
-		env          string
-		wantPort     int
-		wantStart    bool
-		wantErr      bool
+		name      string
+		env       string
+		wantPort  int
+		wantStart bool
+		wantErr   bool
 	}{
 		{"unset defaults to 8080", "", 8080, true, false},
 		{"explicit 0 disables", "0", 0, false, false},

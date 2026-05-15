@@ -149,72 +149,119 @@ func (r *MonthStatsRepo) Flush(_ context.Context, batch map[monthstats.FlushKey]
 		return nil
 	}
 	return r.db.Update(func(tx *bolt.Tx) error {
-		rows := tx.Bucket(bktMonth)
-		idx := tx.Bucket(bktMonthIdx)
+		return applyBatchTx(tx, batch)
+	})
+}
 
-		for key, d := range batch {
-			if err := idx.Put(MonthStatsChatIndex(key.AbsChatID, key.Month), nil); err != nil {
-				return err
-			}
-			dbKey := MonthStatsKey(key.AbsChatID, key.Month, key.UserID)
+// ApplyImport applies the additive batch AND writes the advanced
+// MonthState in ONE transaction. This atomic pairing is what makes the
+// additive monthly counters idempotent: a crash leaves NEITHER applied,
+// so a retry re-skips correctly by the unchanged watermark. An empty
+// batch still writes the state (a fully-deduped re-import must still
+// advance the watermark / UpdatedAt).
+func (r *MonthStatsRepo) ApplyImport(_ context.Context, batch map[monthstats.FlushKey]*monthstats.FlushDelta, state *monthstats.MonthState) error {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	return r.db.Update(func(tx *bolt.Tx) error {
+		if err := applyBatchTx(tx, batch); err != nil {
+			return err
+		}
+		return tx.Bucket(bktMonthState).Put(MonthStatsStateKey(state.AbsChatID), data)
+	})
+}
 
-			if key.UserID == monthstats.MetaUserID {
-				var m monthstats.MonthMeta
-				if existing := rows.Get(dbKey); existing != nil {
-					if err := json.Unmarshal(existing, &m); err != nil {
-						return err
-					}
-				} else {
-					m.AbsChatID = key.AbsChatID
-					m.Month = key.Month
-				}
-				m.TotalMsgs += d.MsgDelta
-				m.TotalRunes += d.RuneDelta
-				if d.LongestRunes > m.LongestRunes {
-					m.LongestRunes = d.LongestRunes
-					m.LongestUserID = d.LongestUserID
-					m.LongestExcerpt = d.LongestExcerpt
-					m.LongestFull = d.LongestFull
-				}
-				blob, err := json.Marshal(&m)
-				if err != nil {
+// ResetMonthly deletes all monthly data + state + summaries for a chat so
+// a clean full re-import can run (monthly is independent of membership /
+// lifetime stats, so this is safe). Backs the importer's --reset-monthly.
+func (r *MonthStatsRepo) ResetMonthly(_ context.Context, absChatID int64) error {
+	return r.db.Update(func(tx *bolt.Tx) error {
+		for _, b := range []struct {
+			bkt    []byte
+			prefix []byte
+		}{
+			{bktMonth, MonthStatsKey(absChatID, "", 0)[:len(MonthStatsKey(absChatID, "", 0))-len(":00000000000000000000")]},
+			{bktMonthIdx, MonthStatsChatIndexPrefix(absChatID)},
+			{bktMonthSummary, MonthStatsSummaryKey(absChatID, "")},
+		} {
+			c := tx.Bucket(b.bkt).Cursor()
+			for k, _ := c.Seek(b.prefix); k != nil && bytes.HasPrefix(k, b.prefix); k, _ = c.Next() {
+				if err := c.Delete(); err != nil {
 					return err
 				}
-				if err := rows.Put(dbKey, blob); err != nil {
-					return err
-				}
-				continue
 			}
+		}
+		return tx.Bucket(bktMonthState).Delete(MonthStatsStateKey(absChatID))
+	})
+}
 
-			var s monthstats.MonthUserStat
+func applyBatchTx(tx *bolt.Tx, batch map[monthstats.FlushKey]*monthstats.FlushDelta) error {
+	rows := tx.Bucket(bktMonth)
+	idx := tx.Bucket(bktMonthIdx)
+
+	for key, d := range batch {
+		if err := idx.Put(MonthStatsChatIndex(key.AbsChatID, key.Month), nil); err != nil {
+			return err
+		}
+		dbKey := MonthStatsKey(key.AbsChatID, key.Month, key.UserID)
+
+		if key.UserID == monthstats.MetaUserID {
+			var m monthstats.MonthMeta
 			if existing := rows.Get(dbKey); existing != nil {
-				if err := json.Unmarshal(existing, &s); err != nil {
+				if err := json.Unmarshal(existing, &m); err != nil {
 					return err
 				}
 			} else {
-				s.AbsChatID = key.AbsChatID
-				s.Month = key.Month
-				s.UserID = key.UserID
-				s.FirstSeen = d.FirstSeen
+				m.AbsChatID = key.AbsChatID
+				m.Month = key.Month
 			}
-			s.MsgCount += d.MsgDelta
-			s.RuneCount += d.RuneDelta
-			s.CustomEmoji += d.CustomEmoji
-			s.Code += d.Code
-			s.Mention += d.Mention
-			s.BotCommand += d.BotCommand
-			s.KeywordCount += d.KeywordDelta
-			if !d.FirstSeen.IsZero() && (s.FirstSeen.IsZero() || d.FirstSeen.Before(s.FirstSeen)) {
-				s.FirstSeen = d.FirstSeen
+			m.TotalMsgs += d.MsgDelta
+			m.TotalRunes += d.RuneDelta
+			if d.LongestRunes > m.LongestRunes {
+				m.LongestRunes = d.LongestRunes
+				m.LongestUserID = d.LongestUserID
+				m.LongestExcerpt = d.LongestExcerpt
+				m.LongestFull = d.LongestFull
 			}
-			blob, err := json.Marshal(&s)
+			blob, err := json.Marshal(&m)
 			if err != nil {
 				return err
 			}
 			if err := rows.Put(dbKey, blob); err != nil {
 				return err
 			}
+			continue
 		}
-		return nil
-	})
+
+		var s monthstats.MonthUserStat
+		if existing := rows.Get(dbKey); existing != nil {
+			if err := json.Unmarshal(existing, &s); err != nil {
+				return err
+			}
+		} else {
+			s.AbsChatID = key.AbsChatID
+			s.Month = key.Month
+			s.UserID = key.UserID
+			s.FirstSeen = d.FirstSeen
+		}
+		s.MsgCount += d.MsgDelta
+		s.RuneCount += d.RuneDelta
+		s.CustomEmoji += d.CustomEmoji
+		s.Code += d.Code
+		s.Mention += d.Mention
+		s.BotCommand += d.BotCommand
+		s.KeywordCount += d.KeywordDelta
+		if !d.FirstSeen.IsZero() && (s.FirstSeen.IsZero() || d.FirstSeen.Before(s.FirstSeen)) {
+			s.FirstSeen = d.FirstSeen
+		}
+		blob, err := json.Marshal(&s)
+		if err != nil {
+			return err
+		}
+		if err := rows.Put(dbKey, blob); err != nil {
+			return err
+		}
+	}
+	return nil
 }

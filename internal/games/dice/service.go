@@ -13,10 +13,10 @@ import (
 // record, mention they tied the existing one, or just announce the
 // value without any record fanfare.
 type RollOutcome struct {
-	NewRecord  bool    // Value > previous best (or no previous record existed)
-	Tied       bool    // Value == previous best (and previous existed)
-	Previous   *Record // nil when no record existed before this roll
-	Recorded   Record  // the record state after Submit returns
+	NewRecord bool    // Value > previous best (or no previous record existed)
+	Tied      bool    // Value == previous best (and previous existed)
+	Previous  *Record // nil when no record existed before this roll
+	Recorded  Record  // the record state after Submit returns
 }
 
 // Service owns the leaderboard logic. It does not roll the dice itself;

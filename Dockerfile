@@ -43,10 +43,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/bidlobot-backup ./cmd/bidlobot-backup && \
     CGO_ENABLED=0 GOOS=linux GOFLAGS=-trimpath go build \
         -ldflags "-s -w" \
-        -o /out/bidlobot-probe ./cmd/probe && \
-    CGO_ENABLED=0 GOOS=linux GOFLAGS=-trimpath go build \
-        -ldflags "-s -w" \
-        -o /out/bidlobot-import ./cmd/bidlobot-import
+        -o /out/bidlobot-probe ./cmd/probe
 
 
 FROM alpine:${ALPINE_VERSION} AS runtime
@@ -65,7 +62,6 @@ RUN apk add --no-cache ca-certificates tzdata wget tini && \
 COPY --from=build /out/bidlobot         /usr/local/bin/bidlobot
 COPY --from=build /out/bidlobot-backup  /usr/local/bin/bidlobot-backup
 COPY --from=build /out/bidlobot-probe   /usr/local/bin/bidlobot-probe
-COPY --from=build /out/bidlobot-import  /usr/local/bin/bidlobot-import
 
 USER bidlobot:bidlobot
 WORKDIR /var/lib/bidlobot

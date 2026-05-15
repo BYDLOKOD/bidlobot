@@ -39,8 +39,9 @@ Source of truth: `getChatAdministrators` (Telegram API), via
 `/cmd @username` -> `members.GetMemberByUsername` (case-folded scan of
 the selected chat). `/cmd <numeric id>` -> used directly. There is no
 reply-to in a DM, so the bot can only target users it knows (seen via
-message/reaction, or loaded by `bidlobot-import`). Unknown @username ->
-actionable message pointing at import + the @username/id distinction.
+message/reaction, or loaded by a DM `/import` of a chat export). Unknown
+@username -> actionable message pointing at import + the @username/id
+distinction.
 
 Validation (warn/mute/ban): bot / admin / self rejected with the
 `ValidateTarget` reason surfaced verbatim.

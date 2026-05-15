@@ -1,29 +1,56 @@
 ---
 id: history-import
 kind: spec
-touches: cmd/bidlobot-import/, internal/domain/membership/, internal/storage/membership_repo.go
+touches: internal/histimport/, internal/domain/membership/, internal/domain/monthstats/, internal/bot/dm_console.go
 ---
 
 # History import
 
-Source of truth for the `bidlobot-import` bootstrap path.
+Source of truth for the DM `/import` bootstrap path.
+
+See also: [30_stats.md](30_stats.md), [40_moderation.md](40_moderation.md).
 
 ## Problem
 
 Bot API has no `getChatMembers` and no message history. On a fresh
-deploy the membership table is empty, so `cleanup 6mo` on day one finds
-nobody. The bot can only ever act on users it observed live.
+deploy both the membership table and the monthly statistics are empty,
+so `/cleanup 6mo` on day one finds nobody and `/stats month` shows
+nothing for any pre-bot month. The bot can only ever act on users it
+observed live.
 
 ## Solution
 
-A one-time import of a Telegram Desktop **"Export chat history"** JSON
-(the per-chat menu: `⋯ -> Export chat history -> Format: JSON`, NOT
-Settings -> Export Telegram Data, which for a public group contains only
-the operator's own messages).
+A one-time (or repeated, date-sliced) import of a Telegram Desktop
+**"Export chat history"** JSON, delivered to the bot **in a private
+chat** - no server access and no bot restart.
 
-`cmd/bidlobot-import` streams that JSON and seeds the same `members`
-bucket the live tracker writes, so `cleanup` and `/stats` both work on
-the historical data with zero changes to their own code.
+Admin flow:
+
+1. Add the bot to the chat as **admin** with the right to restrict
+   members. The DM console only manages chats where the bot is admin
+   and the caller is admin, so the required order is **add bot ->
+   `/import`** (importing into a chat the bot does not administer is
+   rejected).
+2. Telegram Desktop -> open the chat -> `⋯ -> Export chat history ->
+   Format: JSON` (the per-chat menu, NOT Settings -> Export Telegram
+   Data, which for a public group contains only the operator's own
+   messages).
+3. Open a private chat with the bot, send `/import`, then send the
+   export file.
+
+The in-process importer (`internal/histimport`) streams that JSON and
+feeds the same counting contracts the live handlers use, so `/cleanup`
+and `/stats month` both work on the historical data with zero changes
+to their own code.
+
+## File size & compression
+
+The Bot API caps a bot file download at **20 MB**. A real export is
+~31 MB raw JSON, ~4 MB gzipped, so the user sends the JSON
+**compressed** as `.gz` or `.zip`. The bot auto-detects the container
+and decompresses **in-process**; an uncompressed file under 20 MB is
+also accepted as-is. Files Telegram refuses to hand over (over 20 MB)
+must be re-sent compressed.
 
 ## Export schema (verified against a real 41k-message export)
 
@@ -47,7 +74,17 @@ the historical data with zero changes to their own code.
 - Reactions are NOT in the export. Member roster is NOT in the export
   (only users who wrote or appear in a service event).
 
-## Rules
+## What it seeds
+
+A single import seeds **both** sinks from one pass:
+
+- the **membership table** (the `members` bucket the live tracker
+  writes) so `/cleanup` works on pre-bot history;
+- the **monthly statistics** (`internal/domain/monthstats`) so
+  `/stats month` reproduces the legacy per-calendar-month report for
+  pre-bot months.
+
+### Membership rules
 
 1. Only `type:"message"` with `from_id` matching `user<positive int>`
    becomes a member. Everything else is tallied as skipped.
@@ -60,9 +97,8 @@ the historical data with zero changes to their own code.
 4. Persisted via `MemberPatch{ KnownVia: SourceImport, Status: Member,
    LastMessageAt: maxTS, SetMessageCount: count, JoinedAt:
    joinedAt|minTS, Now: maxTS }`.
-5. `SetMessageCount` is applied as `max(existing, value)` - re-running
-   the same import is idempotent and never reduces a realtime count
-   accumulated since deploy.
+5. `SetMessageCount` is applied as `max(existing, value)` - never
+   reduces a realtime count accumulated since deploy.
 6. `Now = maxTS` so `LastSeenAt` reflects genuine last activity and the
    cleanup preview sorts by real staleness, not import time.
 7. The chat record's `InstalledAt` is set to the earliest observed
@@ -71,6 +107,39 @@ the historical data with zero changes to their own code.
 8. Live events (`SourceMessage` etc.) overwrite `SourceImport`:
    "observed for real" always beats "imported".
 
+### Monthly-stats rules
+
+Export rows pass through the same counting contract
+(`monthstats.ExtractSample`) the live message handler uses, so a
+chat's monthly numbers converge regardless of how the data arrived.
+Counting rules and the legacy deviations are documented in
+[30_stats.md](30_stats.md) ("Monthly statistics").
+
+## Idempotency
+
+Import is idempotent, so re-sending the same or an overlapping export
+never double-counts:
+
+- a per-chat **message-id high-water-mark** plus an **atomic state
+  write** (membership `SetMessageCount` is `max`-semantics;
+  `monthstats` skips rows with `id <= ImportHWM`);
+- date-sliced **multiple sends** are supported and accumulate
+  idempotently - export month-by-month and send each slice; overlap
+  is absorbed.
+
+The `monthstats` importer also skips rows with `ts >= LiveTrackStart`
+(when non-zero), so the live and import paths count every message
+exactly once. Full state-machine detail in
+[30_stats.md](30_stats.md) ("Idempotency").
+
+## No server access, no restart
+
+In-process import shares the bot's already-open bbolt handle, so there
+is **no flock conflict** - that flock conflict was the only reason the
+earlier standalone CLI required stopping the bot. There is no separate
+process, no server/CLI access, and no `docker compose stop` / restart
+in the import procedure.
+
 ## Ghost members (known gap)
 
 A user who is in the chat now but never wrote AND has no join event in
@@ -78,27 +147,6 @@ the exported range is invisible to this path. Enumerating them needs
 the MTProto User API (`channels.getParticipants`), which is out of
 scope here (phone+2FA, account-ban risk). Documented, not silently
 ignored.
-
-## Operational constraint
-
-bbolt holds an exclusive flock while the bot runs. A real import
-requires the bot stopped:
-
-```sh
-# Safe preview against the LIVE bot (never opens the DB):
-docker compose run --rm -v /path/result.json:/tmp/r.json bot \
-  bidlobot-import --json /tmp/r.json --chat-id -1009000002 --dry-run
-
-# Real import:
-docker compose stop bot
-docker compose run --rm -v /path/result.json:/tmp/r.json bot \
-  bidlobot-import --json /tmp/r.json --chat-id -1009000002
-docker compose start bot
-```
-
-`--chat-id` is mandatory (signed form) as a guard against importing an
-export into the wrong chat. `--dry-run` parses and reports without
-opening the DB, so it is safe while the bot is live.
 
 ## Operating model: privacy mode does NOT need disabling
 
@@ -111,7 +159,7 @@ Two valid models; pick by cadence, not by default:
 
 - **Periodic, import-driven (recommended; matches the historical
   ~3×/year `chat-rewind` cadence).** Keep privacy **ON**. Discipline:
-  fresh Desktop export -> `bidlobot-import` -> run `/cleanup`
+  fresh Desktop export -> DM `/import` -> run `/cleanup`
   *immediately*. A fresh export carries every writer's last message,
   so `LastMessageAt` is current at run time -> no false positives for
   writers. The bot must be **admin** so live `message_reaction`

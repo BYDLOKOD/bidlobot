@@ -20,11 +20,11 @@ func testLogger() *slog.Logger {
 // the store's) so it can also prove the additive contract directly.
 type memStore struct {
 	mu       sync.Mutex
-	meta     map[string]*MonthMeta        // key: chat|month
-	users    map[string]*MonthUserStat    // key: chat|month|uid
-	months   map[int64]map[string]bool    // chat -> set of months
-	state    map[int64]*MonthState        // chat -> state
-	summary  map[string]*MonthSummary     // key: chat|month
+	meta     map[string]*MonthMeta     // key: chat|month
+	users    map[string]*MonthUserStat // key: chat|month|uid
+	months   map[int64]map[string]bool // chat -> set of months
+	state    map[int64]*MonthState     // chat -> state
+	summary  map[string]*MonthSummary  // key: chat|month
 	flushErr error
 	flushCnt int
 }
@@ -39,7 +39,7 @@ func newMemStore() *memStore {
 	}
 }
 
-func cm(chat int64, month string) string  { return string(rune(chat)) + "|" + month }
+func cm(chat int64, month string) string { return string(rune(chat)) + "|" + month }
 func cmu(chat int64, m string, u int64) string {
 	return string(rune(chat)) + "|" + m + "|" + string(rune(u))
 }

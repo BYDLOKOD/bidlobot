@@ -186,7 +186,6 @@ func TestInlineResultsAreArticleType(t *testing.T) {
 	}
 }
 
-
 // Moderation verbs are DM-only now. Every one must return a single
 // redirect result, carry no action keyboard, and create NO pending
 // action - inline can never be a private control surface.

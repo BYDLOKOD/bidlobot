@@ -22,9 +22,9 @@ type stubQuizSender struct {
 	NextMessageID int
 	SendErr       error
 
-	Sent     []*telego.SendMessageParams
-	Edits    []*telego.EditMessageTextParams
-	Answers  []*telego.AnswerCallbackQueryParams
+	Sent    []*telego.SendMessageParams
+	Edits   []*telego.EditMessageTextParams
+	Answers []*telego.AnswerCallbackQueryParams
 }
 
 func (s *stubQuizSender) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {

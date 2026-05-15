@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	bktWarnings     = []byte("warnings")
+	bktWarnings      = []byte("warnings")
 	bktWarnsByTarget = []byte("warns_by_target")
 )
 

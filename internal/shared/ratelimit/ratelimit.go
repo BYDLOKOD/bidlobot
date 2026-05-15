@@ -32,19 +32,19 @@ var ErrLimiterClosed = errors.New("ratelimit: limiter closed")
 // build their own limiter with custom values without re-deriving the
 // numbers from the Telegram docs.
 const (
-	DefaultRate           = time.Second * 4    // one slot every 4 s -> 15/min
-	DefaultQueueCapacity  = 50                 // per chat
-	DefaultIdleTimeout    = 5 * time.Minute    // worker exit after idle
-	DefaultReaperInterval = 1 * time.Minute    // background sweep cadence
+	DefaultRate           = time.Second * 4 // one slot every 4 s -> 15/min
+	DefaultQueueCapacity  = 50              // per chat
+	DefaultIdleTimeout    = 5 * time.Minute // worker exit after idle
+	DefaultReaperInterval = 1 * time.Minute // background sweep cadence
 )
 
 // Limiter coordinates rate limiting for an arbitrary number of chats.
 // Safe for concurrent use. Zero value is not usable - create with [New].
 type Limiter struct {
-	rate         time.Duration
-	queueCap     int
-	idleTimeout  time.Duration
-	reaperEvery  time.Duration
+	rate        time.Duration
+	queueCap    int
+	idleTimeout time.Duration
+	reaperEvery time.Duration
 
 	mu      sync.Mutex
 	buckets map[int64]*chatBucket
@@ -243,13 +243,13 @@ func (r *request) deliver(err error) {
 type chatBucket struct {
 	chatID int64
 
-	mu              sync.Mutex
-	queue           []*request
-	signal          chan struct{} // buffered 1, used to wake the worker
-	workerRunning   bool
-	stop            chan struct{}
-	nextAllowedAt   time.Time
-	lastSeenAt      time.Time
+	mu            sync.Mutex
+	queue         []*request
+	signal        chan struct{} // buffered 1, used to wake the worker
+	workerRunning bool
+	stop          chan struct{}
+	nextAllowedAt time.Time
+	lastSeenAt    time.Time
 }
 
 // enqueueLocked appends r to the queue, evicting the oldest waiters with

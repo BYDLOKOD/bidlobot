@@ -7,6 +7,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -38,7 +39,13 @@ type StatsIncrementer interface {
 	Increment(userID, absChatID int64, ts time.Time)
 }
 
-func statsCountHandler(buffer StatsIncrementer) th.Handler {
+// MonthlyIncrementer is the monthstats live sink. nil-safe: a bot built
+// without the monthly engine still tracks lifetime stats.
+type MonthlyIncrementer interface {
+	Add(s monthstats.Sample)
+}
+
+func statsCountHandler(buffer StatsIncrementer, monthly MonthlyIncrementer) th.Handler {
 	return func(ctx *th.Context, update telego.Update) error {
 		msg := update.Message
 		if msg != nil && msg.From != nil && !msg.From.IsBot &&
@@ -49,14 +56,18 @@ func statsCountHandler(buffer StatsIncrementer) th.Handler {
 				storage.AbsChatID(msg.Chat.ID),
 				time.Unix(int64(msg.Date), 0),
 			)
+			if monthly != nil {
+				if s, ok := monthstats.ExtractSample(msg); ok {
+					monthly.Add(s)
+				}
+			}
 		}
 		return ctx.Next(update)
 	}
 }
 
+// hasContent delegates to monthstats.HasContent so the live exclusion
+// predicate has exactly one definition shared with the importer.
 func hasContent(msg *telego.Message) bool {
-	return msg.Text != "" || msg.Photo != nil || msg.Video != nil ||
-		msg.Document != nil || msg.Sticker != nil || msg.Voice != nil ||
-		msg.VideoNote != nil || msg.Audio != nil || msg.Animation != nil ||
-		msg.Poll != nil || msg.Location != nil || msg.Contact != nil
+	return monthstats.HasContent(msg)
 }

@@ -52,7 +52,18 @@ func registerRoutes(
 
 	sgGroup := bh.Group(supergroupPredicate(), notLinkedChannelPredicate())
 	sgGroup.Use(membershipMessageMiddleware(a.memberSvc, a.log))
-	sgGroup.Use(statsCountHandler(a.statsBuffer))
+	// Avoid the typed-nil-interface trap: a nil *monthstats.Buffer boxed
+	// into MonthlyIncrementer is a non-nil interface, so pass an untyped
+	// nil when the monthly engine is not wired (e.g. minimal test apps).
+	var monthly MonthlyIncrementer
+	if a.monthBuffer != nil {
+		monthly = a.monthBuffer
+	}
+	sgGroup.Use(statsCountHandler(a.statsBuffer, monthly))
+	// Runs after the passive observers (membership/stats see the original
+	// human message); it deletes+reposts a YouTube link carrying the si=
+	// share-tracking param. nil-tolerant against a minimal test App.
+	sgGroup.Use(youtubeSanitizer(a))
 
 	// Stats stays public: it is read-only, not chat management. Help
 	// stays public so members can discover the bot.

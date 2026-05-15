@@ -12,8 +12,7 @@ fixes, shipped and deployed to <deploy-host> (commit `be90a00`).
 
 Branch: `master`, pushed. `go test -race ./...` green (~250 tests,
 57.7% stmt). Image builds; ships `bidlobot` + `bidlobot-backup` +
-`bidlobot-probe` + `bidlobot-import`. Deployed container healthy,
-polling.
+`bidlobot-probe`. Deployed container healthy, polling.
 
 Load audit (30+ active users) found and fixed three hot-path defects
 (commit `be90a00`):
@@ -44,17 +43,24 @@ Architecture after the rework:
   Moderation never executes publicly.
 - **Inline** moderation verbs -> generic "use DM" hint, no pending
   (inline is not private; that premise was wrong).
-- **History bootstrap + cleanup operating model**: `cmd/bidlobot-import`
-  streams a Telegram Desktop "Export chat history" JSON into the members
-  bucket so `/cleanup` works on pre-bot history. Bot must be stopped for
-  a real import (bbolt lock); `--dry-run` is safe live. **Privacy mode
-  does NOT need disabling** - recommended model is periodic &
-  import-driven: keep `/setprivacy` ON, run "fresh export -> import ->
-  `/cleanup` immediately", keep the bot admin so reactions still flow.
-  Disable privacy only for continuous live message stats. Full rationale
-  + false-positive corner cases in `35_history_import.md` "Operating
-  model". `cleanup` is human-in-the-loop (preview+confirm +
-  ObservationWindow) precisely because import data is partial.
+- **History bootstrap + cleanup operating model**: in-process DM
+  `/import` (engine `internal/histimport`) streams a Telegram Desktop
+  "Export chat history" JSON into the members bucket *and* the monthly
+  stats so `/cleanup` and `/stats month` work on pre-bot history. No
+  server access, no bot restart: the import shares the bot's open bbolt
+  handle (no flock conflict - that was the only reason the removed
+  standalone CLI needed the bot stopped). Add bot as admin first, then
+  DM `/import` and send the export (zipped/gzipped if over ~20 MB - Bot
+  API download cap; ~31 MB raw / ~4 MB gz). Idempotent (per-chat
+  message-id high-water-mark + atomic state write), date-sliced sends
+  accumulate. **Privacy mode does NOT need disabling** - recommended
+  model is periodic & import-driven: keep `/setprivacy` ON, run "fresh
+  export -> `/import` -> `/cleanup` immediately", keep the bot admin so
+  reactions still flow. Disable privacy only for continuous live message
+  stats. Full rationale + false-positive corner cases in
+  `35_history_import.md` "Operating model". `cleanup` is
+  human-in-the-loop (preview+confirm + ObservationWindow) precisely
+  because import data is partial.
 - Onboarding message on bot promotion. All user copy Russian.
 
 ## What does NOT exist / known follow-ups
@@ -120,12 +126,11 @@ deployed test group + DM. Order:
 6. **Cleanup empty-state**: `/cleanup 6mo` on the fresh chat -> DM says
    "нет данных" with the import instructions (NOT "all active").
 7. **Import + cleanup**: export the group history (Telegram Desktop ->
-   ⋯ -> Export chat history -> JSON). On the server:
-   `docker compose stop bot`; `docker compose run --rm -v
-   /path/result.json:/tmp/r.json bot bidlobot-import --json /tmp/r.json
-   --chat-id -1009000002`; `docker compose start bot`. Then DM
-   `/cleanup 6mo` -> preview lists stale members -> tap ✅ -> progress
-   with a working ✕ Остановить button.
+   ⋯ -> Export chat history -> JSON). Compress it (`.gz`/`.zip`) if it
+   exceeds ~20 MB. In the DM with the bot send `/import`, then send the
+   export file (no server access, no restart). Then DM `/cleanup 6mo`
+   -> preview lists stale members -> tap ✅ -> progress with a working
+   ✕ Остановить button.
 8. **Games + cooldown**: `/dice` works; spam `/dice` 5× fast -> only
    the first lands (cooldown). `/stats top` in group works.
 9. **Health**: `docker inspect -f '{{.State.Health.Status}}'
@@ -144,7 +149,9 @@ deployed test group + DM. Order:
 1. Do NOT reintroduce public moderation commands or advertise them in
    `helpSupergroup` / `setCommands` group scope.
 2. Inline is NOT private - never route a destructive action through it.
-3. `bidlobot-import` needs the bot stopped (bbolt exclusive lock).
+3. History import is in-process via DM `/import` (shares the bot's
+   bbolt handle - no flock conflict). Do NOT reintroduce a standalone
+   import CLI or any "stop the bot to import" instruction.
 4. Cleanup Stop button must be registered (`cleanupRuns.start`) BEFORE
    the button is rendered.
 5. telego API method gotchas unchanged (see prior handoff history /

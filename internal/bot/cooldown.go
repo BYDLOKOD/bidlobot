@@ -18,8 +18,8 @@ import (
 // cooldown but keeps the map from growing for the process lifetime
 // (the bot is multi-chat; the key is global per user+command).
 const (
-	cooldownEvictAfter   = 10 * time.Minute
-	cooldownSweepEvery   = 5 * time.Minute
+	cooldownEvictAfter = 10 * time.Minute
+	cooldownSweepEvery = 5 * time.Minute
 )
 
 type cooldown struct {

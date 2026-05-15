@@ -10,7 +10,7 @@ bbolt database, long-polling. Ships as a docker-compose stack.
 | Statistics | `/stats`, `/stats top`, `/stats today`, `/stats @user` - public in the group (read-only) |
 | Moderation | **DM only.** Open a private chat with the bot, `/start`, pick the chat, then `/warn /warns /mute /unmute /ban /unban`. Members never see it. |
 | Inactive cleanup | DM: `/cleanup 6mo` -> preview -> confirm -> kick (ban + immediate unban), with a working Stop button |
-| History bootstrap | `bidlobot-import` seeds membership from a Telegram Desktop chat export so cleanup works on pre-bot history |
+| History bootstrap | DM `/import` + a Telegram Desktop chat export (zipped if over ~20 MB) seeds membership and monthly stats so cleanup and `/stats month` work on pre-bot history - in-process, no restart |
 | Mini-games | `/dice`, `/battle X Y`, `/quiz` (and `/quiz top`) - public, per-user cooldown |
 | Membership tracking | message + reaction observers; powers cleanup and stats |
 
@@ -88,8 +88,8 @@ go test -race ./...     # 14 test packages
 DM-console coverage (chat resolution, session, warn-private, ban
 confirm/apply, non-initiator reject, cleanup empty-vs-stale, parsers)
 in `internal/bot/dm_console_test.go`. Import parser + idempotency in
-`cmd/bidlobot-import/main_test.go`. Replay tests against recorded
-sessions in `internal/bot/replay_test.go`.
+`internal/histimport`. Replay tests against recorded sessions in
+`internal/bot/replay_test.go`.
 
 ## Layout
 
@@ -98,10 +98,11 @@ cmd/
   bidlobot/        production entrypoint
   bidlobot-backup/ online bbolt snapshot binary (used inside container)
   probe/           one-shot getMe (no polling, no side effects)
-  bidlobot-import/ Telegram Desktop chat-export -> membership bootstrap
 internal/
-  bot/             dm_console (moderation), routes, inline (read-only),
-                   cooldown, middleware, legacy dispatcher
+  bot/             dm_console (moderation + /import), routes, inline
+                   (read-only), cooldown, middleware, legacy dispatcher
+  histimport/      Telegram Desktop chat-export streaming parser +
+                   decompress -> membership + monthly-stats bootstrap
   domain/          membership / stats / moderation / cleanup / pending / dmsession
   games/           dice / battle / quiz
   shared/          admin cache, format, target resolve, telegram interface

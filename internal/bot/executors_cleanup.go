@@ -22,8 +22,9 @@ import (
 const previewListLimit = 15
 
 // CleanupExecutor implements the two-step cleanup callback flow:
-//   v1:preview:<id>  -> render the candidate list (cleanup.PreviewInactive)
-//   v1:apply:<id>    -> kick the candidates (cleanup.ExecuteCleanup, async)
+//
+//	v1:preview:<id>  -> render the candidate list (cleanup.PreviewInactive)
+//	v1:apply:<id>    -> kick the candidates (cleanup.ExecuteCleanup, async)
 type CleanupExecutor struct {
 	svc     *cleanup.Service
 	pending pending.Store
@@ -339,4 +340,3 @@ func cleanupConfirmKeyboard(id string) *telego.InlineKeyboardMarkup {
 func emptyKeyboard() *telego.InlineKeyboardMarkup {
 	return &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
 }
-

@@ -74,20 +74,20 @@ func (s *fakePendingStore) GarbageCollect(_ context.Context, _ time.Time) (int, 
 
 func TestParseCallbackData(t *testing.T) {
 	cases := []struct {
-		in        string
-		wantVerb  string
-		wantID    string
-		wantOK    bool
+		in       string
+		wantVerb string
+		wantID   string
+		wantOK   bool
 	}{
 		{"v1:apply:abc1234567890def", "apply", "abc1234567890def", true},
 		{"v1:cancel:xyz", "cancel", "xyz", true},
 		{"v1:preview:id", "preview", "id", true},
-		{"v2:apply:id", "", "", false},        // wrong namespace
-		{"apply:id", "", "", false},           // missing namespace
-		{"v1:apply", "", "", false},           // missing id
-		{"v1::id", "", "", false},             // empty verb
-		{"v1:apply:", "", "", false},          // empty id
-		{"", "", "", false},                   // empty
+		{"v2:apply:id", "", "", false}, // wrong namespace
+		{"apply:id", "", "", false},    // missing namespace
+		{"v1:apply", "", "", false},    // missing id
+		{"v1::id", "", "", false},      // empty verb
+		{"v1:apply:", "", "", false},   // empty id
+		{"", "", "", false},            // empty
 	}
 	for _, c := range cases {
 		verb, id, ok := parseCallbackData(c.in)
