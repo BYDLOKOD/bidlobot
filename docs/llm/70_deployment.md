@@ -84,6 +84,14 @@ Optional:
 - `RECORD_UPDATES` -- JSONL path inside the container; if set, every
   incoming update is appended for offline replay. Ship as a bind mount
   if you need to pull recordings from the host.
+- `GLM_API_KEY` -- enables the optional `/summarize` chat summarization
+  (Zhipu GLM, `open.bigmodel.cn`). Empty/unset disables the whole
+  feature; the bot starts normally and `/summarize` replies "not
+  configured" to admins. Needs a funded provider account (an empty
+  balance returns provider code 1113 and the admin sees a "top up"
+  message). `GLM_BASE_URL` / `GLM_MODEL` are optional overrides
+  (defaults: `https://open.bigmodel.cn/api/paas/v4` / `glm-5`). See
+  [45_summarize.md](45_summarize.md).
 
 ## First deploy
 
@@ -197,7 +205,13 @@ What never leaks into logs:
 
 - `TG_BOT_TOKEN` (telego's default replacer redacts; do not enable
   telego `WithDebug`, which prints raw payloads).
+- `GLM_API_KEY` -- the glm client logs only model / status / token
+  usage, never the key or the transcript.
 - Message text -- only `chat_id`, `user_id`, command, duration_ms.
+  (The `/summarize` feature *sends* recent message text to the external
+  GLM provider over TLS to produce the summary - see the privacy note
+  in [45_summarize.md](45_summarize.md) - but never writes it to disk
+  or logs.)
 
 What does:
 

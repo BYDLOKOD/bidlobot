@@ -18,6 +18,14 @@ type Config struct {
 	DBPath     string
 	HealthPort int    // 0 disables; -1 means "unset, use default"
 	LogLevel   string // debug|info|warn|error
+
+	// Optional GLM (Zhipu bigmodel.cn) summarization. Empty GLMAPIKey
+	// disables the feature entirely; the bot still starts. BaseURL/Model
+	// are overrides - empty means the glm package default
+	// (open.bigmodel.cn / glm-5).
+	GLMAPIKey  string
+	GLMBaseURL string
+	GLMModel   string
 }
 
 // loadConfig reads Config from environment without performing validation.
@@ -29,6 +37,9 @@ func loadConfig() Config {
 		DBPath:     envOr("DB_PATH", "./data"),
 		HealthPort: parseHealthPortRaw(os.Getenv("HEALTH_PORT")),
 		LogLevel:   envOr("LOG_LEVEL", "info"),
+		GLMAPIKey:  strings.TrimSpace(os.Getenv("GLM_API_KEY")),
+		GLMBaseURL: strings.TrimSpace(os.Getenv("GLM_BASE_URL")),
+		GLMModel:   strings.TrimSpace(os.Getenv("GLM_MODEL")),
 	}
 }
 

@@ -52,6 +52,29 @@ func dmCallbackPredicate() th.Predicate {
 	}
 }
 
+// textCommandPredicate matches a leading "/cmd" (optionally "@bot",
+// optional args) in Message.Text. telego's CommandEqual compiles to a
+// RE2 \w regex which is ASCII-only, so a Cyrillic command like "/итог"
+// never matches it; this fills that gap without relying on \w. cmd must
+// include the leading slash, e.g. "/итог".
+func textCommandPredicate(cmd string) th.Predicate {
+	return func(_ context.Context, update telego.Update) bool {
+		m := update.Message
+		if m == nil || m.Text == "" {
+			return false
+		}
+		f := strings.Fields(m.Text)
+		if len(f) == 0 {
+			return false
+		}
+		head := f[0]
+		if at := strings.IndexByte(head, '@'); at >= 0 {
+			head = head[:at]
+		}
+		return head == cmd
+	}
+}
+
 func notLinkedChannelPredicate() th.Predicate {
 	return func(_ context.Context, update telego.Update) bool {
 		if msg := update.Message; msg != nil {

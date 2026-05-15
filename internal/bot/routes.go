@@ -60,6 +60,13 @@ func registerRoutes(
 		monthly = a.monthBuffer
 	}
 	sgGroup.Use(statsCountHandler(a.statsBuffer, monthly))
+	// Passive RAM recorder for the optional summarization feature. Like
+	// the stats observer it must see the original human message, so it
+	// sits among the observers, before the YouTube sanitizer (which
+	// deletes+reposts). Wired only when the GLM feature is configured.
+	if a.summarize != nil {
+		sgGroup.Use(summarizeRecorder(a.summarize))
+	}
 	// Runs after the passive observers (membership/stats see the original
 	// human message); it deletes+reposts a YouTube link carrying the si=
 	// share-tracking param. nil-tolerant against a minimal test App.
@@ -69,6 +76,18 @@ func registerRoutes(
 	// stays public so members can discover the bot.
 	sgGroup.HandleMessage(a.gateMsg("stats", 5*time.Second, statsH.HandleStats), th.CommandEqual("stats"))
 	sgGroup.HandleMessage(a.handleHelpSupergroup, th.CommandEqual("help"))
+
+	// /summarize is admin-only (checked inside the handler) but read-only
+	// and not chat-management, so it stays a public command like /stats.
+	// Registered even when the feature is off so the slash menu stays
+	// honest - the handler replies "not configured" to admins. The
+	// Cyrillic /итог alias uses textCommandPredicate, NOT th.CommandEqual:
+	// the latter compiles to an ASCII-only RE2 \w regex that never
+	// matches Cyrillic. It is typed-only (setMyCommands also rejects
+	// non-ASCII names so it stays out of the menu). gateMsg shares one
+	// per-user cooldown key across both spellings.
+	sgGroup.HandleMessage(a.gateMsg("summarize", summarizeCooldown, a.handleSummarize), th.CommandEqual("summarize"))
+	sgGroup.HandleMessage(a.gateMsg("summarize", summarizeCooldown, a.handleSummarize), textCommandPredicate("/итог"))
 
 	// Any moderation verb typed in the group is intercepted: the public
 	// command is deleted (if the bot can) and the admin is redirected to
