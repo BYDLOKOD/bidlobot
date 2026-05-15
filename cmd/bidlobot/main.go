@@ -268,5 +268,9 @@ func (r *membershipDisplayResolver) UserDisplay(ctx context.Context, absChatID, 
 	if err != nil {
 		return ""
 	}
-	return shared.UserDisplay(m.Username, m.FirstName)
+	// Stats lists show name + @handle together. Import-only users have
+	// no @handle in the export data - they show just the name until
+	// they write live (live tracking then captures the username and
+	// SourceMessage overwrites SourceImport).
+	return shared.UserDisplayFull(m.Username, m.FirstName)
 }

@@ -85,7 +85,13 @@ Last seen: Today
 
 - Numbers: thousands separator comma (`12,847`)
 - Dates: `Mon DD, YYYY`. Today (UTC) -> `Today`
-- Users: `@username`. No username -> first_name
+- Users: `Name (@username)` when both are known; `@username` if no
+  name; the escaped name if no username. History imported from a
+  Telegram Desktop export has display names but **no usernames** (the
+  export carries none), so import-only users show just the name until
+  they write live - live tracking then captures the @handle and
+  `SourceMessage` overwrites `SourceImport`. (`shared.UserDisplayFull`;
+  output is HTML-safe, renderers must not re-escape it.)
 
 ## Monthly statistics (retroactive nominations)
 

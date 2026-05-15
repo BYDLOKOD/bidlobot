@@ -184,7 +184,9 @@ func (s *Service) section(ctx context.Context, b *strings.Builder, abs int64, ti
 	}
 	fmt.Fprintf(b, "\n<b>%s</b>\n", title)
 	for i, u := range top {
-		name := shared.EscapeHTML(s.displayFor(ctx, abs, u.UserID))
+		// displayFor output is already HTML-safe (resolver escapes the
+		// name; @handle is safe chars) - do NOT re-escape (double-escape).
+		name := s.displayFor(ctx, abs, u.UserID)
 		if withPct {
 			fmt.Fprintf(b, "%d. %s - %s (%d%%)\n", i+1, name,
 				shared.FormatNumber(metric(u)), pct(metric(u), total))
@@ -229,7 +231,7 @@ func (s *Service) render(ctx context.Context, abs int64, month string, meta *Mon
 		func(u MonthUserStat) int64 { return u.RuneCount }, meta.TotalRunes, true, false)
 
 	if meta.LongestRunes > 0 {
-		name := shared.EscapeHTML(s.displayFor(ctx, abs, meta.LongestUserID))
+		name := s.displayFor(ctx, abs, meta.LongestUserID) // already HTML-safe
 		ex := shared.EscapeHTML(meta.LongestExcerpt)
 		cut := ""
 		if !meta.LongestFull {
