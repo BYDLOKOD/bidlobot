@@ -6,8 +6,9 @@ kind: guide
 # Handoff: next session action plan
 
 Last updated: 2026-05-15, after the monthly-stats / mini-games /
-YouTube-si= / DM-import session. Branch `feat/monthly-stats-dm-import-games-yt`,
-**not yet merged to master, not yet deployed.** Base was `be90a00`.
+YouTube-si= / DM-import session. **Merged to `master` and deployed to
+prod (<deploy-host>) at commit `6942061`; container healthy, polling
+(`e2e_test_bot`).** Base was `be90a00`.
 
 ## Current state
 
@@ -36,7 +37,13 @@ Added this session:
   `/guess`, `/hangman`, `/duel`, `/trivia`.
 - **YouTube si= sanitizer**: repost-then-delete (failed repost keeps the
   original), host-scoped, media by file_id, reply fallback.
-- Stats display now `Name (@handle)` via `shared.UserDisplayFull`.
+- Stats display now `Name (@handle)` via `shared.UserDisplayFull`;
+  handle-less (import-only) users disambiguated by ` (id N)`.
+- **Cooldown UX** (commit `6942061`): over-frequency game/`/stats`/
+  `/summarize` commands now emit ONE bounded "slow down" notice per
+  window instead of a silent drop (`cooldown.gate`). Spec:
+  `50_telegram.md` (Rate limits). Spec for the games themselves:
+  `25_games.md`; the YouTube si= sanitizer: `55_youtube_sanitizer.md`.
 
 ## Known follow-ups / limitations (documented, not silent)
 
