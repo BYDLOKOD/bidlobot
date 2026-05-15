@@ -86,3 +86,55 @@ Last seen: Today
 - Numbers: thousands separator comma (`12,847`)
 - Dates: `Mon DD, YYYY`. Today (UTC) -> `Today`
 - Users: `@username`. No username -> first_name
+
+## Monthly statistics (retroactive nominations)
+
+A parallel engine (`internal/domain/monthstats`, bbolt buckets
+`stats_month` / `stats_month_idx` / `stats_month_state` /
+`stats_month_summary`) reproduces the legacy chat-export.org per-calendar-
+month report. It is independent of the lifetime `stats` model above (that
+stays unchanged): both the live message handler and the history importer
+feed the same additive per-(chat, "YYYY-MM", user) counters through one
+counting contract (`monthstats.ExtractSample`), so a chat's monthly
+numbers converge regardless of how the data arrived.
+
+**Counted dimensions per user per month:** message count, rune count
+(code points of text+caption), and entity-type tallies for
+`custom_emoji`, `code`, `mention`, `bot_command` (Bot API
+`MessageEntity.type`, identical vocabulary in the Telegram Desktop export
+`text_entities[].type`), plus a configurable keyword count (default regex
+`(?i)курсор|cursor`, the legacy "курсорист" meme). Per month a singleton
+tracks total messages, total runes, and the single longest message
+(author + excerpt truncated to 400 runes; ranking uses the true length).
+
+**Counting rules** match the live exclusion predicate exactly (non-bot,
+not anonymous admin, no `sender_chat`, has content). Documented legacy
+deviations: the "20+ messages" cohort uses the legacy code's strict `>20`;
+char length is Go rune (code-point) count, not Clojure UTF-16 length
+(differs only for astral characters in the longest-message ranking);
+percentages use integer truncation (`part*100/total`); leaderboards
+tie-break on earlier `first_seen` (deterministic, matches `/stats top`);
+entity/keyword nominations drop zero-score users, message/char boards do
+not (mirrors the legacy `remove zero?` placement).
+
+**Seal lifecycle & cache.** The in-progress month is rendered fresh from
+the DB+buffer merge on every call and never memoized. A past month is
+immutable (the 60s buffer has flushed; <=60s tail loss is the same
+tolerance the lifetime buffer documents) and its rendered HTML is
+memoized in `stats_month_summary`. A memoized summary is auto-invalidated
+when a later import advances `MonthState.UpdatedAt` past the summary's
+`BuiltAt`, or when `SummarySchemaVer` changes - no explicit cache-bust on
+re-import.
+
+**Idempotency.** `MonthState` holds a per-chat imported-message-id
+high-water-mark, a sealed-month set, and `LiveTrackStart` (the first live
+message ts for the chat, persisted by the buffer's first flush). The
+importer skips export rows with `id <= ImportHWM` and rows with
+`ts >= LiveTrackStart` **only when `LiveTrackStart` is non-zero** (a chat
+with no live data yet - e.g. the bot not added - imports everything), so
+every message is counted exactly once across the live and import paths.
+
+**Commands.** `/stats months` lists months with data (newest first);
+`/stats month [YYYY-MM]` renders one month's board (default: the newest
+complete month). Available on the public read-only `/stats` surface and
+the DM console, mirroring the existing `/stats` subcommands.

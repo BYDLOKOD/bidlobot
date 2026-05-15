@@ -26,6 +26,11 @@ var buckets = []string{
 	"dice_leaderboard",
 	"quiz_leaderboard",
 	"dm_sessions",
+	"stats_month",
+	"stats_month_idx",
+	"stats_month_state",
+	"stats_month_summary",
+	"import_states",
 }
 
 type BoltStore struct {
