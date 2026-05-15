@@ -34,13 +34,23 @@ import (
 	"github.com/veschin/bidlobot/internal/shared/retry"
 )
 
-// DefaultBaseURL is the bigmodel.cn OpenAI-compatible root (no trailing
-// slash). Override via GLM_BASE_URL to point at z.ai or a proxy.
+// DefaultBaseURL is the general pay-as-you-go OpenAI-compatible root
+// (no trailing slash) - the right fallback for a standard API key.
+//
+// A GLM *Coding Plan* subscription key does NOT work here: the general
+// endpoint has no resource package for it and returns provider code
+// 1113. Such keys must override GLM_BASE_URL with the coding endpoint
+// "https://api.z.ai/api/coding/paas/v4" (verified live this session
+// with glm-4.6). z.ai documents the coding endpoint as intended for
+// supported coding tools, so using it for an arbitrary bot is outside
+// its stated use - that is an operator/ToS decision, hence configurable
+// rather than hard-coded here.
 const DefaultBaseURL = "https://open.bigmodel.cn/api/paas/v4"
 
-// DefaultModel is the model id used when GLM_MODEL is unset. The exact
-// live id is confirmed by the smoke test in this session; configurable
-// because Zhipu rotates flagship ids (glm-5 / glm-5.1 / ...).
+// DefaultModel is used when GLM_MODEL is unset. Configurable because
+// Zhipu rotates flagship ids and the coding plan exposes a different
+// set (glm-4.6 / glm-4.7 / glm-5.1 / glm-4.5-air); glm-4.6 is the one
+// smoke-verified live this session.
 const DefaultModel = "glm-5"
 
 // Typed errors. The bot layer matches these with errors.Is to choose the

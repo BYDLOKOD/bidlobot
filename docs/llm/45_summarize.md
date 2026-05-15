@@ -74,10 +74,17 @@ transcript. Wired only when the feature is configured.
   context-length 400 as the hard backstop -> mapped to "lower N".
 - Provider: `internal/shared/glm`, OpenAI-compatible
   `POST {base}/chat/completions`, `Authorization: Bearer {id}.{secret}`
-  (no JWT - verified docs.bigmodel.cn, May 2026). Base/model
-  configurable; defaults `https://open.bigmodel.cn/api/paas/v4` /
-  `glm-5`. Retry: 429 once (Retry-After honored), 5xx bounded ladder;
-  retry tighter than Telegram's because each call is expensive.
+  (no JWT - verified docs.bigmodel.cn / z.ai, May 2026). Base/model
+  configurable. Two endpoint families, **the key type decides which**:
+  general pay-as-you-go `https://open.bigmodel.cn/api/paas/v4` (code
+  defaults, glm-5) vs a **GLM Coding Plan** subscription key, which
+  only works on the coding endpoint
+  `https://api.z.ai/api/coding/paas/v4` (glm-4.6 etc.) - the general
+  endpoint returns 1113 for it. The deployed key is a Coding Plan key;
+  `GLM_BASE_URL`/`GLM_MODEL` are set accordingly and a real completion
+  is **verified live** (glm-4.6, this session). Retry: 429 once
+  (Retry-After honored), 5xx bounded ladder; tighter than Telegram's
+  because each call is expensive.
 
 ## Output
 
@@ -106,10 +113,15 @@ discloses provenance: `- итог M сообщений (HH:MM-HH:MM UTC),
 | 5xx / empty / other | `ErrProvider`/`ErrEmpty` | временная ошибка |
 | empty window | `ErrNoMessages` | пока нечего суммировать |
 
-`ErrQuota` is distinct on purpose: bigmodel.cn returns out-of-funds as
-**HTTP 429**, indistinguishable from real throttling by status; treating
-it as transient ("try later") or retrying it would both be wrong. It is
-terminal and actionable - the operator must top up.
+`ErrQuota` is distinct on purpose: the provider returns "no resource
+package" (code 1113) as **HTTP 429**, indistinguishable from real
+throttling by status; treating it as transient ("try later") or
+retrying it would both be wrong - it is terminal and actionable. Note
+1113 has **two** causes: (a) a genuinely exhausted account/plan, or
+(b) a key pointed at the wrong endpoint family (a Coding Plan key on
+the general endpoint, or vice-versa). An operator hitting persistent
+1113 should first verify `GLM_BASE_URL` matches the key type before
+assuming the plan is empty.
 
 ## Privacy
 
@@ -129,8 +141,17 @@ key never logged. Operators should disclose this to their community.
    evicted. `Buffer.Update` exists for a future opt-in.
 3. **Anonymous admins cannot invoke** (no identifiable `From.ID`).
 4. **Times are UTC** in the transcript and footer (no per-chat tz).
-5. **Requires a funded provider account** - an empty balance yields the
-   `ErrQuota` path; the integration is otherwise verified end-to-end.
+5. **Verified end-to-end live** (glm-4.6 on the GLM Coding Plan
+   endpoint, this session - real completion returned). An earlier
+   "blocked by zero balance" reading was a **misdiagnosis**: the key is
+   a Coding Plan key and the general endpoint was being called, which
+   returns 1113. Correct config is in `GLM_BASE_URL`/`GLM_MODEL`.
+6. **Coding-endpoint ToS caveat.** z.ai documents
+   `api/coding/paas/v4` as for *supported coding tools*; driving it
+   from this bot is outside that intended use and per community reports
+   can risk the account. The ToS-clean alternative is a standard
+   pay-as-you-go key on the general endpoint (costs per token). Kept
+   configurable so the operator owns this choice.
 
 ## Config
 

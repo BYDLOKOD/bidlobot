@@ -85,12 +85,18 @@ Optional:
   incoming update is appended for offline replay. Ship as a bind mount
   if you need to pull recordings from the host.
 - `GLM_API_KEY` -- enables the optional `/summarize` chat summarization
-  (Zhipu GLM, `open.bigmodel.cn`). Empty/unset disables the whole
-  feature; the bot starts normally and `/summarize` replies "not
-  configured" to admins. Needs a funded provider account (an empty
-  balance returns provider code 1113 and the admin sees a "top up"
-  message). `GLM_BASE_URL` / `GLM_MODEL` are optional overrides
-  (defaults: `https://open.bigmodel.cn/api/paas/v4` / `glm-5`). See
+  (Zhipu GLM). Empty/unset disables the whole feature; the bot starts
+  normally and `/summarize` replies "not configured" to admins.
+  `GLM_BASE_URL`/`GLM_MODEL` overrides select the endpoint family:
+  defaults are the general pay-as-you-go
+  `https://open.bigmodel.cn/api/paas/v4` + `glm-5` (needs a funded
+  account); a **GLM Coding Plan** key instead requires
+  `GLM_BASE_URL=https://api.z.ai/api/coding/paas/v4` + e.g.
+  `GLM_MODEL=glm-4.6` (the general endpoint returns code 1113 for a
+  coding-plan key). Persistent 1113 = wrong endpoint for the key type
+  OR an exhausted plan - check `GLM_BASE_URL` first. The coding
+  endpoint is documented by z.ai as for supported coding tools; using
+  it for this bot is an operator/ToS decision. See
   [45_summarize.md](45_summarize.md).
 
 ## First deploy
