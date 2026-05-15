@@ -31,6 +31,7 @@ var buckets = []string{
 	"stats_month_state",
 	"stats_month_summary",
 	"import_states",
+	"gracekick",
 }
 
 type BoltStore struct {

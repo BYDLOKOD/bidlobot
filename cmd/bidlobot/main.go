@@ -17,6 +17,7 @@ import (
 
 	"github.com/veschin/bidlobot/internal/bot"
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
+	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
@@ -194,6 +195,29 @@ func main() {
 		log,
 	)
 	app.AttachDMConsole(dmConsole)
+
+	// Daily inactive lifecycle (tag -> grace -> kick). OFF unless the
+	// operator opts in: it is the only feature that posts publicly and
+	// removes members automatically. cleanupSvc is reused as both the
+	// evidence-graded previewer and the ban+unban kicker, so the daily
+	// path and manual /cleanup share one engine and one safety model
+	// (proven-stale only; the no-evidence bucket is never auto-touched).
+	if cfg.CleanupDailyEnabled {
+		gkRepo := storage.NewGraceKickRepo(db)
+		gkSvc := gracekick.NewService(
+			gkRepo, cleanupSvc, cleanupSvc, memberRepo, tgClient,
+			gracekick.Config{
+				Threshold: cfg.CleanupThreshold,
+				Grace:     cfg.CleanupGrace,
+				Batch:     cfg.CleanupDailyBatch,
+			},
+			log,
+		)
+		app.AttachDailyCleanup(gkSvc, cfg.CleanupDailyAtMin)
+		log.Info("daily inactive cleanup ENABLED",
+			"at_utc", cfg.CleanupDailyAtRaw, "threshold", cfg.CleanupThresholdRaw,
+			"grace", cfg.CleanupGraceRaw, "batch", cfg.CleanupDailyBatch)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

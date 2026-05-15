@@ -176,8 +176,10 @@ func TestCleanupPreviewEmpty(t *testing.T) {
 func TestCleanupPreviewWithCandidates(t *testing.T) {
 	now := time.Now().UTC()
 	members := []membership.Member{
-		{UserID: 200, AbsChatID: 100, Status: membership.StatusMember, Username: "ghost"},
-		{UserID: 300, AbsChatID: 100, Status: membership.StatusMember, Username: "lurker", LastSeenAt: now.Add(-200 * 24 * time.Hour)},
+		{UserID: 200, AbsChatID: 100, Status: membership.StatusMember, Username: "ghost",
+			LastMessageAt: now.Add(-150 * 24 * time.Hour), LastSeenAt: now.Add(-150 * 24 * time.Hour)},
+		{UserID: 300, AbsChatID: 100, Status: membership.StatusMember, Username: "lurker",
+			LastMessageAt: now.Add(-200 * 24 * time.Hour), LastSeenAt: now.Add(-200 * 24 * time.Hour)},
 	}
 	exec, _, pendingStore := newCleanupExec(t, members)
 	action := &pending.Action{
@@ -217,7 +219,8 @@ func TestCleanupPreviewCapsListLength(t *testing.T) {
 	for i := int64(1); i <= 50; i++ {
 		members = append(members, membership.Member{
 			UserID: i, AbsChatID: 100, Status: membership.StatusMember,
-			LastSeenAt: now.Add(time.Duration(-i) * 24 * time.Hour),
+			LastMessageAt: now.Add(-time.Duration(60+i) * 24 * time.Hour),
+			LastSeenAt:    now.Add(-time.Duration(60+i) * 24 * time.Hour),
 		})
 	}
 	exec, _, pendingStore := newCleanupExec(t, members)
@@ -254,8 +257,10 @@ func TestCleanupApplyEmptyCandidates(t *testing.T) {
 func TestCleanupApplyStartsWorker(t *testing.T) {
 	now := time.Now().UTC()
 	members := []membership.Member{
-		{UserID: 200, AbsChatID: 100, Status: membership.StatusMember, Username: "ghost"},
-		{UserID: 300, AbsChatID: 100, Status: membership.StatusMember, Username: "lurker"},
+		{UserID: 200, AbsChatID: 100, Status: membership.StatusMember, Username: "ghost",
+			LastMessageAt: now.Add(-100 * 24 * time.Hour), LastSeenAt: now.Add(-100 * 24 * time.Hour)},
+		{UserID: 300, AbsChatID: 100, Status: membership.StatusMember, Username: "lurker",
+			LastMessageAt: now.Add(-120 * 24 * time.Hour), LastSeenAt: now.Add(-120 * 24 * time.Hour)},
 	}
 	exec, editor, pendingStore := newCleanupExec(t, members)
 	action := &pending.Action{
@@ -360,6 +365,8 @@ func TestCleanupWorkerHonoursAppContextCancel(t *testing.T) {
 	for i := int64(1); i <= 20; i++ {
 		members = append(members, membership.Member{
 			UserID: i, AbsChatID: 100, Status: membership.StatusMember,
+			LastMessageAt: now.Add(-time.Duration(60+i) * 24 * time.Hour),
+			LastSeenAt:    now.Add(-time.Duration(60+i) * 24 * time.Hour),
 		})
 	}
 	exec, editor, pendingStore := newCleanupExec(t, members)

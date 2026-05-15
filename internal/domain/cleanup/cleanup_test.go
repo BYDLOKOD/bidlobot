@@ -146,7 +146,10 @@ func TestPreviewRejectsHugeThreshold(t *testing.T) {
 	}
 }
 
-func TestPreviewIncludesNeverActiveMembers(t *testing.T) {
+// Never-observed members are a DATA GAP, not proven inactivity: they must
+// land in NoEvidence, never in the actionable Candidates list. This is
+// the core of the "/cleanup kicks people it never saw" bug fix.
+func TestPreviewNeverObservedGoToNoEvidenceNotCandidates(t *testing.T) {
 	svc, store := newSvc(t, testutil.NewMockAPI())
 	store.put(membership.Member{UserID: 111, AbsChatID: 100, Status: membership.StatusMember})
 	store.put(membership.Member{UserID: 222, AbsChatID: 100, Status: membership.StatusMember})
@@ -155,8 +158,11 @@ func TestPreviewIncludesNeverActiveMembers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Candidates) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(preview.Candidates))
+	if len(preview.Candidates) != 0 {
+		t.Fatalf("never-observed members must NOT be kick candidates, got %d", len(preview.Candidates))
+	}
+	if len(preview.NoEvidence) != 2 {
+		t.Fatalf("expected 2 NoEvidence members, got %d", len(preview.NoEvidence))
 	}
 	if preview.KnownMembers != 2 {
 		t.Fatalf("KnownMembers should be 2, got %d", preview.KnownMembers)
@@ -176,6 +182,9 @@ func TestPreviewExcludesActiveMembers(t *testing.T) {
 	if len(preview.Candidates) != 0 {
 		t.Fatalf("active members must not be candidates, got %d", len(preview.Candidates))
 	}
+	if len(preview.NoEvidence) != 0 {
+		t.Fatalf("active members must not be NoEvidence either, got %d", len(preview.NoEvidence))
+	}
 }
 
 func TestPreviewExcludesAdminsAndBotsAndKicked(t *testing.T) {
@@ -185,14 +194,21 @@ func TestPreviewExcludesAdminsAndBotsAndKicked(t *testing.T) {
 	store.put(membership.Member{UserID: 3, AbsChatID: 100, Status: membership.StatusMember, IsBot: true})
 	store.put(membership.Member{UserID: 4, AbsChatID: 100, Status: membership.StatusKicked})
 	store.put(membership.Member{UserID: 5, AbsChatID: 100, Status: membership.StatusLeft})
-	store.put(membership.Member{UserID: 6, AbsChatID: 100, Status: membership.StatusMember}) // the only candidate
+	now := time.Now().UTC()
+	// User 6: a real member who DID write, but long ago -> proven stale,
+	// the only legitimate kick candidate here.
+	store.put(membership.Member{UserID: 6, AbsChatID: 100, Status: membership.StatusMember,
+		LastMessageAt: now.Add(-100 * 24 * time.Hour), LastSeenAt: now.Add(-100 * 24 * time.Hour)})
 
-	preview, err := svc.PreviewInactive(context.Background(), 100, 30*24*time.Hour, time.Now())
+	preview, err := svc.PreviewInactive(context.Background(), 100, 30*24*time.Hour, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(preview.Candidates) != 1 || preview.Candidates[0].UserID != 6 {
-		t.Fatalf("expected only user 6, got %+v", preview.Candidates)
+		t.Fatalf("expected only user 6 as candidate, got %+v", preview.Candidates)
+	}
+	if len(preview.NoEvidence) != 0 {
+		t.Fatalf("admins/bots/kicked/left must be excluded entirely, NoEvidence=%+v", preview.NoEvidence)
 	}
 }
 
@@ -203,17 +219,19 @@ func TestPreviewExcludesAnonymousAdminID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Candidates) != 0 {
-		t.Fatalf("anonymous admin must never be a candidate")
+	if len(preview.Candidates) != 0 || len(preview.NoEvidence) != 0 {
+		t.Fatalf("anonymous admin must never appear in any list")
 	}
 }
 
 func TestPreviewSortsLeastRecentlySeenFirst(t *testing.T) {
 	svc, store := newSvc(t, testutil.NewMockAPI())
 	now := time.Now().UTC()
-	store.put(membership.Member{UserID: 1, AbsChatID: 100, Status: membership.StatusMember, LastSeenAt: now.Add(-100 * 24 * time.Hour)})
-	store.put(membership.Member{UserID: 2, AbsChatID: 100, Status: membership.StatusMember, LastSeenAt: now.Add(-300 * 24 * time.Hour)})
-	store.put(membership.Member{UserID: 3, AbsChatID: 100, Status: membership.StatusMember, LastSeenAt: now.Add(-200 * 24 * time.Hour)})
+	// All three DID write (real evidence) but long ago -> stale
+	// candidates; LastSeenAt drives the "most stale first" order.
+	store.put(membership.Member{UserID: 1, AbsChatID: 100, Status: membership.StatusMember, LastMessageAt: now.Add(-100 * 24 * time.Hour), LastSeenAt: now.Add(-100 * 24 * time.Hour)})
+	store.put(membership.Member{UserID: 2, AbsChatID: 100, Status: membership.StatusMember, LastMessageAt: now.Add(-300 * 24 * time.Hour), LastSeenAt: now.Add(-300 * 24 * time.Hour)})
+	store.put(membership.Member{UserID: 3, AbsChatID: 100, Status: membership.StatusMember, LastMessageAt: now.Add(-200 * 24 * time.Hour), LastSeenAt: now.Add(-200 * 24 * time.Hour)})
 
 	preview, err := svc.PreviewInactive(context.Background(), 100, 30*24*time.Hour, now)
 	if err != nil {
@@ -399,3 +417,176 @@ func (f *fakeBanFailureAPI) BanChatMember(_ context.Context, _ *telego.BanChatMe
 }
 
 func (f *fakeBanFailureAPI) String() string { return fmt.Sprintf("fake api err=%v", f.banErr) }
+
+// --- evidence grading + window honesty ----------------------------------
+
+func TestPreviewObservedButStaleIsCandidate(t *testing.T) {
+	svc, store := newSvc(t, testutil.NewMockAPI())
+	now := time.Now().UTC()
+	store.put(membership.Member{UserID: 7, AbsChatID: 100, Status: membership.StatusMember,
+		LastMessageAt: now.Add(-90 * 24 * time.Hour), LastSeenAt: now.Add(-90 * 24 * time.Hour)})
+
+	p, err := svc.PreviewInactive(context.Background(), 100, 30*24*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Candidates) != 1 || p.Candidates[0].UserID != 7 {
+		t.Fatalf("a member who wrote before the cutoff is a proven candidate, got %+v", p.Candidates)
+	}
+	if len(p.NoEvidence) != 0 {
+		t.Fatalf("observed member must not be NoEvidence, got %+v", p.NoEvidence)
+	}
+}
+
+func TestPreviewReactionOnlyBeforeCutoffIsStaleNotNoEvidence(t *testing.T) {
+	svc, store := newSvc(t, testutil.NewMockAPI())
+	now := time.Now().UTC()
+	store.put(membership.Member{UserID: 8, AbsChatID: 100, Status: membership.StatusMember,
+		LastReactionAt: now.Add(-90 * 24 * time.Hour), ReactionCount: 3})
+
+	p, err := svc.PreviewInactive(context.Background(), 100, 30*24*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Candidates) != 1 || len(p.NoEvidence) != 0 {
+		t.Fatalf("an observed reaction is real evidence: want 1 candidate / 0 noev, got %d / %d",
+			len(p.Candidates), len(p.NoEvidence))
+	}
+}
+
+func TestPreviewThresholdExceedsWindowFlag(t *testing.T) {
+	svc, store := newSvc(t, testutil.NewMockAPI())
+	now := time.Now().UTC()
+	_ = store.UpsertChat(context.Background(), membership.Chat{
+		AbsChatID: 100, InstalledAt: now.Add(-100 * 24 * time.Hour),
+	})
+
+	over, err := svc.PreviewInactive(context.Background(), 100, 200*24*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !over.ThresholdExceedsWindow {
+		t.Fatal("threshold 200d with a 100d window must set ThresholdExceedsWindow")
+	}
+
+	within, err := svc.PreviewInactive(context.Background(), 100, 50*24*time.Hour, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if within.ThresholdExceedsWindow {
+		t.Fatal("threshold 50d with a 100d window must NOT set ThresholdExceedsWindow")
+	}
+}
+
+// --- ResolveIdentities --------------------------------------------------
+
+func TestResolveIdentitiesFillsNameViaAPI(t *testing.T) {
+	api := testutil.NewMockAPI()
+	svc, _ := newSvc(t, api)
+	api.ChatMemberUsers["100:111"] = telego.User{FirstName: "Алиса", Username: "alice"}
+
+	got := svc.ResolveIdentities(context.Background(), 100,
+		[]membership.Member{{UserID: 111, AbsChatID: 100}}, 15)
+
+	if len(got) != 1 {
+		t.Fatalf("want 1 resolved, got %d", len(got))
+	}
+	r := got[0]
+	if !r.Resolved || !r.Present || r.Protected {
+		t.Fatalf("want resolved+present+unprotected, got %+v", r)
+	}
+	if r.Username != "alice" || r.FirstName != "Алиса" {
+		t.Fatalf("identity not filled from API: %+v", r)
+	}
+	if api.CallCount("GetChatMember") != 1 {
+		t.Fatalf("expected exactly one getChatMember, got %d", api.CallCount("GetChatMember"))
+	}
+}
+
+func TestResolveIdentitiesSkipsAPIWhenAlreadyNamed(t *testing.T) {
+	api := testutil.NewMockAPI()
+	svc, _ := newSvc(t, api)
+
+	got := svc.ResolveIdentities(context.Background(), 100,
+		[]membership.Member{{UserID: 222, AbsChatID: 100, FirstName: "Боб"}}, 15)
+
+	if !got[0].Resolved || got[0].FirstName != "Боб" {
+		t.Fatalf("stored name must be kept, got %+v", got[0])
+	}
+	if api.CallCount("GetChatMember") != 0 {
+		t.Fatalf("a named member must not trigger an API call, got %d", api.CallCount("GetChatMember"))
+	}
+}
+
+func TestResolveIdentitiesMarksLeftAndProtected(t *testing.T) {
+	api := testutil.NewMockAPI()
+	svc, _ := newSvc(t, api)
+	api.ChatMembers["100:1"] = "left"
+	api.ChatMembers["100:2"] = "administrator"
+	api.ChatMemberUsers["100:2"] = telego.User{FirstName: "Админ"}
+	api.ChatMemberUsers["100:3"] = telego.User{FirstName: "Ботик", IsBot: true}
+
+	got := svc.ResolveIdentities(context.Background(), 100, []membership.Member{
+		{UserID: 1, AbsChatID: 100},
+		{UserID: 2, AbsChatID: 100},
+		{UserID: 3, AbsChatID: 100},
+	}, 15)
+
+	if got[0].Present {
+		t.Fatal("a member reported left must have Present=false")
+	}
+	if !got[1].Protected {
+		t.Fatal("an administrator must be Protected")
+	}
+	if !got[2].Protected {
+		t.Fatal("a bot must be Protected")
+	}
+}
+
+func TestResolveIdentitiesUnresolvedOnErrorIsKeptNotDropped(t *testing.T) {
+	api := testutil.NewMockAPI()
+	svc, _ := newSvc(t, api)
+	api.ChatMemberErrs["100:111"] = errors.New("user not found / bot cannot see")
+
+	got := svc.ResolveIdentities(context.Background(), 100,
+		[]membership.Member{{UserID: 111, AbsChatID: 100}}, 15)
+
+	if len(got) != 1 {
+		t.Fatalf("an unresolved member must be kept for honest display, got %d", len(got))
+	}
+	if got[0].Resolved || got[0].Present {
+		t.Fatalf("a failed lookup must be Resolved=false Present=false, got %+v", got[0])
+	}
+	if got[0].UserID != 111 {
+		t.Fatalf("identity must survive so the renderer can show the id, got %+v", got[0])
+	}
+}
+
+func TestResolveIdentitiesRespectsAPICap(t *testing.T) {
+	api := testutil.NewMockAPI()
+	svc, _ := newSvc(t, api)
+	for _, id := range []int64{111, 222, 333} {
+		api.ChatMemberUsers[chatKey(id)] = telego.User{FirstName: "U"}
+	}
+
+	got := svc.ResolveIdentities(context.Background(), 100, []membership.Member{
+		{UserID: 111, AbsChatID: 100},
+		{UserID: 222, AbsChatID: 100},
+		{UserID: 333, AbsChatID: 100},
+	}, 1)
+
+	if api.CallCount("GetChatMember") != 1 {
+		t.Fatalf("cap=1 must allow exactly one API call, got %d", api.CallCount("GetChatMember"))
+	}
+	if !got[0].Resolved {
+		t.Fatalf("first (within cap) must resolve, got %+v", got[0])
+	}
+	if got[1].Resolved || got[2].Resolved {
+		t.Fatalf("beyond-cap members must stay unresolved (honest), got %+v / %+v", got[1], got[2])
+	}
+	if len(got) != 3 {
+		t.Fatalf("all members must be returned regardless of cap, got %d", len(got))
+	}
+}
+
+func chatKey(userID int64) string { return fmt.Sprintf("100:%d", userID) }

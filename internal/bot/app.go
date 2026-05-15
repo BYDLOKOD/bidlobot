@@ -11,6 +11,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
@@ -55,6 +56,13 @@ type App struct {
 	// HEALTH_PORT is set to 0.
 	healthCheck  *healthChecker
 	healthServer *HealthServer
+
+	// dailyCleanup is the opt-in daily tag->grace->kick lifecycle. nil
+	// (the default) means the feature is off and nothing public ever
+	// happens. dailyAtMinUTC is minutes past 00:00 UTC at which the run
+	// fires.
+	dailyCleanup  *gracekick.Service
+	dailyAtMinUTC int
 }
 
 // InFlight exposes the WaitGroup for executors that need to register
@@ -201,6 +209,16 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	if a.pendingGC != nil {
 		go a.runPendingGC(ctx, time.Minute)
 	}
+	if a.dailyCleanup != nil {
+		// Tracked in inFlight: this worker kicks members and writes bbolt,
+		// so Stop() must wait for an in-flight tick to unwind (it aborts
+		// promptly on ctx cancel) BEFORE main closes the DB.
+		a.inFlight.Add(1)
+		go func() {
+			defer a.inFlight.Done()
+			a.runDailyCleanup(ctx)
+		}()
+	}
 
 	if a.healthServer != nil {
 		a.healthServer.Start()
@@ -250,6 +268,87 @@ func (a *App) runPendingGC(ctx context.Context, interval time.Duration) {
 			}
 		}
 	}
+}
+
+// AttachDailyCleanup enables the opt-in daily tag->grace->kick lifecycle.
+// atMinUTC is minutes past 00:00 UTC at which it fires (e.g. 600 = 10:00
+// UTC). Must be called before Run; a nil svc leaves the feature off.
+func (a *App) AttachDailyCleanup(svc *gracekick.Service, atMinUTC int) {
+	a.dailyCleanup = svc
+	if atMinUTC < 0 || atMinUTC >= 24*60 {
+		atMinUTC = 600
+	}
+	a.dailyAtMinUTC = atMinUTC
+}
+
+// runDailyCleanup fires once per day at dailyAtMinUTC. Each tick walks
+// every chat the bot administers WITH restrict rights and runs the
+// gracekick lifecycle there. One chat's failure is logged and never
+// aborts the rest. The loop exits promptly on ctx cancel; an in-flight
+// kick batch stops between kicks (cleanup.ExecuteCleanup selects on ctx).
+//
+// Restart safety: nextRun returns tomorrow's slot whenever "now" is
+// already past today's slot, so a restart after the daily time does not
+// re-fire today. A restart in the narrow window around the slot may run
+// twice; the lifecycle absorbs it (the sweep only acts past a deadline,
+// the tag phase skips members already holding a ticket and is batch
+// capped), so a duplicate run tags at most a few extra fresh members.
+func (a *App) runDailyCleanup(ctx context.Context) {
+	for {
+		now := time.Now().UTC()
+		next := nextDailyRun(now, a.dailyAtMinUTC)
+		timer := time.NewTimer(next.Sub(now))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+
+		chats, err := a.memberSvc.Store().ListChats(ctx)
+		if err != nil {
+			a.log.Warn("daily cleanup: list chats failed", "error", err)
+			continue
+		}
+		runAt := time.Now().UTC()
+		ran := 0
+		for _, c := range chats {
+			if c.BotStatus != membership.StatusAdministrator || !c.CanRestrict {
+				continue // cannot kick here - never tag what we cannot enforce
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			sum, rerr := a.dailyCleanup.RunDaily(ctx, c.AbsChatID, runAt)
+			if rerr != nil {
+				a.log.Warn("daily cleanup: chat run failed",
+					"chat", c.AbsChatID, "error", rerr)
+				continue
+			}
+			ran++
+			if sum.Tagged > 0 || sum.Kicked > 0 || sum.Saved > 0 {
+				a.log.Info("daily cleanup ran",
+					"chat", c.AbsChatID, "tagged", sum.Tagged,
+					"kicked", sum.Kicked, "saved", sum.Saved, "failed", sum.Failed)
+			}
+		}
+		a.log.Info("daily cleanup tick complete", "chats_processed", ran)
+	}
+}
+
+// nextDailyRun returns the next UTC instant at atMin minutes past
+// midnight that is strictly after now (today's slot if still ahead, else
+// tomorrow's).
+func nextDailyRun(now time.Time, atMin int) time.Time {
+	now = now.UTC()
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
+	run := midnight.Add(time.Duration(atMin) * time.Minute)
+	if !run.After(now) {
+		run = run.Add(24 * time.Hour)
+	}
+	return run
 }
 
 // Stop runs the shutdown sequence:

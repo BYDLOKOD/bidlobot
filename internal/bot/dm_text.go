@@ -118,17 +118,53 @@ const (
 		"После импорта снова отправьте /cleanup."
 
 	// %d = known members
-	msgDMCleanupNoneActive = "Кандидатов на чистку нет: все %d известных боту участников активны в заданном окне."
+	msgDMCleanupNoneActive = "Чистить некого: все %d наблюдаемых ботом участников активны за заданный период."
 
-	// %d = candidates, %d = known members
-	msgDMCleanupHeader = "Кандидатов на чистку: <b>%d</b> из %d известных боту участников."
+	// Shown when there are no proven-inactive members, but some members
+	// have zero recorded activity (a data gap, not silence). %d = count
+	// of such members.
+	msgDMCleanupOnlyNoEv = "🧹 <b>Чистка неактивных</b>\n\n" +
+		"Доказанных молчунов нет. Но у <b>%d</b> участников бот не видел " +
+		"ни одного сообщения или реакции - это <i>отсутствие данных</i>, " +
+		"а не доказательство неактивности. Их нельзя кикать вслепую:"
 
-	// %d = days
-	msgDMCleanupWindow = "Окно наблюдения: данные примерно за %d дней."
+	// %d = threshold (human), %d = known members
+	msgDMCleanupHeader = "🧹 <b>Чистка неактивных</b>\n\n" +
+		"Период: <b>%s</b>\nИзвестно боту участников: <b>%d</b>"
 
-	msgDMCleanupNoReactionNote = "Реакций нет в экспорте - те, кто только ставил реакции в прошлом, " +
-		"могут попасть в список; живое отслеживание реакций после импорта это исправит. " +
-		"Проверьте список перед подтверждением."
+	// %s = install date (human), %s = window (human)
+	msgDMCleanupWindow = "Данные бот видит с %s (~%s)."
+
+	// Loud warning: requested period is longer than the data window, so
+	// "no activity" really means "no data". %s = period, %s = window.
+	msgDMCleanupWindowWarn = "⚠️ <b>Запрошено %s, а данных только за ~%s.</b> " +
+		"Кто был активен <i>до</i> начала данных, выглядит молчуном по ошибке. " +
+		"Раздел [активность не зафиксирована] ниже - это НЕ доказанные молчуны."
+
+	// Loud warning: the bot has no recorded install/earliest-data date.
+	msgDMCleanupNoInstallWarn = "⚠️ <b>Бот не помнит, с какой даты у него данные по этому чату.</b> " +
+		"Окно наблюдения неизвестно, список ненадёжен - проверяйте вручную."
+
+	// %d = count
+	msgDMCleanupStaleHeader = "\n\n<b>Молчат давно</b> (%d) - последняя активность раньше периода:"
+
+	// %d = count
+	msgDMCleanupNoEvHeader = "\n\n<b>Активность не зафиксирована</b> (%d) - бот ни разу не " +
+		"видел их сообщений или реакций (вступили до начала данных или только читают). " +
+		"<b>В авто-кик не войдут</b>, проверьте вручную:"
+
+	msgDMCleanupExportNote = "\n\nℹ️ В экспорте Telegram нет реакций и нет @username. " +
+		"Имена и теги бот подтягивает живым запросом; кто молчал, но ставит реакции, " +
+		"после добавления бота админом перестанет попадать в список."
+
+	// %d = stale count that the confirm will actually kick
+	msgDMCleanupConfirmFooter = "\n\nКнопка кикнет <b>только</b> список [молчат давно] (%d). " +
+		"Подтвердить может только инициатор."
+
+	// Shown instead of a confirm when nothing is safe to auto-kick.
+	msgDMCleanupReviewOnly = "\n\nℹ️ Кикать автоматически нечего - " +
+		"эти участники требуют ручной проверки. Для надёжного списка " +
+		"загрузите свежий экспорт через /import и повторите."
 
 	msgDMCleanupNothingLeft = "Кандидатов не осталось - возможно, данные изменились."
 

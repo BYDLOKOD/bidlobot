@@ -228,6 +228,11 @@ func renderPreviewBody(p *cleanup.Preview) string {
 	}
 
 	b.WriteString("\n<b>Учитываются:</b> и сообщения, и реакции. Кто хотя бы раз поставил реакцию за период - в списке нет.\n")
+	if n := len(p.NoEvidence); n > 0 {
+		fmt.Fprintf(&b, "\nЕщё <b>%d</b> участников без единой зафиксированной активности - "+
+			"это пробел в данных (вступили до начала наблюдения / только читают), "+
+			"а не доказанные молчуны. В кик не войдут.\n", n)
+	}
 	b.WriteString("\n<i>Подтвердить кик может только инициатор.</i>")
 	return b.String()
 }
@@ -235,8 +240,17 @@ func renderPreviewBody(p *cleanup.Preview) string {
 func renderEmptyPreview(p *cleanup.Preview) string {
 	var b strings.Builder
 	b.WriteString("<b>Кандидатов на чистку нет.</b>\n\n")
-	fmt.Fprintf(&b, "Все %d известных боту участников активны за %s.\n",
-		p.KnownMembers, formatDuration(p.Threshold))
+	if n := len(p.NoEvidence); n > 0 {
+		// Do not claim "everyone is active" when the only thing we found
+		// is a data gap - that was the empty-state lie.
+		fmt.Fprintf(&b, "Доказанных молчунов нет, но у <b>%d</b> участников "+
+			"бот не видел ни одного сообщения или реакции. Это отсутствие "+
+			"данных, а не активность - проверьте вручную или загрузите "+
+			"свежий экспорт через /import.\n", n)
+	} else {
+		fmt.Fprintf(&b, "Все %d известных боту участников активны за %s.\n",
+			p.KnownMembers, formatDuration(p.Threshold))
+	}
 	if !p.InstalledAt.IsZero() {
 		fmt.Fprintf(&b, "Бот наблюдает чат с %s.", p.InstalledAt.Format("2 January 2006"))
 	}

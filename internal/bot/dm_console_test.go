@@ -279,8 +279,8 @@ func TestDMCleanupListsStaleCandidate(t *testing.T) {
 	e.dmMsg("/start")
 	e.dmMsg("/cleanup 6mo")
 	got := e.snd.lastSendText()
-	if !strings.Contains(got, "Кандидатов на чистку") || !strings.Contains(got, "ghost") {
-		t.Fatalf("stale member must be listed as candidate, got: %q", got)
+	if !strings.Contains(got, "Молчат давно") || !strings.Contains(got, "ghost") {
+		t.Fatalf("stale member must be listed under the proven-inactive section, got: %q", got)
 	}
 }
 

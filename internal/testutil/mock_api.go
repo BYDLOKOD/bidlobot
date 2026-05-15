@@ -26,19 +26,23 @@ type MockAPI struct {
 	Messages []SentMessage
 	Calls    []APICall
 
-	AdminIDs       map[int64][]int64
-	BotCanRestrict bool
-	ChatMembers    map[string]string // "chatID:userID" -> status
-	ChatPerms      *telego.ChatPermissions
-	BotInfo        *telego.User
+	AdminIDs        map[int64][]int64
+	BotCanRestrict  bool
+	ChatMembers     map[string]string      // "chatID:userID" -> status
+	ChatMemberUsers map[string]telego.User // "chatID:userID" -> identity GetChatMember returns
+	ChatMemberErrs  map[string]error       // "chatID:userID" -> GetChatMember error
+	ChatPerms       *telego.ChatPermissions
+	BotInfo         *telego.User
 }
 
 func NewMockAPI() *MockAPI {
 	return &MockAPI{
-		AdminIDs:       make(map[int64][]int64),
-		BotCanRestrict: true,
-		ChatMembers:    make(map[string]string),
-		BotInfo:        &telego.User{ID: 999, Username: "test_bot", IsBot: true},
+		AdminIDs:        make(map[int64][]int64),
+		BotCanRestrict:  true,
+		ChatMembers:     make(map[string]string),
+		ChatMemberUsers: make(map[string]telego.User),
+		ChatMemberErrs:  make(map[string]error),
+		BotInfo:         &telego.User{ID: 999, Username: "test_bot", IsBot: true},
 	}
 }
 
@@ -106,22 +110,30 @@ func (m *MockAPI) GetChatMember(_ context.Context, params *telego.GetChatMemberP
 	m.Calls = append(m.Calls, APICall{"GetChatMember", params})
 
 	key := chatMemberKey(params.ChatID.ID, params.UserID)
+	if err, ok := m.ChatMemberErrs[key]; ok && err != nil {
+		return nil, err
+	}
 	status, ok := m.ChatMembers[key]
 	if !ok {
 		status = "member"
 	}
+	usr := telego.User{ID: params.UserID}
+	if u, ok := m.ChatMemberUsers[key]; ok {
+		usr = u
+		usr.ID = params.UserID
+	}
 
 	switch status {
 	case "kicked":
-		return &telego.ChatMemberBanned{User: telego.User{ID: params.UserID}}, nil
+		return &telego.ChatMemberBanned{User: usr}, nil
 	case "left":
-		return &telego.ChatMemberLeft{User: telego.User{ID: params.UserID}}, nil
+		return &telego.ChatMemberLeft{User: usr}, nil
 	case "administrator":
-		return &telego.ChatMemberAdministrator{User: telego.User{ID: params.UserID}}, nil
+		return &telego.ChatMemberAdministrator{User: usr}, nil
 	case "creator":
-		return &telego.ChatMemberOwner{User: telego.User{ID: params.UserID}}, nil
+		return &telego.ChatMemberOwner{User: usr}, nil
 	default:
-		return &telego.ChatMemberMember{User: telego.User{ID: params.UserID}}, nil
+		return &telego.ChatMemberMember{User: usr}, nil
 	}
 }
 

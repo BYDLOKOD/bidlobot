@@ -98,14 +98,30 @@ func (d *DMConsole) handleCleanup(ctx context.Context, caller, abs int64, args [
 		return nil
 	}
 
-	// Distinguish "no data, import first" from "everyone is active".
-	// This is the empty-state lie the critic flagged.
 	if prev.KnownMembers == 0 {
 		d.send(ctx, caller, msgDMCleanupNoData, nil)
 		return nil
 	}
+
+	// Resolve real Name/@handle (and live status) for the rows we will
+	// show. A Telegram Desktop export has no usernames and no name for
+	// join-only members, so without this the admin only ever sees
+	// "id 1250985701" and the human confirm is theatre.
+	const cleanupDisplayCap = 15
+	stale := d.cleanup.ResolveIdentities(ctx, abs, capMembers(prev.Candidates, cleanupDisplayCap), cleanupDisplayCap)
+	noEv := d.cleanup.ResolveIdentities(ctx, abs, capMembers(prev.NoEvidence, cleanupDisplayCap), cleanupDisplayCap)
+
 	if len(prev.Candidates) == 0 {
-		d.send(ctx, caller, fmt.Sprintf(msgDMCleanupNoneActive, prev.KnownMembers), nil)
+		// No proven-inactive members. Either everyone the bot observed is
+		// active, or the only "candidates" are a data gap (import-only /
+		// react-only) that must never be auto-kicked - show those for
+		// manual review with NO confirm keyboard instead of lying
+		// "everyone is active".
+		if len(prev.NoEvidence) == 0 {
+			d.send(ctx, caller, fmt.Sprintf(msgDMCleanupNoneActive, prev.KnownMembers), nil)
+			return nil
+		}
+		d.send(ctx, caller, renderCleanupPreview(prev, nil, noEv, false), nil)
 		return nil
 	}
 
@@ -128,36 +144,106 @@ func (d *DMConsole) handleCleanup(ctx context.Context, caller, abs int64, args [
 		return nil
 	}
 
-	d.send(ctx, caller, renderCleanupPreview(prev), dmConfirmKeyboard(id))
+	d.send(ctx, caller, renderCleanupPreview(prev, stale, noEv, true), dmConfirmKeyboard(id))
 	return nil
 }
 
-func renderCleanupPreview(p *cleanup.Preview) string {
+func capMembers(in []membership.Member, n int) []membership.Member {
+	if len(in) > n {
+		return in[:n]
+	}
+	return in
+}
+
+// renderCleanupPreview composes the DM preview. stale/noEv are the
+// already-resolved (named, status-checked) display slices; withConfirm
+// controls the footer - a confirm keyboard is attached only when there is
+// a proven-inactive list that is safe to kick.
+func renderCleanupPreview(p *cleanup.Preview, stale, noEv []cleanup.ResolvedMember, withConfirm bool) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, msgDMCleanupHeader, len(p.Candidates), p.KnownMembers)
-	if p.ObservationWindow > 0 {
-		fmt.Fprintf(&b, "\n"+msgDMCleanupWindow, p.ObservationWindow.Round(24*time.Hour)/(24*time.Hour))
+
+	if withConfirm || len(stale) > 0 {
+		fmt.Fprintf(&b, msgDMCleanupHeader, formatDuration(p.Threshold), p.KnownMembers)
+	} else {
+		fmt.Fprintf(&b, msgDMCleanupOnlyNoEv, len(p.NoEvidence))
 	}
-	b.WriteString("\n" + msgDMCleanupNoReactionNote + "\n")
-	limit := len(p.Candidates)
-	if limit > 15 {
-		limit = 15
-	}
-	for _, m := range p.Candidates[:limit] {
-		name := shared.UserDisplay(m.Username, m.FirstName)
-		if name == "" {
-			name = fmt.Sprintf("id %d", m.UserID)
+
+	// Window honesty: never let "no recorded activity" pass for
+	// "inactive for the period" when the data does not cover the period.
+	if p.InstalledAt.IsZero() {
+		b.WriteString("\n\n" + msgDMCleanupNoInstallWarn)
+	} else {
+		win := p.ObservationWindow.Round(24 * time.Hour)
+		fmt.Fprintf(&b, "\n"+msgDMCleanupWindow,
+			p.InstalledAt.Format("2 Jan 2006"), formatDuration(win))
+		if p.ThresholdExceedsWindow {
+			fmt.Fprintf(&b, "\n"+msgDMCleanupWindowWarn,
+				formatDuration(p.Threshold), formatDuration(win))
 		}
-		last := "никогда не писал"
-		if !m.LastMessageAt.IsZero() {
-			last = "последнее сообщение " + m.LastMessageAt.Format("2006-01-02")
-		}
-		fmt.Fprintf(&b, "\n- %s - %s", shared.EscapeHTML(name), last)
 	}
-	if len(p.Candidates) > limit {
-		fmt.Fprintf(&b, "\n... и ещё %d", len(p.Candidates)-limit)
+
+	if len(stale) > 0 {
+		fmt.Fprintf(&b, msgDMCleanupStaleHeader, len(p.Candidates))
+		for _, rm := range stale {
+			b.WriteString("\n- " + cleanupLine(rm, true))
+		}
+		if extra := len(p.Candidates) - len(stale); extra > 0 {
+			fmt.Fprintf(&b, "\n... и ещё %d", extra)
+		}
+	}
+
+	if len(noEv) > 0 {
+		fmt.Fprintf(&b, msgDMCleanupNoEvHeader, len(p.NoEvidence))
+		for _, rm := range noEv {
+			b.WriteString("\n- " + cleanupLine(rm, false))
+		}
+		if extra := len(p.NoEvidence) - len(noEv); extra > 0 {
+			fmt.Fprintf(&b, "\n... и ещё %d", extra)
+		}
+	}
+
+	b.WriteString(msgDMCleanupExportNote)
+
+	if withConfirm {
+		fmt.Fprintf(&b, msgDMCleanupConfirmFooter, len(p.Candidates))
+	} else {
+		b.WriteString(msgDMCleanupReviewOnly)
 	}
 	return b.String()
+}
+
+// cleanupLine renders one candidate row. The name comes from
+// UserDisplayFull, which is already HTML-safe and must NOT be re-escaped.
+// An unresolved member is shown honestly as a bare id, never hidden.
+func cleanupLine(rm cleanup.ResolvedMember, stale bool) string {
+	name := shared.UserDisplayFull(rm.Username, rm.FirstName)
+	if name == "" {
+		name = fmt.Sprintf("id %d - имя недоступно", rm.UserID)
+	}
+	switch {
+	case rm.Protected:
+		return name + " - админ/бот, пропустим"
+	case rm.Resolved && !rm.Present:
+		return name + " - уже не в чате"
+	}
+	if stale {
+		return name + " - был(а): " + lastActivity(rm.Member)
+	}
+	return name + " - активности не видел"
+}
+
+func lastActivity(m membership.Member) string {
+	t := m.LastMessageAt
+	if m.LastReactionAt.After(t) {
+		t = m.LastReactionAt
+	}
+	if t.IsZero() {
+		t = m.LastSeenAt
+	}
+	if t.IsZero() {
+		return "нет данных"
+	}
+	return t.Format("2006-01-02")
 }
 
 // HandleCallback is the DM callback entry point, namespace "dm:".
@@ -394,35 +480,11 @@ func (d *DMConsole) editTextKB(ctx context.Context, chatID int64, msgID int, bod
 	}
 }
 
-// parseCleanupPeriod accepts 7d, 30d, 6mo, 1y and bare Go durations.
+// parseCleanupPeriod accepts 7d, 30d, 6mo, 1y and bare Go durations. It
+// delegates to cleanup.ParsePeriod so the DM `/cleanup` syntax and the
+// daily-cleanup config can never accept different inputs.
 func parseCleanupPeriod(s string) (time.Duration, error) {
-	s = strings.TrimSpace(strings.ToLower(s))
-	if num, ok := strings.CutSuffix(s, "mo"); ok {
-		n, err := strconv.Atoi(num)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("bad months")
-		}
-		return time.Duration(n) * 30 * 24 * time.Hour, nil
-	}
-	if num, ok := strings.CutSuffix(s, "y"); ok {
-		n, err := strconv.Atoi(num)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("bad years")
-		}
-		return time.Duration(n) * 365 * 24 * time.Hour, nil
-	}
-	if num, ok := strings.CutSuffix(s, "d"); ok {
-		n, err := strconv.Atoi(num)
-		if err != nil || n <= 0 {
-			return 0, fmt.Errorf("bad days")
-		}
-		return time.Duration(n) * 24 * time.Hour, nil
-	}
-	d, err := time.ParseDuration(s)
-	if err != nil {
-		return 0, err
-	}
-	return d, nil
+	return cleanup.ParsePeriod(s)
 }
 
 var _ = membership.StatusMember

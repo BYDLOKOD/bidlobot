@@ -101,6 +101,17 @@ func ImportStateKey(adminUserID int64) []byte {
 	return []byte(fmt.Sprintf("imp:%020d", adminUserID))
 }
 
+// GraceKickKey is one open grace ticket for (chat, user). The chat id
+// leads so GraceKickChatPrefix scans a whole chat's open tickets in one
+// cursor pass during the daily sweep.
+func GraceKickKey(absChatID, userID int64) []byte {
+	return []byte(fmt.Sprintf("gk:%020d:%020d", absChatID, userID))
+}
+
+func GraceKickChatPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("gk:%020d:", absChatID))
+}
+
 func AbsChatID(chatID int64) int64 {
 	if chatID < 0 {
 		return -chatID

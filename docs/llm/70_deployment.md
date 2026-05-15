@@ -85,6 +85,23 @@ Optional:
   incoming update is appended for offline replay. Ship as a bind mount
   if you need to pull recordings from the host.
 
+Daily inactive cleanup (all optional; the feature is OFF until
+`CLEANUP_DAILY_ENABLED` is truthy). This is the only feature that posts
+publicly and removes members on the bot's own schedule - leave it off
+until the operator has reviewed a manual `/cleanup` preview and trusts
+the candidate list.
+
+- `CLEANUP_DAILY_ENABLED` -- `true`/`1`/`yes`/`on` to enable. Default
+  off. When enabled the other four are validated at startup and the bot
+  exits non-zero on a bad value.
+- `CLEANUP_DAILY_AT` -- UTC `HH:MM` the daily run fires. Default `10:00`.
+- `CLEANUP_DAILY_THRESHOLD` -- inactivity window: `30d` | `6mo` | `1y`
+  or a Go duration. Default `6mo`. Must parse within 1 day .. 5 years.
+- `CLEANUP_GRACE` -- delay between the public tag and the kick. Default
+  `72h` (the owner's 3-day decision). Must parse within 1h .. 720h.
+- `CLEANUP_DAILY_BATCH` -- max members tagged per chat per day. Default
+  `15`. Range 1 .. 100.
+
 ## First deploy
 
 ```sh

@@ -7,11 +7,13 @@ kind: spec
 
 ## What this bot does
 
-Group management for IT supergroups in Telegram. Four capability areas:
+Group management for IT supergroups in Telegram. Six capability areas:
 
 1. **Statistics** - message counters per user, top contributors, activity reports.
 2. **Moderation** - warn/mute/ban with 3-strike auto-mute. Telegram-native admin model.
-3. **Inactive cleanup** - admin can kick users who never wrote messages and never reacted within a configurable window. Read-only members (those who only react) are preserved.
+3. **Inactive cleanup** - removes members the bot has _observed_ go silent (no message and no reaction within a configurable window). Two surfaces share one evidence-graded engine (`internal/domain/cleanup`):
+   - **Manual `/cleanup <period>`** (DM, admin-confirmed): preview splits _proven-stale_ (the bot saw them, the activity is old) from _no recorded activity at all_ (a data gap - import-only / react-only members). Only proven-stale is auto-kicked; the data-gap group is shown named for manual review and never kicked blind. Names/@handles are resolved live via `getChatMember`, and a loud warning fires when the requested period exceeds the window the bot actually has data for.
+   - **Daily lifecycle** (`internal/domain/gracekick`, opt-in, OFF by default): once a day, tag a batch of _proven-stale only_ members publicly, give a grace window (default 3 days), then kick those who did not write or react in time. Members who reappear are spared. The no-evidence group is never touched by this automatic path.
 4. **Mini-games** - chat-engagement games (dice, reaction-battle,
    code-quiz, native poll, 8ball, roast/praise, guess, hangman, duel,
    IT-trivia) callable inline or via slash commands. Spec:
@@ -24,10 +26,19 @@ Group management for IT supergroups in Telegram. Four capability areas:
 
 **Command surfaces (revised 2026-05-15 after the privacy rework):**
 
-- **Moderation + cleanup: DM console only.** The admin opens a private
-  chat with the bot, `/start`, picks the target chat once, then issues
-  `/warn /warns /mute /unmute /ban /unban /cleanup` privately. Ban and
-  cleanup require an in-DM confirm. Nothing is visible to chat members.
+- **Moderation + manual cleanup: DM console only.** The admin opens a
+  private chat with the bot, `/start`, picks the target chat once, then
+  issues `/warn /warns /mute /unmute /ban /unban /cleanup` privately.
+  Ban and cleanup require an in-DM confirm. Nothing is visible to chat
+  members.
+- **Exception - the daily inactive lifecycle is PUBLIC by design**
+  (owner decision, 2026-05-15). It deliberately overrides the
+  "nothing visible to chat members" invariant: the social pressure of a
+  public @-tag is the mechanism. Scoped tightly: opt-in (OFF unless
+  `CLEANUP_DAILY_ENABLED`), proven-stale members only (never the
+  no-evidence data gap), batch-capped per day, with a grace window and a
+  "write or react to stay" rule. This is the only feature that posts in
+  the group on the bot's own initiative.
 - **Public group: read-only + games only.** `/stats` (incl. `month` /
   `months`) and the mini-games (`/dice /battle /quiz /poll /8ball
   /roast /praise /guess /hangman /duel /trivia`), per-user
@@ -72,6 +83,11 @@ Env vars:
 - `DB_PATH` (default: `./data`)
 - `LOG_LEVEL` (default: `info`)
 - `RECORD_UPDATES` (optional path to JSONL recorder)
+- `CLEANUP_DAILY_ENABLED` (default: `false`) - opt-in daily public tag->grace->kick
+- `CLEANUP_DAILY_AT` (default: `10:00`, UTC `HH:MM`)
+- `CLEANUP_DAILY_THRESHOLD` (default: `6mo`; `30d`/`6mo`/`1y`/Go duration)
+- `CLEANUP_GRACE` (default: `72h`)
+- `CLEANUP_DAILY_BATCH` (default: `15`)
 
 ## ID scheme
 

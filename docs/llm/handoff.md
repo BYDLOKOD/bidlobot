@@ -5,112 +5,130 @@ kind: guide
 
 # Handoff: next session action plan
 
-Last updated: 2026-05-15, after the monthly-stats / mini-games /
-YouTube-si= / DM-import session. **Merged to `master` and deployed to
-prod (<deploy-host>) at commit `6942061`; container healthy, polling
-(`e2e_test_bot`).** Base was `be90a00`.
+Last updated: 2026-05-15, after the cleanup-rework session.
+
+Prior session (monthly-stats / mini-games / YouTube-si= / DM-import /
+cooldown-UX) is **on `origin/master` and deployed to prod
+(<deploy-host>) at commit `6942061`; container healthy, polling
+(`e2e_test_bot`)**. This session's cleanup-rework rebases a single
+commit on top of that and is **not yet pushed / not yet deployed**.
+
+## Branch / git topology (read before any git op)
+
+- Work was done in a git worktree on `feat/cleanup-rework`, rebased onto
+  `origin/master`. `origin/master` already contained all the
+  feat/summarize-glm history (6942061 is its ancestor) **plus** one
+  docs-only commit `2c55050` (games + youtube-si= specs); the rebase
+  folded that in - the 3 doc conflicts (`00_index`, `10_scope`,
+  `handoff`) were resolved by union, no code conflicts.
+- After the rebase the cleanup work is exactly **one commit** on top of
+  `origin/master`. Local `master` was reconciled (fast-forward) to
+  `origin/master` before applying it.
+- A `stash@{0}` on `feat/summarize-glm` holds parked summarize WIP from
+  a parallel workstream (NOT this work); untouched, restore with
+  `git stash pop` on that branch. Summarize is not in master/prod.
 
 ## Current state
 
-`go build ./...` green; `go test ./...` green; `go test -race` green on
-the concurrent packages (bot, monthstats, histimport, storage, shared).
-An opus critic reviewed the whole branch: its one BLOCKER and three
-should-fix items are resolved (commit `87543c9`); S4 accepted as a
-documented tradeoff (below). Image ships `bidlobot` + `bidlobot-backup`
-+ `bidlobot-probe` (the `bidlobot-import` CLI was removed).
+`go build ./...` green; `go test ./...` green (19 pkg); `go vet` and
+`gofmt` clean. Two opus-critic rounds: one BLOCKER (B1: unresolved
+member could be publicly tagged/kicked) + S1/S2/S3 + a follow-up
+BLOCKER (UTF-16 vs rune message budget) - all resolved with regression
+tests. N2 (no shared per-chat lock between the daily scheduler and DM
+`/cleanup`) deliberately deferred (critic-rated acceptable: the
+getChatMember pre-check converges a double-kick to a skip).
 
-Added this session:
+Added this session (full detail:
+`devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md`):
 
-- **Monthly nominations** (`internal/domain/monthstats`): per-calendar-
-  month report with the user's own chat-export.org titles verbatim
-  (самый срущий автор / по длине сообщения / самое длинное сообщение /
-  самый кодирующий / емоджинутый / тегающий / говорящие с ботами /
-  самый курсористый тип). `/stats month [YYYY-MM]` + `/stats months`
-  (public read-only + DM). Fed by the live handler AND the importer;
-  idempotent. Past months memoized, auto-invalidated on re-import.
-- **DM history import** (`internal/histimport` + `internal/bot/
-  dm_console_import.go`): `/import` in DM, then send the export
-  (`.json`/`.gz`/`.zip`); in-process download + decompress + parse +
-  pre-commit confirm + abortable background ingest. Idempotent
-  (message-id watermark + atomic `ApplyImport`). No CLI, no bot stop.
-- **7 mini-games**: `/poll` (native), `/8ball`, `/roast` `/praise`,
-  `/guess`, `/hangman`, `/duel`, `/trivia`.
-- **YouTube si= sanitizer**: repost-then-delete (failed repost keeps the
-  original), host-scoped, media by file_id, reply fallback.
-- Stats display now `Name (@handle)` via `shared.UserDisplayFull`;
-  handle-less (import-only) users disambiguated by ` (id N)`.
-- **Cooldown UX** (commit `6942061`): over-frequency game/`/stats`/
-  `/summarize` commands now emit ONE bounded "slow down" notice per
-  window instead of a silent drop (`cooldown.gate`). Spec:
-  `50_telegram.md` (Rate limits). Spec for the games themselves:
-  `25_games.md`; the YouTube si= sanitizer: `55_youtube_sanitizer.md`.
+- **Evidence-graded cleanup** (`internal/domain/cleanup`):
+  `Preview.Candidates` (observed-then-silent, actionable) vs
+  `Preview.NoEvidence` (never observed - data gap, never auto-kicked);
+  `ResolveIdentities` (live Name/@handle via getChatMember, bounded,
+  flags left/admin/bot); `ThresholdExceedsWindow` warning;
+  `cleanup.ParsePeriod` is now the one period parser. DM `/cleanup`
+  preview rewritten (grouped, named, honest empty states; confirm
+  kicks proven-stale only).
+- **Daily lifecycle** (`internal/domain/gracekick` + `gracekick` bbolt
+  bucket + `App.runDailyCleanup` scheduler + `CLEANUP_DAILY_*` config):
+  opt-in, OFF by default; public tag -> 3-day grace -> kick; saved by
+  message OR reaction; proven-stale only; announce-fail persists no
+  ticket; affirmative-safety pick filter; UTF-16-bounded one-message
+  announce; inFlight-tracked scheduler.
 
 ## Known follow-ups / limitations (documented, not silent)
 
-1. **Import-only users have no @handle.** The Telegram Desktop export
-   carries display names, not usernames. Imported-but-never-live users
-   show just the name until they write live (then the @handle fills in;
-   `SourceMessage` overwrites `SourceImport`). Inherent Telegram limit.
-2. **`monthBuffer` shutdown tail (critic S4, accepted).** Like the
-   pre-existing `statsBuffer`, the monthly buffer's Run goroutine is not
-   in `app.InFlight()`; a SIGTERM can lose up to ~60s of unflushed live
-   monthly counts. Same tradeoff the lifetime stats spec already
-   sanctions ("crash = loss of up to 60s, acceptable"), and monthly is
-   import-recoverable. Revisit only if it proves to matter.
-3. **YouTube `edited_message` not covered (v1).** A clean link edited to
-   add `si=` later is not sanitized. Documented in the file header.
-4. **N1**: a malicious 20 MB archive can spill ~1 GiB to a temp file
-   before parse (admin-triggered, trust-bounded). **N2**: `MessageTime`
-   treats the export `date` string as UTC when `date_unixtime` is
-   absent (legacy-verbatim; modern exports always carry unixtime).
-5. Pre-existing: fresh-deploy reconcile, `resolveUsername` stub, ~200ms
-   public-/ban visibility window (unchanged this session).
+1. **Daily lifecycle reverses the DM-only privacy invariant** - owner
+   decision, scoped by opt-in + proven-stale-only + batch cap + grace.
+   Recorded in `10_scope.md` / `40_moderation.md`;
+   `ux_moderation_privacy` memory now has the documented exception.
+2. **Privacy-mode caveat.** Under BotFather privacy ON the bot does not
+   see ordinary messages; it sees reactions and replies-to-itself. The
+   tag copy asks members to reply or react; "reappeared" reads
+   membership timestamps, which update from whatever the bot may see.
+3. **Restart-window double-run.** A restart in the narrow window around
+   `CLEANUP_DAILY_AT` can run the daily tick twice; the lifecycle
+   absorbs it (sweep only acts past a deadline, tag skips ticketed
+   members, batch-capped). No restart-persistence by design.
+4. **N2 (deferred):** no shared per-chat lock between the daily
+   scheduler and DM `/cleanup`. Concurrent runs on one chat are
+   redundant API, not a wrong-kick (getChatMember pre-check). Add a
+   shared chat-claim if it ever matters.
 
 ## Immediate next steps
 
-1. **Operator manual verification in the test chat + DM** (Claude
-   cannot drive Telegram - see below). Then merge the branch and deploy.
-2. The BYDLOKOD backfill: add the bot to chat `1009000003` as admin
-   FIRST, then DM `/import` and send `result.json` gzipped (~4 MB; raw
-   31 MB exceeds Telegram's 20 MB bot-download cap). See memory
-   `bydlokod-import-workflow`.
-3. Optional: tighten N1 cap; cover `edited_message` for the sanitizer.
+1. **Push + deploy.** Branch is rebased on `origin/master`, one commit,
+   green. Owner to confirm `git push` (prod is live). Then standard
+   deploy. The daily lifecycle is OFF by default - enabling it is a
+   separate, explicit `CLEANUP_DAILY_ENABLED` step.
+2. **Operator manual verification** in the test chat (Claude cannot
+   drive Telegram). See below.
+3. Separate item the owner flagged: the YouTube si= sanitizer "does not
+   delete the original, only reposts". Diagnosis: `handleSanitize`
+   reposts then deletes; if the original survives, `DeleteMessage` is
+   failing - almost certainly the bot lacks the **Delete Messages**
+   admin right in that chat (logged, defensive by design). Verify the
+   bot's admin rights; not a code bug on this branch.
 
 ## Manual verification (operator must run; Claude cannot click Telegram)
 
-Automated tests + critic are done. The Telegram-interactive surface is
-NOT machine-verifiable here (no bot token, can't tap buttons, can't be
-the human sender). In `@testovaya...` + a DM with the deployed test bot:
+In the test chat (bot = admin with restrict + delete rights) + a DM:
 
-1. `/stats month` and `/stats months` in the group render correctly.
-2. DM `/import` -> send a small gzipped export -> confirm preview ->
-   tap Load -> report; re-send the same file -> "уже загружены"
-   (idempotent, counts unchanged); `/stats month` reflects it.
-3. Oversize raw `.json` (>20 MB) in DM -> rejected with the zip hint,
-   no download attempted.
-4. Each new game once: `/poll Q | a | b`, `/8ball x`, `/roast`,
-   `/guess` then `/guess 50`, `/hangman` then a letter, `/duel @u`,
-   `/trivia`. Cooldowns hold under repeat.
-5. Post a `youtu.be/X?si=Y` link -> deleted + reposted attributed,
-   link sans `si=`; post a Spotify `?si=` -> untouched.
-6. `/stats` shows `Name (@handle)` for live users.
+1. DM `/cleanup 6mo` after an import: names/@handles show; two groups
+   ("молчат давно" vs "активность не зафиксирована"); the loud window
+   warning fires when 6mo exceeds the data window; confirm kicks only
+   the proven-stale group.
+2. Enable `CLEANUP_DAILY_ENABLED=true` + a near-future `CLEANUP_DAILY_AT`
+   in the test chat. Confirm: one public message tags proven-stale only
+   (never the no-evidence members); a tagged member who reacts or
+   writes is spared at the next tick; one who stays silent past
+   `CLEANUP_GRACE` is kicked; the message is not re-posted for members
+   still inside their grace window.
+3. `--check-config` rejects a bad `CLEANUP_DAILY_AT` / threshold /
+   grace / batch when enabled.
 
 ## Read before starting
 
-- `docs/llm/30_stats.md` (monthly engine, legacy semantics, display)
-- `docs/llm/35_history_import.md` (DM import model)
-- `docs/llm/devlog/04_monthly_stats_games_yt_dm_import.md`
-- memory: `bydlokod-import-workflow`, `project_direction`
+- `docs/llm/40_moderation.md` (cleanup grading + daily lifecycle)
+- `docs/llm/10_scope.md` (privacy-invariant exception, env vars)
+- `docs/llm/35_history_import.md` ("Resolved 2026-05-15" note)
+- `docs/llm/devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md`
+- memory: `bydlokod-import-workflow`, `project_direction`,
+  `ux_moderation_privacy`
 
 ## Anti-patterns
 
-1. Do NOT re-sanitize the user's chat-export.org nomination titles -
-   the crude register is deliberate chat culture.
-2. Do NOT reintroduce a standalone import CLI or "stop the bot" import.
-3. Do NOT read `displayFor`/`UserDisplayFull` output and re-`EscapeHTML`
-   it (double-escape).
-4. Monthly counters are additive: never bypass the message-id watermark
-   / `ApplyImport` atomicity; never RMW `MonthState` outside the
-   provided atomic methods.
-5. All public sends through the rate-limited `tgclient` wrapper, never
-   the raw `*telego.Bot`.
+1. NEVER auto-tag or auto-kick `Preview.NoEvidence`, nor any
+   unresolved/not-present/protected member. Publicly tagging a member
+   the bot has no evidence against is the exact failure this session
+   fixed. The gracekick pick filter is affirmative-safety only.
+2. Do NOT claim "everyone active" when only a data gap exists - the
+   empty-state copy distinguishes the three cases on purpose.
+3. Do NOT re-`EscapeHTML` `UserDisplayFull` / `mention` output
+   (double-escape); they are already HTML-safe.
+4. Do NOT persist a grace ticket before the public announcement
+   succeeded (else a member is kicked for a warning never delivered).
+5. Keep `cleanup.ParsePeriod` the single period parser.
+6. Telegram message limits are UTF-16 code units, not runes - keep the
+   `utf16Len` budget in `gracekick.fitOneMessage`.
+7. All public sends through the rate-limited `tgclient` wrapper.

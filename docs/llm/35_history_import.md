@@ -189,3 +189,14 @@ confirming:
   from live events while the bot was admin);
 - a brand-new member who joined but has not written yet
   (`LastMessageAt` zero -> looks inactive).
+
+**Resolved 2026-05-15 (evidence grading).** Both classes share one root
+cause: zero recorded activity. `cleanup.PreviewInactive` now splits
+those members into `Preview.NoEvidence` (never observed at all) instead
+of `Preview.Candidates` (observed, then went quiet). `NoEvidence` is
+shown named for manual review but is **never** auto-kicked and **never**
+fed to the daily `gracekick` lifecycle - so the documented false
+positives can no longer be silently removed. The preview also resolves
+real names/@handles via `getChatMember` (the export has neither) and
+warns loudly when the requested period exceeds the observation window.
+See [40_moderation.md](40_moderation.md).

@@ -14,7 +14,7 @@ Each entry declares `id` and `kind` in front-matter.
 - [25_games.md](25_games.md) - mini-games: command/cooldown table, rate-limit + bounded-notice rules, inline
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, lifetime + monthly nominations, display
 - [35_history_import.md](35_history_import.md) - in-process DM `/import` bootstrap: Telegram Desktop chat-export seeds membership (cleanup) + monthly stats
-- [40_moderation.md](40_moderation.md) - DM console: warn/mute/ban/cleanup, admin model, destructive-action safety
+- [40_moderation.md](40_moderation.md) - DM console: warn/mute/ban, evidence-graded `/cleanup`, the opt-in daily public tag->grace->kick lifecycle (`gracekick`), destructive-action safety
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits + per-user cooldown notice, error handling, onboarding, shutdown
 - [55_youtube_sanitizer.md](55_youtube_sanitizer.md) - YouTube `si=` strip: host scoping, repost-then-delete, exclusions, v1 gaps
 - [60_architecture.md](60_architecture.md) - layered composition (DM console + legacy dispatcher), bbolt schema, invariants, failure matrix

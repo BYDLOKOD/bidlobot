@@ -9,6 +9,9 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/veschin/bidlobot/internal/domain/cleanup"
 )
 
 // Config bundles every operator-supplied input. Loading from env is split
@@ -18,18 +21,88 @@ type Config struct {
 	DBPath     string
 	HealthPort int    // 0 disables; -1 means "unset, use default"
 	LogLevel   string // debug|info|warn|error
+
+	// --- daily inactive cleanup (opt-in, OFF by default) ---
+	//
+	// This is the only feature that posts publicly and removes members
+	// automatically, so it stays disabled unless the operator explicitly
+	// turns it on. Raw strings are kept beside parsed values so
+	// --check-config can report a bad value precisely.
+	CleanupDailyEnabled bool
+	CleanupDailyAtRaw   string // "HH:MM" UTC
+	CleanupDailyAtMin   int    // minutes past 00:00 UTC; -1 = unparseable
+	CleanupThresholdRaw string // inactivity window, e.g. "6mo"
+	CleanupThreshold    time.Duration
+	CleanupGraceRaw     string // tag->kick delay, e.g. "72h"
+	CleanupGrace        time.Duration
+	CleanupDailyBatch   int // max members tagged per chat per run
 }
 
 // loadConfig reads Config from environment without performing validation.
 // Validation happens in [Config.Validate] so the operator can also call
 // it via --check-config.
 func loadConfig() Config {
+	atRaw := envOr("CLEANUP_DAILY_AT", "10:00")
+	thrRaw := envOr("CLEANUP_DAILY_THRESHOLD", "6mo")
+	graceRaw := envOr("CLEANUP_GRACE", "72h")
+
+	thr, _ := cleanup.ParsePeriod(thrRaw)
+	grace, _ := cleanup.ParsePeriod(graceRaw)
+
 	return Config{
 		Token:      os.Getenv("TG_BOT_TOKEN"),
 		DBPath:     envOr("DB_PATH", "./data"),
 		HealthPort: parseHealthPortRaw(os.Getenv("HEALTH_PORT")),
 		LogLevel:   envOr("LOG_LEVEL", "info"),
+
+		CleanupDailyEnabled: envBool("CLEANUP_DAILY_ENABLED", false),
+		CleanupDailyAtRaw:   atRaw,
+		CleanupDailyAtMin:   parseHHMM(atRaw),
+		CleanupThresholdRaw: thrRaw,
+		CleanupThreshold:    thr,
+		CleanupGraceRaw:     graceRaw,
+		CleanupGrace:        grace,
+		CleanupDailyBatch:   envInt("CLEANUP_DAILY_BATCH", 15),
 	}
+}
+
+// parseHHMM turns "HH:MM" (24h, UTC) into minutes past midnight, or -1
+// when malformed / out of range.
+func parseHHMM(s string) int {
+	h, m, ok := strings.Cut(strings.TrimSpace(s), ":")
+	if !ok {
+		return -1
+	}
+	hh, err1 := strconv.Atoi(h)
+	mm, err2 := strconv.Atoi(m)
+	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
+		return -1
+	}
+	return hh*60 + mm
+}
+
+func envBool(key string, fallback bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	switch v {
+	case "":
+		return fallback
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func envInt(key string, fallback int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fallback
+	}
+	return n
 }
 
 // parseHealthPortRaw parses HEALTH_PORT into an int with -1 sentinel for
@@ -87,6 +160,22 @@ func (c Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		errs = append(errs, fmt.Errorf("LOG_LEVEL: must be one of debug|info|warn|error, got %q", c.LogLevel))
+	}
+
+	if c.CleanupDailyEnabled {
+		if c.CleanupDailyAtMin < 0 {
+			errs = append(errs, fmt.Errorf("CLEANUP_DAILY_AT: must be HH:MM 24h UTC, got %q", c.CleanupDailyAtRaw))
+		}
+		if c.CleanupThreshold < cleanup.MinThreshold || c.CleanupThreshold > cleanup.MaxThreshold {
+			errs = append(errs, fmt.Errorf("CLEANUP_DAILY_THRESHOLD: must parse to %s..%s, got %q",
+				cleanup.MinThreshold, cleanup.MaxThreshold, c.CleanupThresholdRaw))
+		}
+		if c.CleanupGrace < time.Hour || c.CleanupGrace > 30*24*time.Hour {
+			errs = append(errs, fmt.Errorf("CLEANUP_GRACE: must parse to 1h..720h, got %q", c.CleanupGraceRaw))
+		}
+		if c.CleanupDailyBatch < 1 || c.CleanupDailyBatch > 50 {
+			errs = append(errs, fmt.Errorf("CLEANUP_DAILY_BATCH: must be 1..50, got %d", c.CleanupDailyBatch))
+		}
 	}
 
 	if len(errs) == 0 {
