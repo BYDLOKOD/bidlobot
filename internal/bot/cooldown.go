@@ -87,9 +87,6 @@ func strconvI(v int64) string {
 // reply - the whole point is to reduce chat noise, not add to it).
 func (a *App) gateMsg(key string, every time.Duration, h func(*th.Context, telego.Message) error) func(*th.Context, telego.Message) error {
 	return func(ctx *th.Context, msg telego.Message) error {
-		if a.cooldown == nil {
-			a.cooldown = newCooldown()
-		}
 		if msg.From != nil && !a.cooldown.allow(msg.From.ID, key, every) {
 			return nil
 		}

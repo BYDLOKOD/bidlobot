@@ -7,10 +7,24 @@
 package bot
 
 import (
+	"context"
 	"time"
 
+	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
+
+// GamesSender is the union of the narrow per-game sender interfaces
+// (dice/battle/quiz). buildGames takes this instead of a concrete
+// *telego.Bot so the games subsystem sends through the rate-limited +
+// retried tgclient wrapper - games are the highest-volume public path
+// (one /battle is 4 messages) and must share the per-chat rate budget.
+type GamesSender interface {
+	SendDice(ctx context.Context, params *telego.SendDiceParams) (*telego.Message, error)
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
+	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
+	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
+}
 
 // GamesRegistry bundles the per-game handlers and the inline router.
 // Any field can be nil - registration code checks before wiring.

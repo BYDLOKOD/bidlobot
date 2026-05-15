@@ -118,7 +118,7 @@ func main() {
 
 	statsBuffer := stats.NewBuffer(statsRepo, log)
 	statsSvc := stats.NewService(statsRepo, statsBuffer, displayResolver, log)
-	statsHandler := stats.NewHandler(statsSvc, statsLookup, log)
+	statsHandler := stats.NewHandler(statsSvc, statsLookup, tgClient, log)
 
 	// Moderation routes its writes through the wrapped client so 429/5xx,
 	// migration, and per-chat rate limits all apply to ban/restrict/etc.
@@ -141,7 +141,10 @@ func main() {
 	cleanupExecutor.RegisterAll(dispatcher)
 	// SetAppContext is called below once the signal-aware context exists.
 
-	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
+	// tgClient (rate-limited + retried) is the public-surface sender:
+	// help, onboarding, the moderation-redirect notice - same budget as
+	// games/stats so a busy chat stays inside Telegram's 20 msg/min/chat.
+	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 	if err := app.AttachHealth(
 		// dbOpen probes bbolt with a no-op view txn. Path() returning a
 		// non-empty string is a tautology (it's set at open time and
@@ -168,7 +171,7 @@ func main() {
 
 	// Phase 4 mini-games: dice / battle / quiz. Constructor wires the
 	// inline router and slash handlers; AttachGames installs them on App.
-	app.AttachGames(buildGames(db, tgBot, log))
+	app.AttachGames(buildGames(db, tgClient, log))
 
 	// DM moderation console - the only private control surface. Uses
 	// the same domain services as the (now removed) public moderation

@@ -1,9 +1,62 @@
 package bot
 
 import (
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
 )
+
+// TestNewAppInitializesCooldown locks in the race fix: NewApp must
+// eagerly construct the cooldown so gateMsg never lazily writes to
+// a.cooldown. The previous lazy `if a.cooldown == nil` init raced (and
+// could construct duplicate cooldowns) under telego's concurrent
+// goroutine-per-update dispatch - exactly during the flood the gate
+// exists to stop.
+func TestNewAppInitializesCooldown(t *testing.T) {
+	a := NewApp(nil, nil, testLogger(), nil, nil, nil, nil, nil, nil)
+	if a.cooldown == nil {
+		t.Fatal("NewApp must eagerly initialize cooldown (race fix)")
+	}
+}
+
+// TestGateMsgConcurrentSafe exercises gateMsg from many goroutines at
+// once. Pre-fix this data-raced on the a.cooldown field; with eager
+// init it is race-free (run under -race) and the per-user gate still
+// holds: a second immediate call by the same user is dropped.
+func TestGateMsgConcurrentSafe(t *testing.T) {
+	a := NewApp(nil, nil, testLogger(), nil, nil, nil, nil, nil, nil)
+
+	var passed sync.Map // userID -> firstCallAllowed
+	noop := func(_ *th.Context, _ telego.Message) error { return nil }
+	gated := a.gateMsg("dice", time.Hour, noop)
+
+	const n = 64
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := range n {
+		go func(uid int64) {
+			defer wg.Done()
+			msg := telego.Message{From: &telego.User{ID: uid}}
+			_ = gated(nil, msg)
+			passed.Store(uid, true)
+		}(int64(i + 1))
+	}
+	wg.Wait()
+
+	// Each distinct user's first call was allowed; an immediate second
+	// call by user 1 must be blocked by the (now race-free) gate.
+	if a.cooldown.allow(1, "dice", time.Hour) {
+		t.Fatal("user 1 already consumed its slot; second call must be blocked")
+	}
+	count := 0
+	passed.Range(func(_, _ any) bool { count++; return true })
+	if count != n {
+		t.Fatalf("expected all %d goroutines to complete, got %d", n, count)
+	}
+}
 
 func TestCooldownGate(t *testing.T) {
 	c := newCooldown()

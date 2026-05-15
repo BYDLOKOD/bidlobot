@@ -96,7 +96,7 @@ func (a *App) redirectModerationToDM(thctx *th.Context, msg telego.Message) erro
 	ctx := thctx.Context()
 
 	// Best-effort delete of the public command so it does not linger.
-	_ = a.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+	_ = a.sender.DeleteMessage(ctx, &telego.DeleteMessageParams{
 		ChatID:    telego.ChatID{ID: msg.Chat.ID},
 		MessageID: msg.GetMessageID(),
 	})
@@ -110,7 +110,7 @@ func (a *App) redirectModerationToDM(thctx *th.Context, msg telego.Message) erro
 	// onboarding message (sent when the bot is promoted) tells admins
 	// to open the DM. We do not fall back to a public message - that
 	// would reintroduce exactly the spam we are removing.
-	_, err := a.bot.SendMessage(ctx, &telego.SendMessageParams{
+	_, err := a.sender.SendMessage(ctx, &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: msg.From.ID},
 		Text:      msgPublicModerationRedirect,
 		ParseMode: telego.ModeHTML,

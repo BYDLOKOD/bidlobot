@@ -67,7 +67,7 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 
 		if cmu.Chat.Type != telego.ChatTypeSupergroup {
 			if cmu.Chat.Type == telego.ChatTypeGroup {
-				_, _ = app.bot.SendMessage(bgCtx, &telego.SendMessageParams{
+				_, _ = app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
 					ChatID: telego.ChatID{ID: cmu.Chat.ID},
 					Text:   text.MsgNotSupergroup,
 				})
@@ -85,14 +85,14 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 			// "no public management" principle.
 			oldStatus := cmu.OldChatMember.MemberStatus()
 			if oldStatus != "administrator" {
-				_, _ = app.bot.SendMessage(bgCtx, &telego.SendMessageParams{
+				_, _ = app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
 					ChatID:    telego.ChatID{ID: cmu.Chat.ID},
 					Text:      msgOnboardingAdmin,
 					ParseMode: telego.ModeHTML,
 				})
 			}
 		case "member":
-			_, _ = app.bot.SendMessage(bgCtx, &telego.SendMessageParams{
+			_, _ = app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
 				ChatID: telego.ChatID{ID: cmu.Chat.ID},
 				Text:   text.MsgNeedAdmin,
 			})

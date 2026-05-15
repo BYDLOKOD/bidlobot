@@ -20,17 +20,27 @@ type UsernameLookup interface {
 	GetByUsername(ctx context.Context, absChatID int64, username string) (userID int64, err error)
 }
 
+// MessageSender is the narrow send surface the stats handler needs.
+// Production wires the rate-limited tgclient wrapper here so a 30-user
+// /stats flood shares the per-chat rate budget instead of bypassing it
+// via ctx.Bot() (the raw, unlimited *telego.Bot).
+type MessageSender interface {
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
+}
+
 type Handler struct {
 	svc    *Service
 	lookup UsernameLookup
+	sender MessageSender
 	log    *slog.Logger
 }
 
 // NewHandler создаёт обработчик команды /stats.
-func NewHandler(svc *Service, lookup UsernameLookup, log *slog.Logger) *Handler {
+func NewHandler(svc *Service, lookup UsernameLookup, sender MessageSender, log *slog.Logger) *Handler {
 	return &Handler{
 		svc:    svc,
 		lookup: lookup,
+		sender: sender,
 		log:    log,
 	}
 }
@@ -167,7 +177,7 @@ func (h *Handler) replyHTML(ctx *th.Context, msg telego.Message, htmlText string
 	return h.replyText(ctx, msg, htmlText)
 }
 
-func (h *Handler) replyText(ctx *th.Context, msg telego.Message, text string) error {
+func (h *Handler) replyText(_ *th.Context, msg telego.Message, text string) error {
 	params := &telego.SendMessageParams{
 		ChatID: telego.ChatID{ID: msg.Chat.ID},
 		Text:   text,
@@ -177,6 +187,6 @@ func (h *Handler) replyText(ctx *th.Context, msg telego.Message, text string) er
 		ParseMode: "HTML",
 	}
 
-	_, err := ctx.Bot().SendMessage(context.Background(), params)
+	_, err := h.sender.SendMessage(context.Background(), params)
 	return err
 }

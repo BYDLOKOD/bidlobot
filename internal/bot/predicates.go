@@ -6,8 +6,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-
-	"github.com/veschin/bidlobot/internal/shared"
 )
 
 func supergroupPredicate() th.Predicate {
@@ -60,23 +58,5 @@ func notLinkedChannelPredicate() th.Predicate {
 			return msg.SenderChat == nil
 		}
 		return true
-	}
-}
-
-func notAnonymousAdminPredicate() th.Predicate {
-	return func(_ context.Context, update telego.Update) bool {
-		if msg := update.Message; msg != nil && msg.From != nil {
-			return !shared.IsAnonymousAdmin(msg.From.ID)
-		}
-		return true
-	}
-}
-
-func hasFromPredicate() th.Predicate {
-	return func(_ context.Context, update telego.Update) bool {
-		if msg := update.Message; msg != nil {
-			return msg.From != nil && !msg.From.IsBot
-		}
-		return false
 	}
 }

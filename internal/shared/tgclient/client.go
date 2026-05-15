@@ -180,6 +180,28 @@ func (c *Client) SendMessage(ctx context.Context, params *telego.SendMessagePara
 	return msg, err
 }
 
+// SendDice wraps telego.Bot.SendDice. Dice is a chat-visible message so
+// it shares the per-chat rate budget with every other public send -
+// otherwise a flood of /dice would blow past Telegram's 20/min/chat.
+func (c *Client) SendDice(ctx context.Context, params *telego.SendDiceParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendDice",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendDice(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
 // EditMessageText wraps telego.Bot.EditMessageText.
 func (c *Client) EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
 	if params == nil {

@@ -37,6 +37,13 @@ type App struct {
 	dmConsole   *DMConsole
 	cooldown    *cooldown
 
+	// sender is the rate-limited + retried wrapper used for every
+	// outgoing message on the public surface (help, onboarding, the
+	// moderation-redirect notice). Distinct from `bot`, which stays the
+	// raw *telego.Bot because telego's long-poll + handler machinery
+	// needs the concrete type. Required NewApp parameter.
+	sender shared.TelegramAPI
+
 	// inFlight tracks handler goroutines AND background workers (e.g.
 	// cleanup kick worker) so that Stop can wait for them within
 	// ShutdownTimeout.
@@ -63,9 +70,16 @@ type PendingGC interface {
 	GarbageCollect(ctx context.Context, now time.Time) (int, error)
 }
 
-func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
+// NewApp wires the App. `sender` MUST be the rate-limited tgclient
+// wrapper, not the raw *telego.Bot: it carries every public-surface
+// send (help, onboarding, the moderation-redirect notice) so a busy
+// chat stays inside Telegram's 20 msg/min/chat budget. It is a
+// constructor parameter (not a setter) so the type system forbids
+// forgetting it.
+func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
 	return &App{
 		bot:         bot,
+		sender:      sender,
 		log:         log,
 		adminCache:  adminCache,
 		statsBuffer: statsBuffer,
@@ -73,6 +87,7 @@ func NewApp(bot *telego.Bot, log *slog.Logger, adminCache *shared.AdminCache, st
 		dispatcher:  dispatcher,
 		pendingGC:   pendingGC,
 		inlineSvc:   inlineSvc,
+		cooldown:    newCooldown(),
 	}
 }
 
@@ -122,6 +137,14 @@ func (a *App) AttachDMConsole(d *DMConsole) {
 }
 
 func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
+	// Defense in depth: the constructor already requires sender, but a
+	// future refactor that builds App via a struct literal would slip a
+	// nil through to every public send path. Fail loudly at startup
+	// rather than panic in a handler goroutine on first contact.
+	if a.sender == nil {
+		return errors.New("bot: nil sender; construct App via NewApp with the tgclient wrapper")
+	}
+
 	updates, err := a.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 		AllowedUpdates: []string{
 			"message",
@@ -178,10 +201,26 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	}
 
 	a.log.Info("bot started, polling for updates")
-	go bh.Start()
+	startErr := make(chan error, 1)
+	go func() { startErr <- bh.Start() }()
 
-	<-ctx.Done()
-	return nil
+	select {
+	case <-ctx.Done():
+		return nil
+	case err := <-startErr:
+		// bh.Start returned without us asking it to (the normal
+		// shutdown path cancels ctx, so we'd take the case above).
+		// This means the long-poll/handler loop died on its own -
+		// surface it so main cancels the app context and we shut down
+		// instead of becoming a silent zombie that only /health
+		// notices minutes later.
+		if err != nil {
+			a.log.Error("bot handler exited unexpectedly", "error", err)
+			return err
+		}
+		a.log.Warn("bot handler stopped without shutdown signal")
+		return nil
+	}
 }
 
 // runPendingGC sweeps expired pending actions out of bbolt every
@@ -268,7 +307,7 @@ func (a *App) healthMiddleware() th.Handler {
 }
 
 func (a *App) handleHelpDM(_ *th.Context, msg telego.Message) error {
-	_, err := a.bot.SendMessage(context.Background(), &telego.SendMessageParams{
+	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
 		ChatID: telego.ChatID{ID: msg.Chat.ID},
 		Text:   helpDM,
 	})
@@ -276,7 +315,7 @@ func (a *App) handleHelpDM(_ *th.Context, msg telego.Message) error {
 }
 
 func (a *App) handleHelpSupergroup(_ *th.Context, msg telego.Message) error {
-	_, err := a.bot.SendMessage(context.Background(), &telego.SendMessageParams{
+	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
 		ChatID: telego.ChatID{ID: msg.Chat.ID},
 		Text:   helpSupergroup,
 	})

@@ -3,7 +3,6 @@ package main
 import (
 	"log/slog"
 
-	"github.com/mymmrac/telego"
 	"go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
@@ -25,8 +24,8 @@ import (
 // expected placement in cmd/bidlobot/main.go (currently at line 89,
 // right after the App is constructed) is:
 //
-//	app := bot.NewApp(tgBot, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
-//	app.AttachGames(buildGames(db, tgBot, log))   // <-- add this line
+//	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
+//	app.AttachGames(buildGames(db, tgClient, log))   // <-- add this line
 //
 // AttachGames also wires the inline router into inlineSvc, so call
 // AttachGames after the inlineSvc is already constructed (which is the
@@ -34,17 +33,17 @@ import (
 //
 // The wiring is split out so adding new games does not require editing
 // main.go beyond the single AttachGames invocation.
-func buildGames(db *bbolt.DB, tgBot *telego.Bot, log *slog.Logger) *bot.GamesRegistry {
+func buildGames(db *bbolt.DB, sender bot.GamesSender, log *slog.Logger) *bot.GamesRegistry {
 	diceRepo := storage.NewDiceRepo(db)
 	diceSvc := dice.NewService(diceRepo, log)
-	diceHandler := bot.NewDiceHandler(diceSvc, tgBot, log)
+	diceHandler := bot.NewDiceHandler(diceSvc, sender, log)
 
 	battleRegistry := battle.NewRegistry()
-	battleHandler := bot.NewBattleHandler(battleRegistry, tgBot, log)
+	battleHandler := bot.NewBattleHandler(battleRegistry, sender, log)
 
 	quizRepo := storage.NewQuizRepo(db)
 	quizActive := quiz.NewActiveQuizzes()
-	quizHandler := bot.NewQuizHandler(quizActive, quizRepo, tgBot, log)
+	quizHandler := bot.NewQuizHandler(quizActive, quizRepo, sender, log)
 
 	return &bot.GamesRegistry{
 		Dice: diceHandler,
