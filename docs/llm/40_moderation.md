@@ -7,135 +7,78 @@ kind: spec
 
 See also: [10_scope.md](10_scope.md), [50_telegram.md](50_telegram.md).
 
+## Surface (revised 2026-05-15)
+
+**Moderation runs ONLY in the private DM console.** There is no public
+slash moderation. A moderation verb typed in the group is deleted and
+the issuer is redirected to DM (`redirectModerationToDM` in
+`routes.go`); it never executes publicly. Inline never offers
+moderation (results post publicly, so inline cannot be private).
+
+Flow: admin opens a private chat with the bot -> `/start` ->
+`resolveManagedChats` (bot is admin+CanRestrict AND caller is admin)
+-> 0 / 1 (auto-select) / many (inline picker) -> session stored in the
+`dm_sessions` bucket -> admin issues commands against the selected
+chat. All replies and errors stay in the DM; chat members see nothing.
+
+`internal/bot/dm_console.go` + `dm_console_cleanup.go` + `dm_text.go`.
+
 ## Admin model
 
-Source of truth: `getChatAdministrators` (Telegram API). No bot-managed admin list.
+Source of truth: `getChatAdministrators` (Telegram API), via
+`shared.AdminCache`. No bot-managed admin list.
 
-Permission check flow:
-1. Call `getChatAdministrators` (or cache)
-2. Filter: exclude `user.is_bot == true`
-3. Check `from.id` in filtered list
-4. Not found -> "You don't have permission to use this command."
+- Cache: 60s per-chat, invalidated on `chat_member` updates.
+- `requireSession` re-checks `IsAdmin` on **every** DM command; a
+  demoted admin's session is cleared immediately.
+- Bot self-rights: a chat only appears in `resolveManagedChats` if the
+  bot is `administrator`/`creator` AND `CanRestrict`.
 
-**Cache:** 5 minutes per-chat. Invalidated on `chat_member_updated` event.
+## Target resolution (DM has no reply-to)
 
-**Bot self-check:** `getChatMember(chat_id, bot_id)` cached same TTL. `can_restrict_members == false` -> "Bot needs 'Restrict Members' permission to perform this action."
+`/cmd @username` -> `members.GetMemberByUsername` (case-folded scan of
+the selected chat). `/cmd <numeric id>` -> used directly. There is no
+reply-to in a DM, so the bot can only target users it knows (seen via
+message/reaction, or loaded by `bidlobot-import`). Unknown @username ->
+actionable message pointing at import + the @username/id distinction.
 
-## Target resolution
+Validation (warn/mute/ban): bot / admin / self rejected with the
+`ValidateTarget` reason surfaced verbatim.
 
-All moderation commands support two modes:
-1. **Reply** - reply to offender's message. Target = `reply_to_message.from`
-2. **Explicit** - `/warn @username reason`. Target by username.
+## Commands (all in DM, responses Russian)
 
-Reply takes priority. If command is a reply AND contains @username, reply target is used, rest is treated as reason.
+- **`/warn @user [reason]`** - creates a warning, returns active count.
+  At 3 -> auto-mute 24h (real `restrictChatMember`). Reversible, runs
+  straight through (no confirm). Counter does not reset; `/warns clear`
+  to restart escalation.
+- **`/warns @user`** - list active warnings (DM only - it is NOT
+  world-readable in the group anymore).
+- **`/warns clear @user`** - mark all `active:false` (audit preserved).
+- **`/mute @user [dur]`** - `restrictChatMember`, all perms false,
+  `until_date`. Durations `30m/1h/12h/Nd`, default 1h, 1m..366d.
+  Permission failure -> "проверьте право ограничивать участников"
+  (honest, not a misleading "try again").
+- **`/unmute @user`** - restore chat default permissions.
+- **`/ban @user [reason]`** - **requires in-DM confirm** (irreversible
+  for the member). Pending action, `[✅ Подтвердить] [✕ Отмена]` in the
+  DM. On confirm: actor-lock + admin re-check, then `banChatMember`.
+  On failure the dead keyboard is stripped.
+- **`/unban @user`** - pre-check `getChatMember` status, then
+  `unbanChatMember(only_if_banned:true)` (mandatory flag - without it
+  the call removes active members).
+- **`/cleanup <period>`** - see [10_scope.md] + dm_console_cleanup.go.
+  Confirm in DM; preview distinguishes "no data, run import" from
+  "everyone active"; kick loop has a working Stop button registered
+  before render; per-chat mutex blocks a second admin's concurrent run.
 
-## Target validation (applies to warn, mute, ban)
+## Destructive-action safety (parity with the old public dispatcher)
 
-- Bot -> "Can't {action} a bot."
-- Admin -> "Can't {action} an administrator."
-- Self -> "Can't {action} yourself."
-
-## Warnings
-
-**`/warn @username [reason]`** or reply
-
-1. Check caller is admin and not anonymous
-2. Resolve target
-3. Validate target
-4. Create record: `warn:{uuid}` -> `{target_user_id, chat_id, issuer_user_id, reason, timestamp, active: true}`
-5. Count active warnings atomically (compare-and-swap or DB serialization)
-6. Response:
-
-Warnings 1-3:
-```
-⚠️ @username warned (2/3)
-Reason: Spam links
-Issued by: @admin
-```
-
-Warnings 4+:
-```
-⚠️ @username warned (4 total). Auto-mute threshold already reached.
-```
-
-No reason -> omit Reason line.
-
-**Auto-escalation at 3:** mute 24h. Message:
-```
-🔇 @username muted for 24h (3 warnings reached)
-```
-
-If mute fails (target became admin, bot lost rights) -> "⚠️ Warning recorded. Auto-mute failed: {API error reason}."
-
-After 3: no further auto-mutes. Counter doesn't reset. Admin must `/warns clear` to restart escalation.
-
-**`/warns @username`** - view active warnings (available to all members)
-```
-Warnings for @username (2/3)
-1. Spam links - by @admin1, Mar 4, 2026
-2. Off-topic flood - by @admin2, Mar 5, 2026
-```
-
-**`/warns clear @username`** - admin only. Marks all records `active: false` (audit trail preserved). Response: "Warnings cleared for @username."
-
-## Mute
-
-**`/mute @username [duration]`** or reply
-
-Durations: `30m`, `1h`, `2h`, `12h`, `1d`, `7d`, `30d`. Default: `1h`. Min: 1 min, max: 366 days.
-
-Invalid format -> "Invalid duration format. Examples: 30m, 1h, 7d."
-
-API call: `restrictChatMember` with all permissions `false`, `until_date` = now + duration.
-
-API errors:
-- `"user is an administrator"` -> "Can't mute an administrator."
-- `"not enough rights"` -> "Bot needs 'Restrict Members' permission."
-- Other -> log, respond "Failed to mute. Please try again."
-
-```
-🔇 @username muted for 1h
-By: @admin
-```
-
-**`/unmute @username`** or reply
-
-Restore chat defaults: call `getChat(chat_id)` -> use `permissions` field. If `permissions` is null -> fallback all-true.
-
-API call: `restrictChatMember` with chat's default permissions.
-
-```
-🔊 @username unmuted
-By: @admin
-```
-
-## Ban
-
-**`/ban @username [reason]`** or reply
-
-API call: `banChatMember(chat_id, user_id, revoke_messages: false)`. Permanent (no until_date).
-
-No reason -> omit Reason line.
-
-```
-🚫 @username banned
-Reason: Repeated violations
-By: @admin
-```
-
-**`/unban @username`**
-
-1. Check admin
-2. Resolve target
-3. Pre-check: `getChatMember(chat_id, user_id)` - if `status != "kicked"` -> "User is not banned."
-4. Call `unbanChatMember(chat_id, user_id, only_if_banned: true)`
-
-**`only_if_banned: true` mandatory** - without it the method removes active members.
-
-```
-✅ @username unbanned
-```
+Ban + cleanup carry a `pending.Action` (5-min TTL): actor-lock
+(`ActorUserID == query.From.ID`), admin re-check at confirm time,
+delete-before-execute (no double-tap replay), `ErrExpired` handled. A
+DM is single-actor and private, so the chat-pin / forward-attack guard
+the public dispatcher needed does not apply here.
 
 ## Data on ban
 
-Profile, warnings, stats - all preserved. Available via `/profile`, `/warns`. Restored on `/unban` + rejoin.
+Warnings + stats preserved (audit). Restored view on `/unban` + rejoin.

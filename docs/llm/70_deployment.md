@@ -24,9 +24,10 @@ non-root container with tini as PID 1.
 - `golang:1.26-alpine` build stage. `CGO_ENABLED=0` because every
   dependency is pure Go. Build cache mounted via BuildKit so warm
   builds stay fast.
-- `alpine:3.20` runtime. Ships `bidlobot`, `bidlobot-backup`, and
-  `bidlobot-probe` into `/usr/local/bin`. Adds `ca-certificates`,
-  `tzdata`, `wget` (for the healthcheck), `tini` (PID 1).
+- `alpine:3.20` runtime. Ships `bidlobot`, `bidlobot-backup`,
+  `bidlobot-probe`, and `bidlobot-import` into `/usr/local/bin`. Adds
+  `ca-certificates`, `tzdata`, `wget` (for the healthcheck),
+  `tini` (PID 1).
 - Runs as `bidlobot` (UID 65532), `WORKDIR /var/lib/bidlobot`. A
   baked `.keep` marker forces a fresh named volume to inherit the
   image's `0750 bidlobot:bidlobot` ownership.
@@ -141,6 +142,32 @@ cron alerts.
 > snapshot a running bot: bbolt holds an exclusive flock and the
 > backup binary's read-only open times out. Use it only after stopping
 > the bot.
+
+## History import (cleanup bootstrap)
+
+On a fresh deploy the bot only knows users it observed live, so
+`/cleanup 6mo` finds nobody. Seed history from a Telegram Desktop
+"Export chat history" JSON (per-chat menu -> Export -> format JSON).
+Full rationale + schema in [35_history_import.md](35_history_import.md).
+
+`bidlobot-import` holds the bbolt write lock, so a real import needs
+the bot stopped; `--dry-run` never opens the DB and is safe live:
+
+```sh
+# Safe preview against the running bot
+docker compose run --rm -v /path/result.json:/tmp/r.json bot \
+  bidlobot-import --json /tmp/r.json --chat-id -100<abs> --dry-run
+
+# Real import
+docker compose stop bot
+docker compose run --rm -v /path/result.json:/tmp/r.json bot \
+  bidlobot-import --json /tmp/r.json --chat-id -100<abs>
+docker compose start bot
+```
+
+`--chat-id` (signed form) is mandatory - a guard against importing an
+export into the wrong chat. Re-running the same file is idempotent
+(counts merge with max-semantics).
 
 ## Logs
 

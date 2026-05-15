@@ -14,12 +14,6 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/pending"
 )
 
-// pendingTTL bounds how long an unconfirmed inline action can sit in
-// the store. Five minutes is enough for an admin to read the preview
-// and decide; long enough to survive a brief lookup or attention shift,
-// short enough that stale data does not pile up.
-const pendingTTL = 5 * time.Minute
-
 // InlineService backs HandleInlineQuery. The read-only queries (stats /
 // warns view / help) are fully pure; destructive queries (warn / mute /
 // unmute / ban / unban / cleanup) write a pending Action so that the
@@ -86,30 +80,11 @@ func catalog() []inlineCommand {
 			description: "Отправить /stats today",
 			send:        "/stats today",
 		},
-		{
-			id:          "warn_help",
-			title:       "⚠️ Предупредить",
-			description: "Используйте: warn @user причина",
-			send:        "/help",
-		},
-		{
-			id:          "mute_help",
-			title:       "🔇 Замьютить",
-			description: "Используйте: mute @user 1h",
-			send:        "/help",
-		},
-		{
-			id:          "ban_help",
-			title:       "🚫 Забанить",
-			description: "Используйте: ban @user причина",
-			send:        "/help",
-		},
-		{
-			id:          "cleanup_help",
-			title:       "🧹 Чистка инактивных",
-			description: "Используйте: cleanup 6mo",
-			send:        "/help",
-		},
+		// Moderation is intentionally ABSENT from the inline catalog.
+		// Inline results post publicly into the chat, so moderation can
+		// never run here - advertising warn/mute/ban/cleanup in the
+		// browsable list shows functions that cannot be done where the
+		// user is looking. Moderation lives only in the DM console.
 		{
 			id:          "dice",
 			title:       "🎲 Бросить кубик",

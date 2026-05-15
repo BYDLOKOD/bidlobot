@@ -7,7 +7,7 @@ kind: guide
 
 Behavior specifics relevant to BidloBot. Not a full API reference - only project-relevant details.
 
-See also: [20_profiles.md](20_profiles.md), [30_stats.md](30_stats.md), [40_moderation.md](40_moderation.md).
+See also: [30_stats.md](30_stats.md), [40_moderation.md](40_moderation.md), [60_architecture.md](60_architecture.md).
 
 ## Chat types
 

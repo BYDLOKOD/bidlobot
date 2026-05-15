@@ -10,17 +10,19 @@ Each entry declares `id` and `kind` in front-matter.
 
 ## Entries
 
-- [10_scope.md](10_scope.md) - current scope, dropped/archived features, deployment model, ID scheme
+- [10_scope.md](10_scope.md) - current scope, command surfaces (DM-only moderation), dropped/archived features, ID scheme
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, display commands
-- [40_moderation.md](40_moderation.md) - warn/mute/ban, admin permissions, 3-strike rule
+- [35_history_import.md](35_history_import.md) - Telegram Desktop chat-export bootstrap that seeds membership for cleanup
+- [40_moderation.md](40_moderation.md) - DM console: warn/mute/ban/cleanup, admin model, destructive-action safety
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits, error handling, onboarding, shutdown
-- [60_architecture.md](60_architecture.md) - layered composition, bbolt schema, key invariants, failure handling matrix, where to add features
+- [60_architecture.md](60_architecture.md) - layered composition (DM console + legacy dispatcher), bbolt schema, invariants, failure matrix
 - [70_deployment.md](70_deployment.md) - docker-compose stack, env vars, healthcheck, BotFather setup, backup, rollback
 - [handoff.md](handoff.md) - next-session action plan. Read first.
 
 ## Devlog
 
 - [devlog/01_dockerization_and_deploy.md](devlog/01_dockerization_and_deploy.md) - 2026-05-14/15: critic-driven hardening, Docker stack, public release, deploy to <deploy-host>.
+- [devlog/02_privacy_ux_rework.md](devlog/02_privacy_ux_rework.md) - 2026-05-15: history import + DM-only moderation rework after two opus critic passes.
 
 ## Archived (not part of current scope)
 

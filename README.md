@@ -7,12 +7,17 @@ bbolt database, long-polling. Ships as a docker-compose stack.
 
 | Capability | Surface |
 |------------|---------|
-| Statistics | `/stats`, `/stats top`, `/stats today`, `/stats @user` |
-| Inactive cleanup | `@bidlobot cleanup 6mo` -> preview with candidate list -> confirm -> kick (ban + immediate unban) |
-| Moderation | `/warn`, `/warns`, `/mute`, `/unmute`, `/ban`, `/unban` (admins only) |
-| Inline launcher | `@bidlobot ...` autocomplete for every command above |
-| Mini-games | `/dice`, `/battle X Y`, `/quiz` (and `/quiz top`) |
+| Statistics | `/stats`, `/stats top`, `/stats today`, `/stats @user` - public in the group (read-only) |
+| Moderation | **DM only.** Open a private chat with the bot, `/start`, pick the chat, then `/warn /warns /mute /unmute /ban /unban`. Members never see it. |
+| Inactive cleanup | DM: `/cleanup 6mo` -> preview -> confirm -> kick (ban + immediate unban), with a working Stop button |
+| History bootstrap | `bidlobot-import` seeds membership from a Telegram Desktop chat export so cleanup works on pre-bot history |
+| Mini-games | `/dice`, `/battle X Y`, `/quiz` (and `/quiz top`) - public, per-user cooldown |
 | Membership tracking | message + reaction observers; powers cleanup and stats |
+
+A moderation command typed in the group is deleted and the admin is
+redirected to DM - the public timeline never carries moderation.
+Inline (`@bidlobot ...`) is a read-only launcher (stats/games/help)
+only; it cannot host moderation because inline results post publicly.
 
 Read-only members (those who only react) are **preserved** during cleanup -
 the bot treats reactions as activity.
@@ -23,7 +28,8 @@ The full reference lives in `docs/llm/`:
 
 - `00_index.md` - the table of contents.
 - `10_scope.md` - what's in scope, what was archived, ID conventions.
-- `30_stats.md`, `40_moderation.md` - domain rules.
+- `30_stats.md`, `40_moderation.md` - domain rules (40 = DM console).
+- `35_history_import.md` - chat-export bootstrap for cleanup.
 - `50_telegram.md` - Telegram API specifics that shape the design.
 - `60_architecture.md` - layered composition, bbolt schema, key invariants,
   failure handling matrix, where to add features.
@@ -76,12 +82,14 @@ named volume. See `docs/llm/70_deployment.md` for the full deploy runbook.
 ## Tests
 
 ```sh
-go test -race ./...     # 14 packages, 100+ tests
+go test -race ./...     # 14 test packages
 ```
 
-End-to-end coverage (inline -> callback dispatcher -> executor -> bbolt) lives
-in `internal/bot/end_to_end_test.go`. Replay tests against recorded sessions
-in `internal/bot/replay_test.go`.
+DM-console coverage (chat resolution, session, warn-private, ban
+confirm/apply, non-initiator reject, cleanup empty-vs-stale, parsers)
+in `internal/bot/dm_console_test.go`. Import parser + idempotency in
+`cmd/bidlobot-import/main_test.go`. Replay tests against recorded
+sessions in `internal/bot/replay_test.go`.
 
 ## Layout
 
@@ -90,9 +98,11 @@ cmd/
   bidlobot/        production entrypoint
   bidlobot-backup/ online bbolt snapshot binary (used inside container)
   probe/           one-shot getMe (no polling, no side effects)
+  bidlobot-import/ Telegram Desktop chat-export -> membership bootstrap
 internal/
-  bot/             telego dispatch, middleware, dispatcher, executors
-  domain/          membership / stats / moderation / cleanup / pending
+  bot/             dm_console (moderation), routes, inline (read-only),
+                   cooldown, middleware, legacy dispatcher
+  domain/          membership / stats / moderation / cleanup / pending / dmsession
   games/           dice / battle / quiz
   shared/          admin cache, format, target resolve, telegram interface
   shared/ratelimit per-chat outgoing token bucket
