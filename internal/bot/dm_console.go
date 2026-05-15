@@ -20,6 +20,7 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/pending"
 	"github.com/veschin/bidlobot/internal/domain/stats"
+	"github.com/veschin/bidlobot/internal/histimport"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -62,6 +63,18 @@ type DMConsole struct {
 	runs    *cleanupRuns
 	appCtxV context.Context
 	wgV     *sync.WaitGroup
+
+	// History-import wiring. All nil-tolerant: a minimal/test app
+	// without them serves /import with "недоступно" and ignores a stray
+	// uploaded document with the no-context hint. memberRepo/monthRepo
+	// are the CONCRETE repos histimport.Ingest needs (UpsertChat +
+	// GetState/ApplyImport); the existing `members` field is unchanged.
+	importState    dmsession.ImportStateStore
+	imports        *importRuns
+	files          fileFetcher
+	memberRepo     histimport.MembershipStore
+	monthRepo      histimport.MonthlyStore
+	importStageDir string
 }
 
 // SetAppContext binds running cleanup workers to the app lifecycle so a
@@ -95,20 +108,30 @@ func NewDMConsole(
 	st *stats.Service,
 	month *monthstats.Service,
 	pendingStore pending.Store,
+	importState dmsession.ImportStateStore,
+	imports *importRuns,
+	files fileFetcher,
+	memberRepo histimport.MembershipStore,
+	monthRepo histimport.MonthlyStore,
 	log *slog.Logger,
 ) *DMConsole {
 	return &DMConsole{
-		bot:      bot,
-		sessions: sessions,
-		members:  members,
-		admin:    admin,
-		mod:      mod,
-		cleanup:  clean,
-		stats:    st,
-		month:    month,
-		pending:  pendingStore,
-		log:      log,
-		runs:     newCleanupRuns(),
+		bot:         bot,
+		sessions:    sessions,
+		members:     members,
+		admin:       admin,
+		mod:         mod,
+		cleanup:     clean,
+		stats:       st,
+		month:       month,
+		pending:     pendingStore,
+		importState: importState,
+		imports:     imports,
+		files:       files,
+		memberRepo:  memberRepo,
+		monthRepo:   monthRepo,
+		log:         log,
+		runs:        newCleanupRuns(),
 	}
 }
 
@@ -144,6 +167,13 @@ func (d *DMConsole) HandleMessage(thctx *th.Context, msg telego.Message) error {
 	}
 	ctx := thctx.Context()
 	caller := msg.From.ID
+	// A document upload is the history-export delivery for a prior
+	// /import. Handle it before the text-command parse: an export file
+	// carries no text, so the fields==0 early-return would otherwise
+	// swallow it silently.
+	if msg.Document != nil {
+		return d.handleImportDocument(thctx, msg)
+	}
 	fields := strings.Fields(msg.Text)
 	if len(fields) == 0 {
 		return nil
@@ -161,6 +191,8 @@ func (d *DMConsole) HandleMessage(thctx *th.Context, msg telego.Message) error {
 		return d.handleWarns(ctx, caller, fields[1:])
 	case "warn", "mute", "unmute", "ban", "unban", "cleanup":
 		return d.handleModeration(ctx, caller, cmd, fields[1:])
+	case "import":
+		return d.handleImportStart(ctx, caller)
 	default:
 		d.send(ctx, caller, msgDMUnknown, nil)
 		return nil

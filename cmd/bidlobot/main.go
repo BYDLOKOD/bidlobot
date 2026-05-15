@@ -186,9 +186,12 @@ func main() {
 	// the same domain services as the (now removed) public moderation
 	// handlers; only the surface changes.
 	dmSessionRepo := storage.NewDMSessionRepo(db)
+	dmImportStateRepo := storage.NewImportStateRepo(db)
 	dmConsole := bot.NewDMConsole(
 		tgBot, dmSessionRepo, memberRepo, adminCache,
-		modSvc, cleanupSvc, statsSvc, monthSvc, pendingRepo, log,
+		modSvc, cleanupSvc, statsSvc, monthSvc, pendingRepo,
+		dmImportStateRepo, bot.NewImportRuns(), tgBot, memberRepo, monthRepo,
+		log,
 	)
 	app.AttachDMConsole(dmConsole)
 

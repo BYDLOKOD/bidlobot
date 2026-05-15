@@ -210,6 +210,31 @@ func (d *DMConsole) HandleCallback(thctx *th.Context, q telego.CallbackQuery) er
 		}
 		return nil
 
+	case "abort_imp":
+		// Cancels a running download/ingest goroutine if any, and drops
+		// + cleans a parked (awaiting-confirm) job. Idempotent.
+		if d.imports != nil {
+			d.cancelParked(arg)
+		}
+		d.answer(ctx, q, "Останавливаю...", false)
+		d.editText(ctx, q, msgImportCancelled)
+		return nil
+
+	case "imp_ok":
+		if d.imports == nil {
+			d.answer(ctx, q, "Импорт недоступен.", true)
+			return nil
+		}
+		return d.finishParked(ctx, q, arg)
+
+	case "imp_no":
+		if d.imports != nil {
+			d.cancelParked(arg)
+		}
+		d.answer(ctx, q, "Отменено.", false)
+		d.editText(ctx, q, msgImportCancelled)
+		return nil
+
 	case "apply":
 		return d.applyPending(ctx, q, caller, arg)
 	}

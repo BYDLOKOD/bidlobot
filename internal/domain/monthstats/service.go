@@ -217,12 +217,15 @@ func (s *Service) render(ctx context.Context, abs int64, month string, meta *Mon
 			twentyPlus++
 		}
 	}
-	fmt.Fprintf(&b, "\nВсего сообщений: <b>%s</b>\nУчастников: <b>%d</b> (с 20+ сообщениями: <b>%d</b>)\n",
+	// Section titles are the user's own coined nominations from
+	// chat-export.org, kept verbatim - the crude register is the
+	// "БЫДЛОКОД" chat culture and is deliberate, not to be sanitized.
+	fmt.Fprintf(&b, "\nВсего сообщений: <b>%s</b>\nУникальных за период: <b>%d</b> (из них 20+ сообщений: <b>%d</b>)\n",
 		shared.FormatNumber(meta.TotalMsgs), active, twentyPlus)
 
-	s.section(ctx, &b, abs, "Больше всех сообщений", users,
+	s.section(ctx, &b, abs, "Самый срущий автор", users,
 		func(u MonthUserStat) int64 { return u.MsgCount }, meta.TotalMsgs, true, false)
-	s.section(ctx, &b, abs, "Графоманы (по символам)", users,
+	s.section(ctx, &b, abs, "Самый срущий автор по длине сообщения", users,
 		func(u MonthUserStat) int64 { return u.RuneCount }, meta.TotalRunes, true, false)
 
 	if meta.LongestRunes > 0 {
@@ -232,19 +235,19 @@ func (s *Service) render(ctx context.Context, abs int64, month string, meta *Mon
 		if !meta.LongestFull {
 			cut = " <i>(обрезано)</i>"
 		}
-		fmt.Fprintf(&b, "\n<b>Лонгрид месяца</b>\n%s - %s символов%s\n<blockquote>%s</blockquote>\n",
+		fmt.Fprintf(&b, "\n<b>Самое длинное сообщение</b>\n%s - %s символов%s\n<blockquote>%s</blockquote>\n",
 			name, shared.FormatNumber(meta.LongestRunes), cut, ex)
 	}
 
-	s.section(ctx, &b, abs, "Кодер месяца", users,
+	s.section(ctx, &b, abs, "Самый кодирующий автор", users,
 		func(u MonthUserStat) int64 { return u.Code }, 0, false, true)
-	s.section(ctx, &b, abs, "Эмодзи-король", users,
+	s.section(ctx, &b, abs, "Самый емоджинутый автор", users,
 		func(u MonthUserStat) int64 { return u.CustomEmoji }, 0, false, true)
-	s.section(ctx, &b, abs, "Главный тегальщик", users,
+	s.section(ctx, &b, abs, "Самый тегающий автор", users,
 		func(u MonthUserStat) int64 { return u.Mention }, 0, false, true)
-	s.section(ctx, &b, abs, "Болтает с ботами", users,
+	s.section(ctx, &b, abs, "Говорящие с ботами", users,
 		func(u MonthUserStat) int64 { return u.BotCommand }, 0, false, true)
-	s.section(ctx, &b, abs, "Курсорист месяца", users,
+	s.section(ctx, &b, abs, "Самый курсористый тип", users,
 		func(u MonthUserStat) int64 { return u.KeywordCount }, 0, false, true)
 
 	return b.String()

@@ -60,22 +60,22 @@ func TestRenderNominationsAndPercentages(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Итоги месяца 2026-04",
-		"Больше всех сообщений",
+		"Самый срущий автор",
 		"@oleg - 5 (55%)",    // 5*100/9 = 55 (integer trunc)
 		"@arsenij - 3 (33%)", // 3*100/9 = 33
 		"@nikita - 1 (11%)",  // 1*100/9 = 11
-		"Лонгрид месяца",
+		"Самое длинное сообщение",
 		"@oleg - 1,459 символов <i>(обрезано)</i>", // !full -> truncation note
-		"Кодер месяца",                             // code section present (Олег has 3)
-		"Курсорист месяца",                         // keyword section present
+		"Самый кодирующий автор",                   // code section present (Олег has 3)
+		"Самый курсористый тип",                    // keyword section present
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("rendered output missing %q\n---\n%s", want, out)
 		}
 	}
-	// Zero-drop: nobody has custom_emoji -> that section must be absent.
-	if strings.Contains(out, "Эмодзи-король") {
-		t.Errorf("custom_emoji section should be dropped when all zero:\n%s", out)
+	// Zero-drop: nobody has custom_emoji -> that nomination must be absent.
+	if strings.Contains(out, "Самый емоджинутый автор") {
+		t.Errorf("custom_emoji nomination should be dropped when all zero:\n%s", out)
 	}
 }
 
@@ -86,7 +86,7 @@ func TestRenderTwentyPlusBoundaryStrict(t *testing.T) {
 	seedMeta(t, st, 41, 20, 1, 10, true)
 	svc := newSvcAt(st, "2026-05")
 	out, _ := svc.MonthReport(context.Background(), 100, "2026-04")
-	if !strings.Contains(out, "с 20+ сообщениями: <b>1</b>") {
+	if !strings.Contains(out, "из них 20+ сообщений: <b>1</b>") {
 		t.Errorf("expected exactly 1 user >20 (strict), got:\n%s", out)
 	}
 }

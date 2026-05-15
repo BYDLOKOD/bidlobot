@@ -101,7 +101,8 @@ func newDMEnv(t *testing.T) *dmEnv {
 	}
 
 	snd := &recSender{}
-	con := NewDMConsole(snd, sessRepo, memberRepo, adminCache, modSvc, cleanupSvc, statsSvc, nil, pendingRepo, log)
+	con := NewDMConsole(snd, sessRepo, memberRepo, adminCache, modSvc, cleanupSvc, statsSvc, nil, pendingRepo,
+		nil, nil, nil, nil, nil, log)
 
 	return &dmEnv{
 		t: t, con: con, snd: snd, api: api,
