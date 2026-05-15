@@ -375,7 +375,7 @@ func TestQuizTopFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bot.Sent[0].Text
-	if !strings.Contains(body, "@alice") || !strings.Contains(body, "@bob") {
+	if !strings.Contains(body, "alice") || !strings.Contains(body, "bob") {
 		t.Errorf("top body missing names: %q", body)
 	}
 }

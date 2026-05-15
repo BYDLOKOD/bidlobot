@@ -145,8 +145,8 @@ func TestEightBallSendErrorPropagates(t *testing.T) {
 }
 
 func TestEightBallAnswersAllNonEmptyAndCounted(t *testing.T) {
-	if len(eightBallAnswers) != 20 {
-		t.Errorf("expected 20 curated answers, got %d", len(eightBallAnswers))
+	if len(eightBallAnswers) < 60 {
+		t.Errorf("answer pool too small for replayability: %d", len(eightBallAnswers))
 	}
 	for i, a := range eightBallAnswers {
 		if strings.TrimSpace(a) == "" {

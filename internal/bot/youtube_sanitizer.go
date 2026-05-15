@@ -611,9 +611,12 @@ func largestPhotoFileID(sizes []telego.PhotoSize) string {
 }
 
 func sprintfHeader(display string) string {
-	// display is already escaped by shared.UserDisplay (username form
-	// is "@name", first-name form is HTML-escaped). The %s slot sits
-	// inside <b> so no further escaping is applied to avoid double
+	// display comes from shared.UserDisplay and is INERT: the handle
+	// form has NO leading '@' and the first-name form is HTML-escaped.
+	// This header is reposted publicly into the group, so an '@handle'
+	// here would notify the attributed member on every sanitized link;
+	// inert text is required (do not "restore" the '@'). The %s slot
+	// sits inside <b> so no further escaping is applied to avoid double
 	// encoding.
 	return strings.Replace(msgYTRepostHeader, "%s", display, 1)
 }

@@ -46,19 +46,20 @@ Chat Statistics
 Total messages: 12,847
 Total users: 156
 Average per user: 82
-Most active: @poweruser (2,341 messages)
+Most active: poweruser (2,341 messages)
 Tracking since: Mar 4, 2026
 ```
 
 **`/stats top`** - top 5. Tie-break: earlier `first_seen` ranks higher.
 ```
 Top Contributors
-1. @poweruser - 2,341
-2. @activeguy - 1,892
-3. @coder42 - 1,456
-4. @debater - 1,203
-5. @helper - 987
+1. poweruser - 2,341
+2. activeguy - 1,892
+3. coder42 - 1,456
+4. debater - 1,203
+5. helper - 987
 ```
+Handles are shown WITHOUT a leading `@` - see Formatting.
 
 **`/stats today`** - UTC 00:00 boundary
 ```
@@ -67,9 +68,11 @@ Messages: 127
 Active users: 23
 ```
 
-**`/stats @username`** or **`/stats {user_id}`** - per-user
+**`/stats @username`** or **`/stats {user_id}`** - per-user (the
+`@username` is the *command argument* the caller types; the rendered
+identity in the reply is inert, see Formatting)
 ```
-Stats for @username
+Stats for username
 Messages: 1,892
 Rank: #2 of 156
 First seen: Jan 15, 2026
@@ -85,19 +88,36 @@ Last seen: Today
 
 - Numbers: thousands separator comma (`12,847`)
 - Dates: `Mon DD, YYYY`. Today (UTC) -> `Today`
-- Users: `Name (@username)` when both are known; `@username` if no
-  name. Counting is always keyed by the stable `user_id`, never by
-  name, so distinct same-name members are separate rows (the legacy
-  chat-export.org instead merged by name string - this is stricter).
-  When there is **no @username** the display name alone is not unique
-  (several members can share one; Telegram-Desktop-imported users carry
-  no username at all), so the stats resolver appends the numeric id:
-  `Name (id 12345)`. The id drops off automatically once the user
-  writes live and a globally-unique @handle is captured
-  (`SourceMessage` overwrites `SourceImport`). `shared.UserDisplayFull`
-  builds the name/handle part (HTML-safe; renderers must not re-escape);
-  the id suffix is added by the membership display resolver where the
-  id is known.
+- Users: `Name (handle)` when both are known; `handle` if no name. The
+  handle is rendered **WITHOUT a leading `@`** and never as a
+  `tg://user?id=` link or `text_mention`. A literal `@handle` of a real
+  account is parsed by Telegram as a mention that *notifies* that user,
+  so a leaderboard would ping everyone it lists every time anyone runs
+  `/stats` - reading stats would mass-summon the chat. Inert text is
+  mandatory here; the ONLY sanctioned member-notifying output is the
+  gracekick public tag (it builds its own `mention()` and never routes
+  through this path). Counting is always keyed by the stable `user_id`,
+  never by name, so distinct same-name members are separate rows (the
+  legacy chat-export.org instead merged by name string - this is
+  stricter). When there is **no handle** the display name alone is not
+  unique (several members can share one), so the resolver appends the
+  numeric id: `Name (id 12345)`. The id drops off once the user writes
+  live and a globally-unique handle is captured (`SourceMessage`
+  overwrites `SourceImport`).
+- **Import-only members render as `User <id>`** (neutral). A
+  Telegram-Desktop export's `from` is the *exporting account's
+  address-book label* for that user, not their own profile name;
+  surfacing it would both misname them and leak the operator's private
+  contacts into public stats. The membership display resolver therefore
+  drops `FirstName` for any member whose `KnownVia == SourceImport`
+  (no live data yet) and the caller falls back to `User <id>`; the row
+  self-heals to the real name+handle once the user writes live, and
+  **durably** - `KnownVia` precedence is monotonic, so a later periodic
+  re-import never downgrades a live member back to `SourceImport`
+  (`storage.MembershipRepo.UpsertMember`).
+  `shared.UserDisplayFull` builds the name/handle part (HTML-safe;
+  renderers must not re-escape); the id suffix is added by the
+  membership display resolver where the id is known.
 
 ## Monthly statistics (retroactive nominations)
 

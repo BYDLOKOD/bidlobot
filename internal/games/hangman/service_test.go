@@ -287,8 +287,8 @@ func TestStatusAndMaskHelpers(t *testing.T) {
 }
 
 func TestWordPoolHealthy(t *testing.T) {
-	if WordCount() < 30 {
-		t.Errorf("word pool too small: %d", WordCount())
+	if WordCount() < 120 {
+		t.Errorf("word pool too small for replayability: %d", WordCount())
 	}
 	r := rand.New(rand.NewSource(7))
 	for i := 0; i < 50; i++ {
@@ -296,8 +296,30 @@ func TestWordPoolHealthy(t *testing.T) {
 		if w == "" || w != strings.ToUpper(w) {
 			t.Fatalf("PickWord returned non-uppercase or empty: %q", w)
 		}
-		if len([]rune(w)) < 4 {
-			t.Fatalf("word too short for hangman: %q", w)
+	}
+}
+
+// TestWordPoolInvariants scans the ENTIRE pool deterministically (the
+// random sampling in TestWordPoolHealthy could miss a single bad entry
+// among 150+). Every word must be guessable: rune length >= 4 and only
+// letters IsSingleLetter accepts (Latin a-z / Cyrillic а-я + ё); a
+// digit/hyphen/space could never be guessed letter-by-letter. No
+// duplicates (they would skew pick probability).
+func TestWordPoolInvariants(t *testing.T) {
+	seen := make(map[string]bool, WordCount())
+	for _, raw := range words {
+		if seen[raw] {
+			t.Errorf("duplicate word in pool: %q", raw)
+		}
+		seen[raw] = true
+		rs := []rune(raw)
+		if len(rs) < 4 {
+			t.Errorf("word too short for hangman: %q (%d runes)", raw, len(rs))
+		}
+		for _, c := range rs {
+			if !IsSingleLetter(string(c)) {
+				t.Errorf("word %q contains a non-guessable rune %q", raw, c)
+			}
 		}
 	}
 }

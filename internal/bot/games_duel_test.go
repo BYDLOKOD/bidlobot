@@ -10,6 +10,7 @@ import (
 
 	"github.com/mymmrac/telego"
 
+	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/games/dice"
 )
 
@@ -73,6 +74,28 @@ func (s *stubDuelSender) msgCount() int {
 	return len(s.MessageCalls)
 }
 
+// stubDuelMembers resolves a username to a member only if it is in the
+// known set - mirroring the real repo, which errors for any user the
+// bot has never observed in the chat.
+type stubDuelMembers struct {
+	byName map[string]*membership.Member
+}
+
+func (s *stubDuelMembers) GetMemberByUsername(_ context.Context, _ int64, username string) (*membership.Member, error) {
+	if m, ok := s.byName[strings.ToLower(username)]; ok {
+		return m, nil
+	}
+	return nil, membership.ErrNotFound
+}
+
+// knownBob is the default opponent the proceed-path tests duel against;
+// id differs from the caller (200) and it is not a bot.
+func knownBob() *stubDuelMembers {
+	return &stubDuelMembers{byName: map[string]*membership.Member{
+		"bob": {UserID: 300, Username: "bob", FirstName: "Bob"},
+	}}
+}
+
 func newDuelMsg(text string) telego.Message {
 	return telego.Message{
 		MessageID: 1,
@@ -85,7 +108,7 @@ func newDuelMsg(text string) telego.Message {
 
 func TestDuelHandlerChallengerWins(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{6, 2}} // challenger 6, opponent 2
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel @bob")); err != nil {
 		t.Fatal(err)
 	}
@@ -93,28 +116,33 @@ func TestDuelHandlerChallengerWins(t *testing.T) {
 		t.Fatalf("expected 2 SendDice calls, got %d", sender.diceCount())
 	}
 	body := sender.lastMsg()
-	if !strings.Contains(body, "@alice") || !strings.Contains(body, "@bob") {
+	// Inert identity: both duelists named, but NEVER as "@handle"
+	// (that would notify them - the whole point of the fix).
+	if strings.Contains(body, "@") {
+		t.Errorf("announcement must not contain a literal @-mention, got %q", body)
+	}
+	if !strings.Contains(body, "alice") || !strings.Contains(body, "bob") {
 		t.Errorf("announcement should name both duelists, got %q", body)
 	}
-	if !strings.Contains(body, "Побеждает @alice") {
+	if !strings.Contains(body, "Побеждает alice") {
 		t.Errorf("challenger (6) should win over opponent (2), got %q", body)
 	}
 }
 
 func TestDuelHandlerOpponentWins(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{1, 5}}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel @bob")); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(sender.lastMsg(), "Побеждает @bob") {
+	if !strings.Contains(sender.lastMsg(), "Побеждает bob") {
 		t.Errorf("opponent (5) should win over challenger (1), got %q", sender.lastMsg())
 	}
 }
 
 func TestDuelHandlerTie(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{4, 4}}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel @bob")); err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +153,7 @@ func TestDuelHandlerTie(t *testing.T) {
 
 func TestDuelHandlerNoTarget(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{6, 1}}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel")); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +167,7 @@ func TestDuelHandlerNoTarget(t *testing.T) {
 
 func TestDuelHandlerSelfTarget(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{6, 1}}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel @alice")); err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +181,7 @@ func TestDuelHandlerSelfTarget(t *testing.T) {
 
 func TestDuelHandlerBotTarget(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{6, 1}}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel @BidloBot")); err != nil {
 		t.Fatal(err)
 	}
@@ -165,9 +193,32 @@ func TestDuelHandlerBotTarget(t *testing.T) {
 	}
 }
 
+// TestDuelHandlerRejectsNonMember is the regression guard for the
+// owner-reported bug: "/duel @anyone" could challenge a person the bot
+// never saw in the chat (even a garbage handle). The opponent must
+// resolve to a known member or the duel is refused with no dice and no
+// @-mention echoed back.
+func TestDuelHandlerRejectsNonMember(t *testing.T) {
+	sender := &stubDuelSender{Rolls: []int{6, 1}}
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
+	if err := h.HandleDuel(nil, newDuelMsg("/duel @stranger")); err != nil {
+		t.Fatal(err)
+	}
+	if sender.diceCount() != 0 {
+		t.Error("a non-member target must not roll dice")
+	}
+	body := sender.lastMsg()
+	if !strings.Contains(body, "Не знаю участника") {
+		t.Errorf("non-member should be rejected with a hint, got %q", body)
+	}
+	if strings.Contains(body, "@") {
+		t.Errorf("rejection must stay inert (a lurking member could be pinged), got %q", body)
+	}
+}
+
 func TestDuelHandlerSendDiceErrorAborts(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{6, 2}, SendDiceErr: errors.New("rate limit")}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	if err := h.HandleDuel(nil, newDuelMsg("/duel @bob")); err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +233,7 @@ func TestDuelHandlerSendDiceErrorAborts(t *testing.T) {
 
 func TestDuelHandlerIgnoresBotAndNilFrom(t *testing.T) {
 	sender := &stubDuelSender{Rolls: []int{6, 1}}
-	h := NewDuelHandler(sender, "bidlobot", testLogger())
+	h := NewDuelHandler(sender, knownBob(), "bidlobot", testLogger())
 	m := newDuelMsg("/duel @bob")
 	m.From = nil
 	if err := h.HandleDuel(nil, m); err != nil {

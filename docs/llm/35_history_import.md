@@ -67,8 +67,15 @@ must be re-sent compressed.
 - `from_id`: `user<id>` (real member) | `channel<id>` | `chat<id>`
   (anonymous admin / linked-channel autopost - excluded).
 - `from`: display name, may be `null` (service / anonymous). It is NOT
-  the @username; the export has no username. Irrelevant: kicks are by
-  user id.
+  the @username (the export has no username) and it is NOT the user's
+  own profile name either - it is the name **as the exporting account's
+  address book sees them**. Since the operator runs the export, an
+  import-only user's `from` is the operator's *private contact label*
+  for that person. It is stored (`Member.FirstName`) but **must not be
+  shown in public stats**: the membership display resolver drops it for
+  `KnownVia == SourceImport` and renders the neutral `User <id>` until
+  the user writes live (see [30_stats.md](30_stats.md) Formatting).
+  Irrelevant to kicks (those are by user id).
 - `date_unixtime`: reliable UTC. `date`: exporting client's local wall
   clock - fallback only.
 - Reactions are NOT in the export. Member roster is NOT in the export

@@ -325,11 +325,27 @@ func (r *membershipDisplayResolver) UserDisplay(ctx context.Context, absChatID, 
 	if err != nil {
 		return ""
 	}
-	// Stats lists show name + @handle together. Import-only users have
-	// no @handle in the export data - they show just the name until
-	// they write live (live tracking then captures the username and
-	// SourceMessage overwrites SourceImport).
-	d := shared.UserDisplayFull(m.Username, m.FirstName)
+	username, firstName := m.Username, m.FirstName
+	if m.KnownVia == membership.SourceImport {
+		// A Telegram-Desktop export's `from` is the display name AS THE
+		// EXPORTING ACCOUNT'S ADDRESS BOOK SEES IT, not the member's own
+		// profile/chat name. The operator did the export, so an
+		// import-only user's `FirstName` is the operator's PRIVATE
+		// CONTACT LABEL for that person (e.g. "Member"). Surfacing
+		// it in public stats both misnames the user and leaks the
+		// operator's contacts. Drop it: fall back to the neutral
+		// "User <id>" (the caller's empty-string fallback) until the
+		// user writes live, at which point SourceMessage overwrites
+		// SourceImport with their real profile name+handle and the row
+		// self-heals - durably: KnownVia precedence is monotonic, so a
+		// later periodic re-import will NOT downgrade them back to
+		// SourceImport (see storage.MembershipRepo.UpsertMember).
+		username, firstName = "", ""
+	}
+	// Stats lists show name + handle together (handle WITHOUT '@' - an
+	// '@handle' would notify that member every time anyone reads stats;
+	// see shared.UserDisplayFull).
+	d := shared.UserDisplayFull(username, firstName)
 	if d == "" {
 		return "" // nothing known -> caller falls back to "User <id>"
 	}

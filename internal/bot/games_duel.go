@@ -8,9 +8,11 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/games/dice"
 	"github.com/veschin/bidlobot/internal/games/duel"
 	"github.com/veschin/bidlobot/internal/shared"
+	"github.com/veschin/bidlobot/internal/storage"
 )
 
 // duelSender is the narrow telego surface the duel handler needs. It
@@ -23,27 +25,38 @@ type duelSender interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 }
 
+// duelMembers is the narrow membership surface the duel handler needs
+// to verify the opponent is a real member of THIS chat. Mirrors the
+// moderation executor's resolveTarget pattern (the bot only knows users
+// it observed at least once). storage.MembershipRepo satisfies it.
+type duelMembers interface {
+	GetMemberByUsername(ctx context.Context, absChatID int64, username string) (*membership.Member, error)
+}
+
 // DuelHandler wires "/duel @user" to an immediate two-dice resolution.
 // There is no accept step (which would require persisted state and a
 // callback we cannot register from here): the caller invokes, the bot
 // rolls one die for the challenger and one for the opponent, and the
 // higher roll wins. Open to everyone (cooldown is the throttle).
 type DuelHandler struct {
-	bot duelSender
-	log *slog.Logger
+	bot     duelSender
+	members duelMembers
+	log     *slog.Logger
 
 	// botUsername is used to reject "/duel @thebot". Empty disables the
 	// check (bot identity unknown at construction).
 	botUsername string
 }
 
-// NewDuelHandler wires the handler. botUsername may be empty; pass the
-// value from GetMe at startup so members cannot duel the bot.
-func NewDuelHandler(bot duelSender, botUsername string, log *slog.Logger) *DuelHandler {
+// NewDuelHandler wires the handler. members validates that the opponent
+// is a real member of the chat (the bot can only duel users it has
+// observed); it must not be nil in production. botUsername may be empty;
+// pass the value from GetMe at startup so members cannot duel the bot.
+func NewDuelHandler(bot duelSender, members duelMembers, botUsername string, log *slog.Logger) *DuelHandler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &DuelHandler{bot: bot, log: log, botUsername: botUsername}
+	return &DuelHandler{bot: bot, members: members, log: log, botUsername: botUsername}
 }
 
 // HandleDuel handles "/duel @user". Validation:
@@ -71,9 +84,37 @@ func (h *DuelHandler) HandleDuel(_ *th.Context, msg telego.Message) error {
 	}
 
 	bgCtx := context.Background()
+
+	// The opponent must be a real member of THIS chat. The bot only
+	// knows users it has observed at least once; without this check
+	// "/duel @anyone" (or "/duel @1111111111111111111111111") would
+	// announce - and, if the handle belonged to a real account, ping -
+	// an arbitrary person who is not even in the chat.
+	opMember, err := h.members.GetMemberByUsername(bgCtx, storage.AbsChatID(msg.Chat.ID), op.Username)
+	if err != nil {
+		// Inert on purpose: a lurker who never wrote is unknown to the
+		// bot yet may still be in the chat, so even the rejection must
+		// not echo "@handle" (it would notify them).
+		return h.reply(msg, fmt.Sprintf(
+			"Не знаю участника %s в этом чате. Соперник должен хотя бы раз написать или отреагировать здесь.",
+			op.Username))
+	}
+	if opMember.IsBot {
+		return h.reply(msg, "С ботами не дуэлимся. Вызовите человека из чата.")
+	}
+	if opMember.UserID == msg.From.ID {
+		return h.reply(msg, "С самим собой дуэль не выйдет. Вызовите кого-нибудь другого.")
+	}
+
+	// Render both sides as INERT text (handle without '@'); a duel is
+	// not a sanctioned notifying surface (only the gracekick tag is).
+	opponentDisplay := shared.UserDisplay(opMember.Username, opMember.FirstName)
+	if opponentDisplay == "" {
+		opponentDisplay = fmt.Sprintf("участник %d", opMember.UserID)
+	}
 	challengerDisplay := shared.UserDisplay(msg.From.Username, msg.From.FirstName)
 	if challengerDisplay == "" {
-		challengerDisplay = fmt.Sprintf("user %d", msg.From.ID)
+		challengerDisplay = fmt.Sprintf("участник %d", msg.From.ID)
 	}
 
 	challengerVal, ok := h.rollOne(bgCtx, msg)
@@ -98,13 +139,13 @@ func (h *DuelHandler) HandleDuel(_ *th.Context, msg telego.Message) error {
 	switch res.Winner {
 	case duel.SideChallenger:
 		body = fmt.Sprintf("⚔️ Дуэль: %s (%d) против %s (%d).\nПобеждает %s!",
-			challengerDisplay, res.ChallengerVal, op.Display, res.OpponentVal, challengerDisplay)
+			challengerDisplay, res.ChallengerVal, opponentDisplay, res.OpponentVal, challengerDisplay)
 	case duel.SideOpponent:
 		body = fmt.Sprintf("⚔️ Дуэль: %s (%d) против %s (%d).\nПобеждает %s!",
-			challengerDisplay, res.ChallengerVal, op.Display, res.OpponentVal, op.Display)
+			challengerDisplay, res.ChallengerVal, opponentDisplay, res.OpponentVal, opponentDisplay)
 	default: // tie
 		body = fmt.Sprintf("⚔️ Дуэль: %s (%d) против %s (%d).\nНичья - бросайте ещё: /duel %s",
-			challengerDisplay, res.ChallengerVal, op.Display, res.OpponentVal, op.Display)
+			challengerDisplay, res.ChallengerVal, opponentDisplay, res.OpponentVal, opponentDisplay)
 	}
 	return h.replyHTML(msg, body)
 }

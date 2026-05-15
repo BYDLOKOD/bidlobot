@@ -342,7 +342,7 @@ func TestHandleSanitizeTextDeletesAndReposts(t *testing.T) {
 		t.Fatalf("expected 1 repost message, got %d", len(snd.Messages))
 	}
 	body := snd.Messages[0].Text
-	if !strings.Contains(body, "@alice") {
+	if !strings.Contains(body, "alice") {
 		t.Errorf("repost missing attribution, got %q", body)
 	}
 	if !strings.Contains(body, "https://youtu.be/ID") || strings.Contains(body, "si=trk") {
@@ -379,7 +379,7 @@ func TestHandleSanitizePhotoRepostByFileID(t *testing.T) {
 		t.Errorf("should resend largest photo file_id, got %q", snd.Photos[0].Photo.FileID)
 	}
 	cap := snd.Photos[0].Caption
-	if !strings.Contains(cap, "@alice") || !strings.Contains(cap, "https://youtu.be/ID") || strings.Contains(cap, "si=trk") {
+	if !strings.Contains(cap, "alice") || !strings.Contains(cap, "https://youtu.be/ID") || strings.Contains(cap, "si=trk") {
 		t.Errorf("photo caption wrong: %q", cap)
 	}
 }

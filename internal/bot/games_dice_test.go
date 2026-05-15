@@ -159,7 +159,7 @@ func TestDiceHandlerFirstRollAnnouncesRecord(t *testing.T) {
 	if !strings.Contains(body, "Первый рекорд") {
 		t.Errorf("first roll should announce first record, got %q", body)
 	}
-	if !strings.Contains(body, "@alice") {
+	if !strings.Contains(body, "alice") {
 		t.Errorf("announcement should include user, got %q", body)
 	}
 }
@@ -210,10 +210,10 @@ func TestDiceHandlerNewRecordAnnouncesPrevious(t *testing.T) {
 	if !strings.Contains(body, "Новый рекорд") {
 		t.Errorf("expected new-record text, got %q", body)
 	}
-	if !strings.Contains(body, "@bob") {
+	if !strings.Contains(body, "bob") {
 		t.Errorf("expected @bob in announcement, got %q", body)
 	}
-	if !strings.Contains(body, "@alice") {
+	if !strings.Contains(body, "alice") {
 		t.Errorf("expected previous holder @alice, got %q", body)
 	}
 }
@@ -239,7 +239,7 @@ func TestDiceHandlerTieAnnouncesRepeat(t *testing.T) {
 	if !strings.Contains(body, "Повтор рекорда") {
 		t.Errorf("expected tie text, got %q", body)
 	}
-	if !strings.Contains(body, "@alice") {
+	if !strings.Contains(body, "alice") {
 		t.Errorf("tie should still credit original holder, got %q", body)
 	}
 }

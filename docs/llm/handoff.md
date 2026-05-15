@@ -5,21 +5,24 @@ kind: guide
 
 # Handoff: next-session action plan
 
-Last rewritten 2026-05-15, end of the cleanup-campaign-rework session.
-Owner feedback + a privacy-leak directive captured 2026-05-16 (see *Known
-live bugs* and *Privacy / personal-data leak*); the rest of this file is
-the 2026-05-15 cleanup-campaign state and still current.
+Last rewritten 2026-05-16, end of the privacy-leak + owner-feedback
+session. The cleanup-campaign baseline (2026-05-15) below is unchanged
+and still current; this session added 2 LOCAL commits on top.
 
 ## State (what is true right now)
 
-- `origin/master` = `f203fc9`. Local `master` == `origin/master`
-  (pushed, **in sync**, clean fast-forward, 0 ahead / 0 behind).
-- Shipped in this push (prod baseline was `6942061`): evidence-graded
-  `/cleanup`, the command-started cleanup **campaign** (`gracekick`),
-  the owner's `/summarize` (GLM) workstream, dead immediate-kick code
-  removed, docs.
+- `origin/master` = `f203fc9` (NOT moved this session). Local `master`
+  is **2 commits AHEAD, 0 behind, NOT pushed**:
+  - `513b8d5` chore(privacy): purge real PII from testdata + handoff.
+  - `<next>` the 3 bug fixes + S1 + game-content expansion + specs +
+    devlog 07 (the commit this handoff ships with).
+- Nothing pushed, nothing deployed (owner explicitly withheld both;
+  redeploy is coordinated on the owner's return).
+- Shipped earlier (prod baseline `6942061`, on `origin/master`):
+  evidence-graded `/cleanup`, the command-started cleanup **campaign**
+  (`gracekick`), `/summarize` (GLM), docs.
 - `go build ./...`, `go test ./...` (**21 packages, 0 failures**),
-  `go vet`, `gofmt` all green at `f203fc9`.
+  `go vet`, `gofmt` all green at local HEAD (re-run, uncached).
 - Critic: evidence-grading clean (devlog 05); campaign rework two opus
   rounds, round-2 clean; a third full pre-push opus pass over the
   entire `origin/master..master` diff (incl. the summarize-merge
@@ -47,42 +50,35 @@ the 2026-05-15 cleanup-campaign state and still current.
   membership row keeps a campaign non-empty, so `/cleanup` re-run is
   refused for that chat; escape is the documented `/cleanup stop`.
 
-## Known live bugs (owner-reported 2026-05-16, deployed `6942061`)
+## Fixed this session (owner-reported 2026-05-16; committed LOCAL only)
 
-Captured from owner observation of the deployed bot; fixes in progress
-this session (no deploy - owner redeploys later). All three are
-user-triggered commands that notify/act on third parties or show a wrong
-identity. Common root for 1 & 3: no invariant that user-triggered output
-stays inert and that targets are validated chat members. Memory:
-`command-output-no-third-party-ping`.
+All in the `<next>` commit, full suite green, opus-critic-reviewed
+(1 BLOCKER refuted with evidence + 3 items resolved). NOT deployed.
 
-1. **Stats output @-mentions everyone.** `/stats top` / `/stats` /
-   monthly nominations render literal `@handle`
-   (`1. Олег (@veschin) - 75 ...`). Telegram makes that a real mention,
-   so anyone reading stats pings every listed member - reading stats
-   mass-summons the chat. **The spec is the root**: `30_stats.md` itself
-   mandates `@username` everywhere (`@poweruser`, "Users:
-   Name (@username)"). Fix the renderer AND `30_stats.md` in the same
-   commit: emit inert text - `@` stripped (`veschin`) or name only;
-   never `@handle`, `tg://user?id=`, or `text_mention`.
-2. **Import-only users show the operator's contact name.** Members with
-   no @username (Telegram-Desktop-imported) render as the *exporting
-   account's address-book label*, not their real profile name - e.g.
-   `Member (id 409000004)` is Oleg's private contact label. The
-   export `from` field is address-book-relative (`35_history_import.md`
-   ~line 73 wrongly calls it "Irrelevant"). Fix: resolve import-only
-   identity via `getChatMember` at render (the bot is nobody's contact
-   -> neutral public name), cache on the membership row, render inertly
-   per (1).
-3. **`/duel` targets anyone.** `/duel @anyone` and even
-   `/duel @1111111111111111111111111` are accepted - challenges users
-   not in the chat and malformed/non-existent handles, and pings real
-   ones. Fix: validate the target resolves to a present member of THIS
-   chat (membership table or `getChatMember` status), reject
-   non-members / malformed input with a clear error, render inert. Open
-   product Q (owner decides, do not assume): may an in-chat duel
-   deliberately notify the challenged member? Pinging non-members is
-   never acceptable regardless.
+1. **Stats `@`-mention -> inert.** `shared.UserDisplay` /
+   `UserDisplayFull` now render the handle WITHOUT `@` (and never a
+   `tg://user?id=` / `text_mention`); `resolveQuipTarget` too. Fixes
+   `/stats*`, monthly nominations, all games, the YouTube attribution
+   header. gracekick's own `mention()` is untouched (the sanctioned
+   notifier). `30_stats.md` corrected (it had mandated `@username`).
+2. **Import-only name no longer leaks the operator's contacts.**
+   `membershipDisplayResolver` blanks `FirstName` for
+   `KnownVia == SourceImport` -> caller renders neutral `User <id>`;
+   self-heals on live write. **S1 (critic):** `KnownVia` precedence
+   made monotonic in `storage.UpsertMember` so the owner's planned
+   BYDLOKOD **re-import will NOT downgrade** a healed member back.
+   `35_history_import.md` corrected.
+3. **`/duel` validates membership.** `DuelHandler` got a `duelMembers`
+   dep; the opponent must resolve via `GetMemberByUsername` in THIS
+   chat or the duel is refused (no dice, inert message - a lurking
+   member is not pinged even by the rejection). Product Q resolved
+   conservatively: the duel does NOT notify the challenged member
+   (inert, per the invariant); owner may revisit.
+4. **Game content expanded** (replayability): 8ball 20->~65, roast/
+   praise 15->40 each, hangman 44->156 (+ a full-pool invariant test),
+   trivia 26->46, snippets 12->23 (verified). Deliberately quality/
+   correctness-first, NOT a literal 20x on the Q&A pools (wrong facts
+   are worse than fewer questions) - owner can ask for more volume.
 
 ## Privacy / personal-data leak (owner directive 2026-05-16)
 
@@ -96,31 +92,40 @@ scrub + force-push. The force-push to `origin` is the one coordinated
 action left for the owner's return ("когда я приду ... мы передеплоим");
 a backup bundle is taken before any rewrite. Any *live* secret found in
 history must be **rotated** by the owner regardless of scrub (a pushed
-secret is already compromised). Audit findings -> a devlog; the ready
-runbook -> linked from there and from this handoff on completion.
+secret is already compromised). Full audit + the dry-run scrub runbook:
+[devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md).
+Status: working tree sanitized + committed locally (`513b8d5`, not
+pushed); the git-filter-repo command was dry-run on a LOCAL mirror (0
+residual PII, 21 packages green) - corroborating, NOT a substitute for
+the owner's own step-4 verify on the origin mirror before the
+irreversible push. Two MANDATORY owner actions remain, both
+owner-only: (a) rotate `TG_BOT_TOKEN` (@BotFather) + `GLM_API_KEY`
+(z.ai) NOW - not a git problem, the keys are already burned via a chat
+transcript; (b) run devlog-07 steps 1-6 to scrub history and
+force-push (coordinated, irreversible).
 
-## Next (pick one - choices, not a queue)
+## Next (owner actions on return - ORDERED, not a free choice)
 
-- **Deploy now (~10 min).** Run the Upgrade block in
-  [70_deployment.md](70_deployment.md) on the host, watch the four
-  startup log lines, done. Nothing activates by itself.
-- **Operator acceptance test first (~30 min, then deploy).** Use the
-  Manual checklist in [40_moderation.md] / below in a test chat before
-  touching prod.
-- **Close the separate YouTube-si= item (~15 min).** Owner reported the
-  sanitizer "reposts but doesn't delete the original". Diagnosis: the
-  bot most likely lacks the **Delete Messages** admin right in that
-  chat (the code reposts-then-deletes and logs+degrades by design - not
-  a code bug on this branch). Verify the bot's admin rights in that
-  chat; only investigate code if rights are confirmed present.
-- **Fix the three live bugs + scrub the leak (in progress this
-  session).** Recommended: they degrade every `/stats` and `/duel` in
-  the live community and the leak is owner-flagged "важно". No deploy -
-  owner redeploys on return.
-- **Expand mini-game content ~20x.** 8ball and the other phrase-driven
-  games need far larger, varied pools for replayability - owner
-  explicitly praised the games and asked for the depth (memory:
-  `working-style-doxme`). Not a deploy blocker; bundle with the fixes.
+1. **Rotate creds first (~5 min, owner-only, do before anything).**
+   `TG_BOT_TOKEN` via @BotFather, `GLM_API_KEY` via z.ai. Independent
+   of git; the keys are already exposed via a chat transcript.
+2. **Scrub history + force-push (coordinated, irreversible).** Follow
+   [devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md)
+   steps 1-6. Step 4 (residual-PII grep == 0 on the origin mirror) is
+   gating; do not skip it on the strength of the dry-run.
+3. **Then push this session's 2 local commits**, then **deploy** (the
+   Upgrade block in [70_deployment.md](70_deployment.md); watch the
+   four startup log lines). Order matters: scrub rewrites history, so
+   push the cleanup branch only as part of / after the scrub, not
+   before.
+- Still open, independent: **YouTube-si= delete** - owner reported
+  "reposts but doesn't delete the original"; most likely the bot lacks
+  the **Delete Messages** admin right in that chat (code
+  reposts-then-deletes and degrades by design). Verify rights before
+  touching code.
+- Optional: **more game content** - this session did a quality-first
+  expansion (not literal 20x on Q&A pools by design); owner can ask
+  for more volume in the safe pools (8ball/roast/praise/hangman).
 
 ## Read order
 

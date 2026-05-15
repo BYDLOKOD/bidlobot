@@ -33,6 +33,32 @@ var words = []string{
 	"kubernetes", "docker", "terraform", "ansible", "prometheus",
 	"grafana", "postgres", "redis", "nginx", "kafka",
 	"гитхаб", "линукс", "контейнер", "пайплайн", "деплой",
+	// More languages / runtimes
+	"javascript", "swift", "ruby", "perl", "carbon", "ocaml",
+	"fortran", "cobol", "groovy", "dart", "julia", "crystal",
+	"assembler", "pascal", "prolog", "scheme", "racket",
+	// More concepts
+	"алгоритм", "структура", "сложность", "итератор", "генератор",
+	"каррирование", "корутина", "семафор", "монада", "функтор",
+	"замер", "профилировка", "трассировка", "телеметрия", "идемпотентность",
+	"сериализация", "валидация", "хеширование", "шифрование", "компрессия",
+	"паттерн", "рефакторинг", "тестирование", "отладка", "оптимизация",
+	"наблюдаемость", "масштабирование", "репликация", "шардирование", "консенсус",
+	"транзакция", "блокировка", "конвейер", "стек", "дерево",
+	"граф", "куча", "список", "множество", "словарь",
+	// Web / network / db
+	"протокол", "сокет", "маршрут", "запрос", "ответ",
+	"заголовок", "куки", "сессия", "токен", "вебхук",
+	"латентность", "индекс", "миграция", "репозиторий", "консистентность",
+	"кластер", "балансировщик", "прокси", "шлюз", "брокер",
+	// Tools / infra / security
+	"compiler", "linker", "debugger", "profiler", "sandbox",
+	"firewall", "certificate", "namespace", "scheduler", "garbage",
+	"webpack", "babel", "vite", "gradle", "maven",
+	"jenkins", "argocd", "vault", "consul", "envoy",
+	"sqlite", "mongodb", "rabbitmq", "elastic", "clickhouse",
+	"монолит", "микросервис", "оркестратор", "артефакт", "реестр",
+	"уязвимость", "аутентификация", "авторизация", "песочница", "аудит",
 }
 
 // WordCount returns the size of the pool. Used by tests to assert the

@@ -157,6 +157,107 @@ var triviaSet = []Trivia{
 		Options:    [4]string{"Code Inspection", "Continuous Integration", "Container Image", "Cluster Init"},
 		CorrectIdx: 1,
 	},
+	// --- appended (stable indices; never reorder/insert above) ---
+	{
+		Question:   "Какова временная сложность бинарного поиска в худшем случае?",
+		Options:    [4]string{"O(n)", "O(log n)", "O(n log n)", "O(1)"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Что делает HTTP-статус 404?",
+		Options:    [4]string{"Сервер недоступен", "Не авторизован", "Не найдено", "Запрос некорректен"},
+		CorrectIdx: 2,
+	},
+	{
+		Question:   "Какой HTTP-метод считается идемпотентным?",
+		Options:    [4]string{"POST", "PATCH", "PUT", "CONNECT"},
+		CorrectIdx: 2,
+	},
+	{
+		Question:   "Сколько байт в адресе IPv4?",
+		Options:    [4]string{"4", "6", "8", "16"},
+		CorrectIdx: 0,
+	},
+	{
+		Question:   "Какая структура данных работает по принципу LIFO?",
+		Options:    [4]string{"Очередь", "Стек", "Связный список", "Дерево"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Что означает ACID в контексте баз данных?",
+		Options:    [4]string{"Atomicity, Consistency, Isolation, Durability", "Access, Cache, Index, Data", "Async, Commit, Index, Durability", "Atomicity, Cache, Isolation, Delta"},
+		CorrectIdx: 0,
+	},
+	{
+		Question:   "Какой порт по умолчанию у HTTPS?",
+		Options:    [4]string{"80", "443", "22", "8080"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Что такое 'big O' нотация описывает?",
+		Options:    [4]string{"Размер кода", "Асимптотическую сложность", "Число багов", "Память диска"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Какой язык компилируется в WebAssembly чаще всего в примерах Mozilla?",
+		Options:    [4]string{"Rust", "PHP", "Bash", "SQL"},
+		CorrectIdx: 0,
+	},
+	{
+		Question:   "Команда git для создания новой ветки и переключения на неё?",
+		Options:    [4]string{"git branch -d", "git checkout -b", "git merge", "git rebase -i"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Что возвращает логическое выражение 'true && false'?",
+		Options:    [4]string{"true", "false", "ошибку", "null"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Какая команда выводит текущий рабочий каталог в Unix?",
+		Options:    [4]string{"cd", "ls", "pwd", "whoami"},
+		CorrectIdx: 2,
+	},
+	{
+		Question:   "Что такое SQL JOIN, возвращающий только совпавшие строки обеих таблиц?",
+		Options:    [4]string{"LEFT JOIN", "RIGHT JOIN", "FULL OUTER JOIN", "INNER JOIN"},
+		CorrectIdx: 3,
+	},
+	{
+		Question:   "Сколько бит в одном байте?",
+		Options:    [4]string{"4", "8", "16", "32"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Какой принцип ООП скрывает внутреннее состояние объекта?",
+		Options:    [4]string{"Наследование", "Полиморфизм", "Инкапсуляция", "Композиция"},
+		CorrectIdx: 2,
+	},
+	{
+		Question:   "Что делает команда 'docker build'?",
+		Options:    [4]string{"Запускает контейнер", "Собирает образ из Dockerfile", "Удаляет образ", "Скачивает образ"},
+		CorrectIdx: 1,
+	},
+	{
+		Question:   "Какая система счисления используется в шестнадцатеричном представлении?",
+		Options:    [4]string{"2", "8", "10", "16"},
+		CorrectIdx: 3,
+	},
+	{
+		Question:   "Что означает DNS?",
+		Options:    [4]string{"Domain Name System", "Data Network Service", "Dynamic Node Selector", "Distributed Naming Standard"},
+		CorrectIdx: 0,
+	},
+	{
+		Question:   "Какой алгоритм сортировки в среднем имеет сложность O(n log n)?",
+		Options:    [4]string{"Пузырьковая", "Сортировка вставками", "Быстрая сортировка", "Сортировка выбором"},
+		CorrectIdx: 2,
+	},
+	{
+		Question:   "Что делает оператор '==' в большинстве языков?",
+		Options:    [4]string{"Присваивание", "Сравнение на равенство", "Логическое И", "Инкремент"},
+		CorrectIdx: 1,
+	},
 }
 
 // ErrTriviaIndex is returned when GetTrivia receives an out-of-range

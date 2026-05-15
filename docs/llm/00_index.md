@@ -30,6 +30,7 @@ Each entry declares `id` and `kind` in front-matter.
 - [devlog/04_monthly_stats_games_yt_dm_import.md](devlog/04_monthly_stats_games_yt_dm_import.md) - 2026-05-15: monthly nominations engine, 7 mini-games, YouTube si= sanitizer, in-process DM history import (import CLI removed).
 - [devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md](devlog/05_cleanup_evidence_grading_and_daily_lifecycle.md) - 2026-05-15: `/cleanup` evidence grading (proven-stale vs no-data), live name resolution, window warning; first cut of the daily lifecycle.
 - [devlog/06_cleanup_campaign_rework.md](devlog/06_cleanup_campaign_rework.md) - 2026-05-15: reworked `/cleanup` into a command-started campaign (no immediate kick, no env-gated daemon); dead immediate-kick executor removed; two opus-critic rounds.
+- [devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md) - 2026-05-16: PII audit (real bio/Telegram identity in testdata, pushed); working tree sanitized (513b8d5); validated git-filter-repo scrub runbook, force-push deferred to owner; creds need rotation.
 
 ## Archived (not part of current scope)
 

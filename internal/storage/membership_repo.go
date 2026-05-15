@@ -101,7 +101,21 @@ func (r *MembershipRepo) UpsertMember(_ context.Context, p membership.MemberPatc
 			m.Status = p.Status
 		}
 		if p.KnownVia != "" {
-			m.KnownVia = p.KnownVia
+			// Monotonic identity provenance. A live-observed source
+			// (message/reaction/chat_member/my_chat_admin) carries the
+			// user's real Telegram identity; SourceImport carries only
+			// the operator's address-book label. A later (re-)import -
+			// e.g. a periodic backfill - must NOT downgrade a member
+			// who was already observed live back to SourceImport, or
+			// the stats display resolver would revert them from their
+			// real name to the neutral "User <id>" (see
+			// cmd/bidlobot/main.go membershipDisplayResolver). Import
+			// only fills an unknown or still-import slot; any live
+			// source always wins and is sticky.
+			if p.KnownVia != membership.SourceImport ||
+				m.KnownVia == "" || m.KnownVia == membership.SourceImport {
+				m.KnownVia = p.KnownVia
+			}
 		}
 		m.JoinedAt = earlierNonZero(m.JoinedAt, p.JoinedAt)
 		if !p.LeftAt.IsZero() {

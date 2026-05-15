@@ -109,6 +109,57 @@ func TestMemberUpsertMergesPatches(t *testing.T) {
 	}
 }
 
+// TestMemberKnownViaMonotonic guards the Bug2 permanence guarantee: a
+// re-import (a documented periodic backfill) must NOT downgrade a
+// member who was observed live back to SourceImport, or the stats
+// display resolver would revert them from their real name to the
+// neutral "User <id>".
+func TestMemberKnownViaMonotonic(t *testing.T) {
+	repo := newMembershipRepo(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	// 1. First seen via import (operator address-book label only).
+	m, _ := repo.UpsertMember(ctx, membership.MemberPatch{
+		UserID: 7, AbsChatID: 100,
+		FirstName: strPtr("Вячеслав (контакт оператора)"),
+		Status:    membership.StatusMember,
+		KnownVia:  membership.SourceImport, Now: now,
+	})
+	if m.KnownVia != membership.SourceImport {
+		t.Fatalf("step1 KnownVia = %q, want import", m.KnownVia)
+	}
+
+	// 2. Writes live -> real identity, live source wins.
+	m, _ = repo.UpsertMember(ctx, membership.MemberPatch{
+		UserID: 7, AbsChatID: 100,
+		Username: strPtr("slava"), FirstName: strPtr("Слава"),
+		KnownVia: membership.SourceMessage, LastMessageAt: now, Now: now,
+	})
+	if m.KnownVia != membership.SourceMessage {
+		t.Fatalf("step2 KnownVia = %q, want message (live overwrites import)", m.KnownVia)
+	}
+
+	// 3. A LATER re-import must NOT pull it back to import.
+	m, _ = repo.UpsertMember(ctx, membership.MemberPatch{
+		UserID: 7, AbsChatID: 100,
+		FirstName: strPtr("Вячеслав (контакт оператора)"),
+		KnownVia:  membership.SourceImport, Now: now,
+	})
+	if m.KnownVia != membership.SourceMessage {
+		t.Fatalf("step3 KnownVia = %q, want message (re-import must not downgrade)", m.KnownVia)
+	}
+
+	// 4. Import still fills a genuinely unknown member.
+	m2, _ := repo.UpsertMember(ctx, membership.MemberPatch{
+		UserID: 8, AbsChatID: 100,
+		KnownVia: membership.SourceImport, Now: now,
+	})
+	if m2.KnownVia != membership.SourceImport {
+		t.Fatalf("step4 KnownVia = %q, want import (empty slot)", m2.KnownVia)
+	}
+}
+
 func TestMemberUpsertTimestampsOnlyForward(t *testing.T) {
 	repo := newMembershipRepo(t)
 	ctx := context.Background()
@@ -348,7 +399,12 @@ func TestMemberSetCountMaxSemantics(t *testing.T) {
 	if m2.MessageCount != 1005 {
 		t.Fatalf("re-import must not reduce count: want 1005, got %d", m2.MessageCount)
 	}
-	if m2.KnownVia != membership.SourceImport {
-		t.Fatalf("KnownVia should reflect last writer, got %s", m2.KnownVia)
+	// KnownVia precedence is monotonic: this member was observed live
+	// (SourceMessage) between the imports, so the re-import must NOT
+	// downgrade them back to SourceImport - otherwise the stats display
+	// resolver would revert them from their real name to "User <id>".
+	// (Dedicated coverage: TestMemberKnownViaMonotonic.)
+	if m2.KnownVia != membership.SourceMessage {
+		t.Fatalf("re-import must not downgrade a live member: got %s, want message", m2.KnownVia)
 	}
 }

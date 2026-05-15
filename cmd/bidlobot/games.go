@@ -49,7 +49,11 @@ func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, log *
 	hangmanSvc := hangman.NewService(hangmanRepo, rand.New(rand.NewSource(time.Now().UnixNano())), log)
 	hangmanHandler := bot.NewHangmanHandler(hangmanSvc, sender, log)
 
-	duelHandler := bot.NewDuelHandler(sender, botUsername, log)
+	// /duel must only target members the bot has observed in this chat
+	// (membership repo is a stateless *bbolt.DB wrapper like the others
+	// built here).
+	duelMembers := storage.NewMembershipRepo(db)
+	duelHandler := bot.NewDuelHandler(sender, duelMembers, botUsername, log)
 
 	// Trivia reuses the same per-chat quiz leaderboard store as /quiz.
 	triviaHandler := bot.NewTriviaHandler(quizRepo, sender, log)

@@ -207,7 +207,7 @@ func TestGuessHandlerGuessFlowLowHighWin(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := sender.last()
-	if !strings.Contains(body, "угадал") || !strings.Contains(body, "@bob") {
+	if !strings.Contains(body, "угадал") || !strings.Contains(body, "bob") {
 		t.Errorf("50 should win for bob, got %q", body)
 	}
 	if !strings.Contains(body, "50") {
@@ -278,7 +278,7 @@ func TestGuessHandlerTopEmptyAndPopulated(t *testing.T) {
 	if err := h.HandleGuess(nil, newGuessMsg("/guess top")); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(sender.last(), "@alice") {
+	if !strings.Contains(sender.last(), "alice") {
 		t.Errorf("leaderboard should list @alice, got %q", sender.last())
 	}
 }

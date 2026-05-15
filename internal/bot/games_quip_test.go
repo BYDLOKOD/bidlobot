@@ -69,7 +69,7 @@ func TestRoastSelfWhenNoArg(t *testing.T) {
 		t.Fatalf("expected 1 reply, got %d", len(bot.Sent))
 	}
 	body := bot.Sent[0].Text
-	if !strings.Contains(body, "@alice") {
+	if !strings.Contains(body, "alice") {
 		t.Errorf("no-arg roast should target the caller @alice, got %q", body)
 	}
 	if !quipMatchesAnyTemplate(body, roastTemplates) {
@@ -89,7 +89,7 @@ func TestPraiseSelfWhenNoArg(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bot.Sent[0].Text
-	if !strings.Contains(body, "@alice") {
+	if !strings.Contains(body, "alice") {
 		t.Errorf("no-arg praise should target caller, got %q", body)
 	}
 	if !quipMatchesAnyTemplate(body, praiseTemplates) {
@@ -103,21 +103,21 @@ func TestRoastTargetsMentionedUser(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bot.Sent[0].Text
-	if !strings.Contains(body, "@bob") {
+	if !strings.Contains(body, "bob") {
 		t.Errorf("roast should target @bob, got %q", body)
 	}
-	if strings.Contains(body, "@alice") {
+	if strings.Contains(body, "alice") {
 		t.Errorf("roast should NOT target the caller when @bob given, got %q", body)
 	}
 }
 
 func TestPraiseTargetMentionedUserWithoutAt(t *testing.T) {
-	// A bare "bob" (no @) is still treated as a handle: we prefix @.
+	// A bare "bob" (no @) is treated as a handle and rendered INERT (no @).
 	h, bot := newQuipTestHandler(4)
 	if err := h.HandlePraise(nil, newQuipMsg("/praise bob")); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(bot.Sent[0].Text, "@bob") {
+	if !strings.Contains(bot.Sent[0].Text, "bob") {
 		t.Errorf("expected @bob target, got %q", bot.Sent[0].Text)
 	}
 }
@@ -128,7 +128,7 @@ func TestQuipTargetTakesFirstTokenOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := bot.Sent[0].Text
-	if !strings.Contains(body, "@bob") {
+	if !strings.Contains(body, "bob") {
 		t.Errorf("expected @bob, got %q", body)
 	}
 	if strings.Contains(body, "friends") {
@@ -174,8 +174,8 @@ func TestQuipDeterministicWithSeed(t *testing.T) {
 	}
 	// Same seed -> same template index chosen (target differs but the
 	// surrounding template text must be identical).
-	b1 := strings.Replace(bot1.Sent[0].Text, "@alice", "X", 1)
-	b2 := strings.Replace(bot2.Sent[0].Text, "@someoneelse", "X", 1)
+	b1 := strings.Replace(bot1.Sent[0].Text, "alice", "X", 1)
+	b2 := strings.Replace(bot2.Sent[0].Text, "someoneelse", "X", 1)
 	if b1 != b2 {
 		t.Errorf("same seed must pick same template: %q vs %q", b1, b2)
 	}
@@ -214,11 +214,11 @@ func TestQuipSendErrorPropagates(t *testing.T) {
 }
 
 func TestQuipTemplatesCuratedCounts(t *testing.T) {
-	if len(roastTemplates) != 15 {
-		t.Errorf("expected 15 roast templates, got %d", len(roastTemplates))
+	if len(roastTemplates) < 35 {
+		t.Errorf("roast pool too small for replayability: %d", len(roastTemplates))
 	}
-	if len(praiseTemplates) != 15 {
-		t.Errorf("expected 15 praise templates, got %d", len(praiseTemplates))
+	if len(praiseTemplates) < 35 {
+		t.Errorf("praise pool too small for replayability: %d", len(praiseTemplates))
 	}
 	for i, tmpl := range append(append([]string{}, roastTemplates...), praiseTemplates...) {
 		if strings.Count(tmpl, "%s") != 1 {

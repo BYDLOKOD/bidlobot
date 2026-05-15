@@ -190,6 +190,97 @@ function divide(a: number, b: number): Result<number, string> {
 promise.then((v) => console.log(v));`,
 		Answer: LangJS,
 	},
+	// --- appended (stable indices; never reorder/insert above) ---
+	{
+		Code: `nums = [1, 2, 3, 4]
+squares = [n * n for n in nums if n % 2 == 0]
+print(squares)`,
+		Answer: LangPython,
+	},
+	{
+		Code: `with open("data.txt") as f:
+    for line in f:
+        print(line.strip())`,
+		Answer: LangPython,
+	},
+	{
+		Code: `package main
+
+import "fmt"
+
+func main() {
+	defer fmt.Println("done")
+	for i := 0; i < 3; i++ {
+		defer fmt.Println(i)
+	}
+}`,
+		Answer: LangGo,
+	},
+	{
+		Code: `func sum(nums ...int) int {
+	total := 0
+	for _, n := range nums {
+		total += n
+	}
+	return total
+}`,
+		Answer: LangGo,
+	},
+	{
+		Code: `fn main() {
+    let v = vec![1, 2, 3];
+    let doubled: Vec<i32> = v.iter().map(|x| x * 2).collect();
+    println!("{:?}", doubled);
+}`,
+		Answer: LangRust,
+	},
+	{
+		Code: `fn divide(a: f64, b: f64) -> Option<f64> {
+    if b == 0.0 { None } else { Some(a / b) }
+}`,
+		Answer: LangRust,
+	},
+	{
+		Code: `(defn factorial [n]
+  (reduce * (range 1 (inc n))))
+
+(println (factorial 5))`,
+		Answer: LangClojure,
+	},
+	{
+		Code: `(->> (range 10)
+     (filter even?)
+     (map #(* % %))
+     (reduce +))`,
+		Answer: LangClojure,
+	},
+	{
+		Code: `interface User {
+  id: number;
+  name: string;
+}
+
+const greet = (u: User): string => ` + "`Hi, ${u.name}`" + `;`,
+		Answer: LangTS,
+	},
+	{
+		Code: `function identity<T>(value: T): T {
+  return value;
+}
+
+const n: number = identity(42);`,
+		Answer: LangTS,
+	},
+	{
+		Code: `const fs = require("fs");
+
+function readConfig(path) {
+  return JSON.parse(fs.readFileSync(path, "utf8"));
+}
+
+module.exports = { readConfig };`,
+		Answer: LangJS,
+	},
 }
 
 // SnippetCount returns the number of available snippets. Mostly used

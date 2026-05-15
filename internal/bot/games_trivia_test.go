@@ -229,7 +229,7 @@ func TestTriviaTopEmptyAndPopulated(t *testing.T) {
 	if err := h.HandleTrivia(nil, newTriviaMsg("/trivia top")); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(bot.Sent[len(bot.Sent)-1].Text, "@bob") {
+	if !strings.Contains(bot.Sent[len(bot.Sent)-1].Text, "bob") {
 		t.Errorf("leaderboard should list @bob, got %q", bot.Sent[len(bot.Sent)-1].Text)
 	}
 }

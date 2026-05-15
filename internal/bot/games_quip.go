@@ -22,7 +22,9 @@ type quipSender interface {
 
 // roastTemplates and praiseTemplates are curated, SFW, playful (not
 // cruel) IT-flavoured one-liners. The single "%s" is the target's
-// display string (already HTML-escaped before formatting). 15 each.
+// display string (already HTML-escaped before formatting). Append
+// freely - the test asserts only a healthy lower bound, not an exact
+// size; replayability scales with the pool.
 var roastTemplates = []string{
 	"%s коммитит прямо в main и ещё спрашивает, почему прод лежит.",
 	"%s пишет тесты после релиза - и то, если напомнить дважды.",
@@ -39,6 +41,31 @@ var roastTemplates = []string{
 	"%s пушит с сообщением \"fix\" в сто двадцатый раз.",
 	"%s чинит баг, ломая два соседних, и считает это прогрессом.",
 	"%s обещал задокументировать - это было давно и неправда.",
+	"%s закрывает тикет комментарием \"у меня работает\".",
+	"%s держит ветку feature/wip уже восьмой месяц.",
+	"%s решает любую проблему добавлением ещё одного флага конфигурации.",
+	"%s тестирует сразу на проде - смелость на грани отчаянности.",
+	"%s рефакторит весь модуль за день до релиза.",
+	"%s называет 500 строк в одном методе \"пока временно\".",
+	"%s отвечает \"щас гляну\" и пропадает на три дня.",
+	"%s правит прод хотфиксом прямо в редакторе по ssh.",
+	"%s игнорит алерты, пока их не станет ровно сто.",
+	"%s оценивает в стори-поинтах по фазе луны.",
+	"%s катит миграцию без отката и крестится.",
+	"%s называет глобальную переменную \"tmp\" и оставляет навсегда.",
+	"%s пишет коммит \"asdf\" и считает это документацией.",
+	"%s закрывает баг как \"не воспроизводится\" не пытаясь воспроизвести.",
+	"%s сначала пишет код, потом придумывает, что он делает.",
+	"%s добавляет sleep(5), чтобы починить гонку, и празднует.",
+	"%s держит 47 вкладок со StackOverflow как систему документации.",
+	"%s комментирует код фразой \"// не трогать, работает\".",
+	"%s выкатывает на всех сразу - канареечный релиз для слабаков.",
+	"%s называет отсутствие тестов \"доверием к команде\".",
+	"%s отвечает на код-ревью \"исправлю потом\" и не исправляет.",
+	"%s решает merge-конфликт, оставляя обе версии на всякий случай.",
+	"%s узнаёт об инциденте из чата, а не из мониторинга.",
+	"%s хранит секреты в коде, потому что \"это же приватный репозиторий\".",
+	"%s оптимизирует то, что выполняется раз в год, и игнорит горячий путь.",
 }
 
 var praiseTemplates = []string{
@@ -57,6 +84,31 @@ var praiseTemplates = []string{
 	"%s разбирает инцидент без поиска виноватых, только по делу.",
 	"%s оставляет код чище, чем нашёл, каждый раз.",
 	"%s превращает легаси в читаемое, не сломав ни одного флоу.",
+	"%s пишет такой понятный PR, что ревью занимает пять минут.",
+	"%s добавляет логи ровно там, где они однажды спасут дебаг.",
+	"%s задаёт на груминге вопрос, который экономит неделю работы.",
+	"%s умеет сказать \"я не знаю\" и тут же пойти разобраться.",
+	"%s пишет тесты, по которым понятно, как работает код.",
+	"%s сначала измеряет, потом оптимизирует - и всегда в этом порядке.",
+	"%s оставляет в коде комментарий \"почему\", а не \"что\".",
+	"%s доводит инцидент до честного постмортема без драмы.",
+	"%s ревьюит чужой код внимательнее, чем свой.",
+	"%s делает сложную фичу скучно надёжной - высший пилотаж.",
+	"%s удаляет больше кода, чем добавляет, и система только крепнет.",
+	"%s обновляет доку в том же PR - легенды существуют.",
+	"%s спокойно откатывает релиз и не делает из этого трагедии.",
+	"%s пишет идемпотентно, потому что знает: повторят всё.",
+	"%s превращает флаки-тест в стабильный, а не в skip.",
+	"%s наставляет джунов так, что они растут на глазах.",
+	"%s продумывает крайние случаи раньше, чем о них спросят.",
+	"%s держит обещания по срокам, потому что честно их оценивает.",
+	"%s закрывает алерты разбором причины, а не отключением.",
+	"%s пишет migration с откатом и проверяет его заранее.",
+	"%s умеет вовремя сказать \"это переусложнено\" - и упростить.",
+	"%s оставляет систему в состоянии, в котором её не страшно дежурить.",
+	"%s документирует решение так, что через год спасибо скажет он сам.",
+	"%s не геройствует ночью, а чинит процесс, чтобы ночей не было.",
+	"%s делает ревью добрым по тону и жёстким по сути.",
 }
 
 // QuipHandler implements "/roast [@user]" and "/praise [@user]".
@@ -122,10 +174,13 @@ func (h *QuipHandler) handle(msg telego.Message, templates []string) error {
 
 // resolveQuipTarget returns the HTML-escaped display string the quip is
 // aimed at. Priority:
-//  1. an explicit @handle in the command arguments (raw token, escaped),
-//  2. otherwise the caller's @username / first name.
+//  1. an explicit handle in the command arguments (raw token, escaped),
+//  2. otherwise the caller's handle / first name.
 //
-// The @handle is taken verbatim from user input, so it is escaped via
+// The handle is rendered WITHOUT a leading '@': a literal "@handle"
+// makes Telegram notify that account, so "/roast @victim" would ping
+// the victim on every invocation. Bare text is inert. The token is
+// taken verbatim from user input, so it is escaped via
 // shared.EscapeHTML before being placed into an HTML-parsed message; a
 // crafted "argument" like "<b>" can never inject markup.
 func resolveQuipTarget(msg telego.Message) string {
@@ -140,7 +195,7 @@ func resolveQuipTarget(msg telego.Message) string {
 		}
 		handle := strings.TrimPrefix(arg, "@")
 		if handle != "" {
-			return "@" + shared.EscapeHTML(handle)
+			return shared.EscapeHTML(handle)
 		}
 	}
 	display := shared.UserDisplay(msg.From.Username, msg.From.FirstName)

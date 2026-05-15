@@ -1,6 +1,7 @@
 package shared
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -59,11 +60,33 @@ func TestEscapeHTML(t *testing.T) {
 }
 
 func TestUserDisplay(t *testing.T) {
-	if UserDisplay("alice", "Alice") != "@alice" {
-		t.Fatal("should prefer username")
+	// Inert by design: the handle is shown WITHOUT '@' so a stats or
+	// game line never becomes a Telegram mention/notification.
+	if got := UserDisplay("alice", "Alice"); got != "alice" {
+		t.Fatalf("should prefer the handle, inert (no @): got %q", got)
 	}
 	if UserDisplay("", "Alice") != "Alice" {
 		t.Fatal("should fallback to first name")
+	}
+	if strings.ContainsRune(UserDisplay("alice", "Alice"), '@') {
+		t.Fatal("UserDisplay must never emit a literal @-mention")
+	}
+}
+
+func TestUserDisplayFull(t *testing.T) {
+	cases := []struct{ user, first, want string }{
+		{"alice", "Alice", "Alice (alice)"},
+		{"alice", "", "alice"},
+		{"", "Alice", "Alice"},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		if got := UserDisplayFull(c.user, c.first); got != c.want {
+			t.Errorf("UserDisplayFull(%q,%q)=%q want %q", c.user, c.first, got, c.want)
+		}
+	}
+	if strings.ContainsRune(UserDisplayFull("alice", "Alice"), '@') {
+		t.Fatal("UserDisplayFull must never emit a literal @-mention")
 	}
 }
 
