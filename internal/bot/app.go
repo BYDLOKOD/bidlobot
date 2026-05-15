@@ -12,7 +12,6 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
-	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/testutil"
@@ -35,6 +34,8 @@ type App struct {
 	pendingGC   PendingGC
 	inlineSvc   *InlineService
 	games       *GamesRegistry
+	dmConsole   *DMConsole
+	cooldown    *cooldown
 
 	// inFlight tracks handler goroutines AND background workers (e.g.
 	// cleanup kick worker) so that Stop can wait for them within
@@ -113,7 +114,14 @@ func (a *App) AttachGames(g *GamesRegistry) {
 	}
 }
 
-func (a *App) Run(ctx context.Context, statsH *stats.Handler, modH *moderation.Handler) error {
+// AttachDMConsole installs the private-chat moderation console. Call
+// before Run so registerRoutes wires it. Passing nil is a no-op (the
+// bot then has no private control surface).
+func (a *App) AttachDMConsole(d *DMConsole) {
+	a.dmConsole = d
+}
+
+func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	updates, err := a.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
 		AllowedUpdates: []string{
 			"message",
@@ -158,7 +166,7 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler, modH *moderation.H
 	}
 	bh.Use(a.inFlightMiddleware())
 
-	registerRoutes(bh, a, statsH, modH)
+	registerRoutes(bh, a, statsH)
 
 	go a.statsBuffer.Run(ctx, 60*time.Second)
 	if a.pendingGC != nil {
@@ -277,27 +285,18 @@ func (a *App) handleHelpSupergroup(_ *th.Context, msg telego.Message) error {
 
 const helpDM = `BidloBot - управление IT-сообществом.
 
-Бот работает в supergroup-чатах. Добавь меня в группу с правами администратора (минимум: Restrict Members), чтобы начать.`
+Добавьте меня в группу администратором (минимум: право ограничивать участников), затем отправьте /start, чтобы управлять чатом приватно.`
 
-const helpSupergroup = `BidloBot - статистика, модерация и мини-игры.
+const helpSupergroup = `BidloBot - статистика, мини-игры и приватная модерация.
 
-Stats:
+Здесь, в чате:
   /stats         - обзор чата
   /stats top     - топ участников
   /stats today   - активность за день
-  /stats @user   - статистика пользователя
+  /dice [emoji]  - бросок кубика
+  /battle X Y    - голосование реакциями за 60с
+  /quiz          - угадай язык по сниппету
 
-Games:
-  /dice [emoji]      - бросок кубика, рекорды чата
-  /battle X Y        - голосование реакциями за 60с
-  /quiz              - угадай язык по сниппету
-  /quiz top          - топ-5 угадавших
-
-Moderation (только для админов):
-  /warn @user [причина]   - выдать предупреждение
-  /warns @user            - посмотреть предупреждения
-  /warns clear @user      - сбросить предупреждения
-  /mute @user [время]     - заглушить (по умолчанию 1ч)
-  /unmute @user           - снять mute
-  /ban @user [причина]    - забанить
-  /unban @user            - разбанить`
+Модерация и чистка неактивных - только в личке со мной
+(участники чата ничего не видят). Откройте личный чат
+со мной и отправьте /start.`

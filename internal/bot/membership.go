@@ -78,6 +78,19 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 		switch newStatus {
 		case "administrator":
 			app.adminCache.Invalidate(storage.AbsChatID(cmu.Chat.ID))
+			// One-time discoverability cue. Without this the bot joins
+			// a 200-person chat silently and nobody knows it exists or
+			// that management happens privately. Single concise public
+			// message - not moderation, so it does not break the
+			// "no public management" principle.
+			oldStatus := cmu.OldChatMember.MemberStatus()
+			if oldStatus != "administrator" {
+				_, _ = app.bot.SendMessage(bgCtx, &telego.SendMessageParams{
+					ChatID:    telego.ChatID{ID: cmu.Chat.ID},
+					Text:      msgOnboardingAdmin,
+					ParseMode: telego.ModeHTML,
+				})
+			}
 		case "member":
 			_, _ = app.bot.SendMessage(bgCtx, &telego.SendMessageParams{
 				ChatID: telego.ChatID{ID: cmu.Chat.ID},

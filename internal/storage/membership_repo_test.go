@@ -285,3 +285,70 @@ func TestChatListAll(t *testing.T) {
 		t.Fatalf("expected 3 chats, got %d", len(list))
 	}
 }
+
+func i64(v int64) *int64 { return &v }
+
+// TestMemberSetCountMaxSemantics locks the import contract: SetMessageCount
+// is applied as max(existing, value) so (a) re-running the same import is
+// idempotent and (b) a realtime count accumulated since deploy is never
+// reduced by a stale import snapshot.
+func TestMemberSetCountMaxSemantics(t *testing.T) {
+	repo := newMembershipRepo(t)
+	ctx := context.Background()
+	hist := time.Date(2025, 8, 5, 0, 0, 0, 0, time.UTC)
+
+	// First import: 1000 historical messages.
+	m, err := repo.UpsertMember(ctx, membership.MemberPatch{
+		UserID: 42, AbsChatID: 100,
+		FirstName:       strPtr("Олег"),
+		Status:          membership.StatusMember,
+		KnownVia:        membership.SourceImport,
+		LastMessageAt:   hist,
+		SetMessageCount: i64(1000),
+		Now:             hist,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.MessageCount != 1000 {
+		t.Fatalf("first import: want 1000, got %d", m.MessageCount)
+	}
+	if m.LastSeenAt != hist {
+		t.Fatalf("LastSeenAt should be the historical date for preview sort, got %v", m.LastSeenAt)
+	}
+
+	// Realtime activity after import adds 5 live messages.
+	for i := 0; i < 5; i++ {
+		if _, err := repo.UpsertMember(ctx, membership.MemberPatch{
+			UserID: 42, AbsChatID: 100,
+			KnownVia:        membership.SourceMessage,
+			LastMessageAt:   time.Now().UTC(),
+			IncMessageCount: 1,
+			Now:             time.Now().UTC(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mid, _ := repo.GetMember(ctx, 42, 100)
+	if mid.MessageCount != 1005 {
+		t.Fatalf("after realtime: want 1005, got %d", mid.MessageCount)
+	}
+
+	// Re-running the SAME import must NOT clobber the realtime delta:
+	// max(1005, 1000) = 1005. Idempotent and non-destructive.
+	m2, err := repo.UpsertMember(ctx, membership.MemberPatch{
+		UserID: 42, AbsChatID: 100,
+		KnownVia:        membership.SourceImport,
+		SetMessageCount: i64(1000),
+		Now:             hist,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m2.MessageCount != 1005 {
+		t.Fatalf("re-import must not reduce count: want 1005, got %d", m2.MessageCount)
+	}
+	if m2.KnownVia != membership.SourceImport {
+		t.Fatalf("KnownVia should reflect last writer, got %s", m2.KnownVia)
+	}
+}

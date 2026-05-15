@@ -14,7 +14,23 @@ Group management for IT supergroups in Telegram. Four capability areas:
 3. **Inactive cleanup** - admin can kick users who never wrote messages and never reacted within a configurable window. Read-only members (those who only react) are preserved.
 4. **Mini-games** - small chat-engagement games (dice, reaction-battle, code-quiz) callable inline or via slash commands.
 
-The primary command surface is **inline mode** (`@bidlobot ...`) with autocomplete. Slash commands remain as fallback. Destructive actions (cleanup, warn, mute, ban) follow a two-step preview-then-confirm pattern via inline keyboards.
+**Command surfaces (revised 2026-05-15 after the privacy rework):**
+
+- **Moderation + cleanup: DM console only.** The admin opens a private
+  chat with the bot, `/start`, picks the target chat once, then issues
+  `/warn /warns /mute /unmute /ban /unban /cleanup` privately. Ban and
+  cleanup require an in-DM confirm. Nothing is visible to chat members.
+- **Public group: read-only + games only.** `/stats` and `/dice
+  /battle /quiz` (per-user cooldown-gated). A moderation verb typed in
+  the group is deleted and the admin is redirected to DM - it never
+  executes publicly.
+- **Inline is NOT a private surface.** A chosen inline result is posted
+  as a public message into the originating chat, so inline can never
+  hide a moderation action. The earlier "inline = primary, private
+  surface" premise was wrong; inline moderation verbs now return a
+  generic "use DM" hint and create no pending. See
+  [70_deployment.md](70_deployment.md) and the telegram-api-constraints
+  memory.
 
 ## Scope history
 

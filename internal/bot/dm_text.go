@@ -1,0 +1,147 @@
+package bot
+
+// All DM-console user-facing copy. Russian, neutral register, no
+// decorative emoji - status glyphs only where they carry meaning.
+// Format verbs are documented inline so callers pass the right args.
+
+const (
+	// Sent privately to an admin who typed a moderation command in the
+	// public group. The command itself is deleted from the group.
+	msgPublicModerationRedirect = "Модерация теперь только в личке - так участники чата не видят " +
+		"управление.\n\nОтправьте мне здесь /start, выберите чат и управляйте: " +
+		"/ban, /warn, /mute, /cleanup и т.д. Ваша команда в группе удалена."
+
+	// Posted once when the bot is promoted to admin. Tells the chat
+	// the bot exists and that management is private.
+	msgOnboardingAdmin = "<b>BidloBot</b> подключён.\n\n" +
+		"Статистика и игры - здесь: /stats, /dice, /quiz.\n" +
+		"Модерация и чистка неактивных - только в личке со мной " +
+		"(участники чата ничего не видят): откройте со мной личный чат " +
+		"и отправьте /start."
+
+	msgDMUnknown = "Неизвестная команда. Отправьте /help."
+
+	msgDMError = "Внутренняя ошибка. Попробуйте позже."
+
+	msgDMNoChats = "Не вижу чатов, где вы админ, а я могу модерировать.\n\n" +
+		"Если я ещё не в группе: добавьте меня администратором с правом " +
+		"ограничивать участников.\n\n" +
+		"Если я уже добавлен админом, но вы видите это сообщение: я мог " +
+		"пропустить событие назначения. Снимите и снова выдайте мне права " +
+		"администратора в группе (или переназначьте) - это меня зарегистрирует. " +
+		"Затем отправьте /start снова."
+
+	// %s = chat title
+	msgDMReady = "Активный чат: <b>%s</b>.\n"
+
+	dmHelpBody = "\nУправление (всё приватно, в этой переписке - участники чата ничего не видят):\n\n" +
+		"<b>Статистика</b>\n" +
+		"/stats - обзор\n" +
+		"/stats top - самые активные\n" +
+		"/stats today - за сегодня\n" +
+		"/stats @user - по участнику\n\n" +
+		"<b>Модерация</b>\n" +
+		"/warn @user причина\n" +
+		"/warns @user - список предупреждений\n" +
+		"/warns clear @user - сбросить\n" +
+		"/mute @user 1h\n" +
+		"/unmute @user\n" +
+		"/ban @user причина - с подтверждением\n" +
+		"/unban @user\n\n" +
+		"<b>Чистка неактивных</b>\n" +
+		"/cleanup 6mo - предпросмотр, затем подтверждение\n\n" +
+		"<b>Прочее</b>\n" +
+		"/chat - сменить активный чат\n\n" +
+		"Цель указывается как @username или числовой id. " +
+		"Бот знает участника, если тот хотя бы раз писал или реагировал, " +
+		"либо если история была загружена через bidlobot-import."
+
+	msgDMPick = "Выберите чат для управления:"
+
+	msgDMNoSession = "Сначала выберите чат: отправьте /start."
+
+	msgDMLostAdmin = "Вы больше не администратор в выбранном чате. Отправьте /start, чтобы выбрать другой."
+
+	msgDMTargetNotFound = "Цель не найдена. Укажите @username или числовой id. " +
+		"Бот знает участника, только если тот писал/реагировал или история загружена через import."
+
+	msgDMNeedTarget = "Укажите цель: @username или числовой id."
+
+	// %s = display name
+	msgDMWarnsCleared = "Предупреждения сняты: %s."
+
+	// %s = display name, %d = count
+	msgDMWarned = "Предупреждение выдано: %s (%d/3)."
+
+	// %s = reason
+	msgDMReasonLine = "Причина: %s"
+
+	msgDMAutomuteFailed = "Порог 3/3 достигнут, но авто-мьют не удался (нет прав?)."
+	msgDMAutomuteOn     = "Порог 3/3 - включён авто-мьют на 24 часа."
+
+	msgDMBadDuration = "Неверная длительность. Примеры: 30m, 1h, 12h, 7d."
+
+	// %s = display name, %s = duration
+	msgDMMuted = "Мьют выдан: %s на %s."
+
+	msgDMPermOrTransient = "Не удалось замьютить. Проверьте, что у бота есть право ограничивать участников."
+
+	// %s = display name
+	msgDMUnmuted  = "Мьют снят: %s."
+	msgDMUnbanned = "Разбанен: %s."
+
+	// %s = display name
+	msgDMConfirmBan = "Забанить <b>%s</b>?\nДействие необратимо для участника (нужно будет разбанивать вручную)."
+
+	// %s = display name
+	msgDMBanned = "Забанен: <b>%s</b>."
+
+	// %s = display name
+	msgDMBanFailed = "Не удалось забанить <b>%s</b>. У бота нет права ограничивать участников. " +
+		"Запросите бан заново после выдачи прав."
+
+	msgDMCancelled = "Отменено."
+
+	// --- cleanup ---
+
+	msgDMCleanupUsage = "Укажите период: /cleanup 6mo (примеры: 30d, 3mo, 1y)."
+
+	msgDMCleanupBadPeriod = "Неверный период. Допустимо: 1d-5y. Примеры: 30d, 6mo, 1y."
+
+	msgDMCleanupNoData = "У бота пока нет данных об участниках этого чата.\n\n" +
+		"Бот видит только тех, кто писал или реагировал <i>после</i> его добавления. " +
+		"Чтобы почистить по полугодовой истории, сначала загрузите экспорт чата:\n\n" +
+		"1. Telegram Desktop -> откройте чат -> меню -> Экспорт истории чата -> формат JSON.\n" +
+		"2. На сервере: остановите бота, выполните bidlobot-import с этим JSON, запустите бота.\n" +
+		"Подробности: docs/llm/35_history_import.md.\n\n" +
+		"После импорта снова отправьте /cleanup."
+
+	// %d = known members
+	msgDMCleanupNoneActive = "Кандидатов на чистку нет: все %d известных боту участников активны в заданном окне."
+
+	// %d = candidates, %d = known members
+	msgDMCleanupHeader = "Кандидатов на чистку: <b>%d</b> из %d известных боту участников."
+
+	// %d = days
+	msgDMCleanupWindow = "Окно наблюдения: данные примерно за %d дней."
+
+	msgDMCleanupNoReactionNote = "Реакций нет в экспорте - те, кто только ставил реакции в прошлом, " +
+		"могут попасть в список; живое отслеживание реакций после импорта это исправит. " +
+		"Проверьте список перед подтверждением."
+
+	msgDMCleanupNothingLeft = "Кандидатов не осталось - возможно, данные изменились."
+
+	msgDMCleanupAlreadyRunning = "По этому чату уже идёт чистка (запущена другим админом). " +
+		"Дождитесь её завершения или остановите в той переписке."
+
+	// %d = done, %d = total
+	msgDMCleanupRunning = "Чистка идёт: %d из %d. Можно остановить кнопкой ниже."
+
+	msgDMCleanupDone = "Чистка завершена."
+
+	// %d kicked, %d skipped, %d failed
+	msgDMCleanupReport = "Чистка завершена.\nКикнуто: %d\nПропущено: %d\nОшибок: %d"
+
+	// %d kicked, %d not processed
+	msgDMCleanupAborted = "Чистка остановлена.\nКикнуто: %d\nНе обработано: %d"
+)

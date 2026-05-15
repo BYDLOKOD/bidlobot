@@ -115,7 +115,6 @@ func main() {
 
 	displayResolver := &membershipDisplayResolver{repo: memberRepo}
 	statsLookup := &membershipStatsLookup{repo: memberRepo}
-	modLookup := &membershipModerationLookup{repo: memberRepo}
 
 	statsBuffer := stats.NewBuffer(statsRepo, log)
 	statsSvc := stats.NewService(statsRepo, statsBuffer, displayResolver, log)
@@ -123,8 +122,9 @@ func main() {
 
 	// Moderation routes its writes through the wrapped client so 429/5xx,
 	// migration, and per-chat rate limits all apply to ban/restrict/etc.
+	// The service is consumed only by the private DM console now - the
+	// public slash/inline handlers were removed (privacy principle).
 	modSvc := moderation.NewService(warnRepo, tgClient, adminCache, log)
-	modHandler := moderation.NewHandler(modSvc, adminCache, modLookup, log)
 
 	dispatcher := bot.NewCallbackDispatcher(pendingRepo, adminCache, tgBot, log)
 	inlineSvc := bot.NewInlineService(pendingRepo, log)
@@ -170,15 +170,27 @@ func main() {
 	// inline router and slash handlers; AttachGames installs them on App.
 	app.AttachGames(buildGames(db, tgBot, log))
 
+	// DM moderation console - the only private control surface. Uses
+	// the same domain services as the (now removed) public moderation
+	// handlers; only the surface changes.
+	dmSessionRepo := storage.NewDMSessionRepo(db)
+	dmConsole := bot.NewDMConsole(
+		tgBot, dmSessionRepo, memberRepo, adminCache,
+		modSvc, cleanupSvc, statsSvc, pendingRepo, log,
+	)
+	app.AttachDMConsole(dmConsole)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
 	// Cleanup workers must abort with the app, not orphan after Stop().
 	cleanupExecutor.SetAppContext(ctx)
 	cleanupExecutor.AttachWaitGroup(app.InFlight())
+	dmConsole.SetAppContext(ctx)
+	dmConsole.AttachWaitGroup(app.InFlight())
 
 	go func() {
-		if err := app.Run(ctx, statsHandler, modHandler); err != nil {
+		if err := app.Run(ctx, statsHandler); err != nil {
 			log.Error("bot run error", "error", err)
 			cancel()
 		}
@@ -230,18 +242,6 @@ func (l *membershipStatsLookup) GetByUsername(ctx context.Context, absChatID int
 		return 0, err
 	}
 	return m.UserID, nil
-}
-
-type membershipModerationLookup struct {
-	repo *storage.MembershipRepo
-}
-
-func (l *membershipModerationLookup) GetByUsername(ctx context.Context, absChatID int64, username string) (int64, bool, error) {
-	m, err := l.repo.GetMemberByUsername(ctx, absChatID, username)
-	if err != nil {
-		return 0, false, err
-	}
-	return m.UserID, m.IsBot, nil
 }
 
 type membershipDisplayResolver struct {

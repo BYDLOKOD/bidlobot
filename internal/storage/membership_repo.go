@@ -116,6 +116,15 @@ func (r *MembershipRepo) UpsertMember(_ context.Context, p membership.MemberPatc
 		m.LastSeenAt = laterOf(m.LastSeenAt, now)
 		m.MessageCount += p.IncMessageCount
 		m.ReactionCount += p.IncReactionCount
+		// Absolute set from a bulk import: max() so re-import is
+		// idempotent and a realtime count accumulated since deploy is
+		// never reduced. Inc* and Set* are never combined in one patch.
+		if p.SetMessageCount != nil {
+			m.MessageCount = max(m.MessageCount, *p.SetMessageCount)
+		}
+		if p.SetReactionCount != nil {
+			m.ReactionCount = max(m.ReactionCount, *p.SetReactionCount)
+		}
 		m.UpdatedAt = now
 
 		data, err := json.Marshal(&m)

@@ -1,0 +1,403 @@
+package bot
+
+import (
+	"context"
+	"fmt"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
+
+	"github.com/veschin/bidlobot/internal/domain/cleanup"
+	"github.com/veschin/bidlobot/internal/domain/membership"
+	"github.com/veschin/bidlobot/internal/domain/pending"
+	"github.com/veschin/bidlobot/internal/shared"
+	"github.com/veschin/bidlobot/internal/storage"
+)
+
+// cleanupRuns tracks running cleanup workers so the in-DM "Stop" button
+// can cancel a 200-person purge mid-flight, and so a second admin
+// cannot launch a concurrent purge on the same chat (double API load,
+// contradictory progress). cleanup.Service aborts between kicks on
+// ctx.Done(); we hold a cancel func per run id and the set of chats
+// with an active run.
+//
+// start() must be called BEFORE the Stop button is rendered, so a tap
+// in the registration window cancels a real run instead of getting a
+// false "already finished" - that was a silent destructive-abort
+// failure.
+type cleanupRuns struct {
+	mu          sync.Mutex
+	runs        map[string]context.CancelFunc
+	activeChats map[int64]bool
+}
+
+func newCleanupRuns() *cleanupRuns {
+	return &cleanupRuns{
+		runs:        make(map[string]context.CancelFunc),
+		activeChats: make(map[int64]bool),
+	}
+}
+
+// start atomically registers a run id + its cancel func and claims the
+// chat. Returns false if the chat already has an active cleanup, in
+// which case nothing is registered and the caller must not proceed.
+func (c *cleanupRuns) start(id string, absChatID int64, cancel context.CancelFunc) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.activeChats[absChatID] {
+		return false
+	}
+	c.runs[id] = cancel
+	c.activeChats[absChatID] = true
+	return true
+}
+
+func (c *cleanupRuns) cancel(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if fn, ok := c.runs[id]; ok {
+		fn()
+		delete(c.runs, id)
+		return true
+	}
+	return false
+}
+
+func (c *cleanupRuns) done(id string, absChatID int64) {
+	c.mu.Lock()
+	delete(c.runs, id)
+	delete(c.activeChats, absChatID)
+	c.mu.Unlock()
+}
+
+// handleCleanup: /cleanup <period>. Builds a preview in the DM, then a
+// confirm. The actual kick loop runs after confirmation, entirely in
+// the private chat, with a working Stop button.
+func (d *DMConsole) handleCleanup(ctx context.Context, caller, abs int64, args []string) error {
+	if len(args) == 0 {
+		d.send(ctx, caller, msgDMCleanupUsage, nil)
+		return nil
+	}
+	threshold, err := parseCleanupPeriod(args[0])
+	if err != nil {
+		d.send(ctx, caller, msgDMCleanupBadPeriod, nil)
+		return nil
+	}
+
+	prev, err := d.cleanup.PreviewInactive(ctx, abs, threshold, time.Now().UTC())
+	if err != nil {
+		if err == cleanup.ErrThresholdTooSmall || err == cleanup.ErrThresholdTooLarge {
+			d.send(ctx, caller, msgDMCleanupBadPeriod, nil)
+			return nil
+		}
+		d.send(ctx, caller, msgDMError, nil)
+		return nil
+	}
+
+	// Distinguish "no data, import first" from "everyone is active".
+	// This is the empty-state lie the critic flagged.
+	if prev.KnownMembers == 0 {
+		d.send(ctx, caller, msgDMCleanupNoData, nil)
+		return nil
+	}
+	if len(prev.Candidates) == 0 {
+		d.send(ctx, caller, fmt.Sprintf(msgDMCleanupNoneActive, prev.KnownMembers), nil)
+		return nil
+	}
+
+	id, err := storage.NewID()
+	if err != nil {
+		d.send(ctx, caller, msgDMError, nil)
+		return nil
+	}
+	now := time.Now().UTC()
+	if cerr := d.pending.Create(ctx, pending.Action{
+		ID:        id,
+		Kind:      pending.KindCleanup,
+		AbsChatID: abs,
+		ActorUserID: caller,
+		Threshold: threshold,
+		CreatedAt: now,
+		ExpiresAt: now.Add(5 * time.Minute),
+	}); cerr != nil {
+		d.send(ctx, caller, msgDMError, nil)
+		return nil
+	}
+
+	d.send(ctx, caller, renderCleanupPreview(prev), dmConfirmKeyboard(id))
+	return nil
+}
+
+func renderCleanupPreview(p *cleanup.Preview) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, msgDMCleanupHeader, len(p.Candidates), p.KnownMembers)
+	if p.ObservationWindow > 0 {
+		fmt.Fprintf(&b, "\n"+msgDMCleanupWindow, p.ObservationWindow.Round(24*time.Hour)/(24*time.Hour))
+	}
+	b.WriteString("\n" + msgDMCleanupNoReactionNote + "\n")
+	limit := len(p.Candidates)
+	if limit > 15 {
+		limit = 15
+	}
+	for _, m := range p.Candidates[:limit] {
+		name := shared.UserDisplay(m.Username, m.FirstName)
+		if name == "" {
+			name = fmt.Sprintf("id %d", m.UserID)
+		}
+		last := "никогда не писал"
+		if !m.LastMessageAt.IsZero() {
+			last = "последнее сообщение " + m.LastMessageAt.Format("2006-01-02")
+		}
+		fmt.Fprintf(&b, "\n- %s - %s", shared.EscapeHTML(name), last)
+	}
+	if len(p.Candidates) > limit {
+		fmt.Fprintf(&b, "\n... и ещё %d", len(p.Candidates)-limit)
+	}
+	return b.String()
+}
+
+// HandleCallback is the DM callback entry point, namespace "dm:".
+// Routes pick / apply / cancel / abort. Distinct from the public
+// dispatcher: a DM is inherently private and single-actor, so there is
+// no chat-pin / forward-attack surface to defend here - but we still
+// verify the presser is the pending's actor.
+func (d *DMConsole) HandleCallback(thctx *th.Context, q telego.CallbackQuery) error {
+	ctx := thctx.Context()
+	data := strings.TrimPrefix(q.Data, dmCBNamespace)
+	verb, arg, found := strings.Cut(data, ":")
+	if !found {
+		d.answer(ctx, q, "Кнопка устарела.", false)
+		return nil
+	}
+	caller := q.From.ID
+
+	switch verb {
+	case "pick":
+		absID, perr := strconv.ParseInt(arg, 10, 64)
+		if perr != nil {
+			d.answer(ctx, q, "Некорректный выбор.", true)
+			return nil
+		}
+		isAdmin, aerr := d.admin.IsAdmin(absID, caller)
+		if aerr != nil || !isAdmin {
+			d.answer(ctx, q, "Вы не админ в этом чате.", true)
+			return nil
+		}
+		if err := d.sessions.Set(ctx, caller, absID, time.Now().UTC()); err != nil {
+			d.answer(ctx, q, "Не удалось сохранить выбор.", true)
+			return nil
+		}
+		title := d.chatTitle(ctx, absID)
+		d.answer(ctx, q, "Выбран чат: "+title, false)
+		d.editText(ctx, q, fmt.Sprintf(msgDMReady, shared.EscapeHTML(title))+dmHelpBody)
+		return nil
+
+	case "cancel":
+		_ = d.pending.Delete(ctx, arg)
+		d.answer(ctx, q, "Отменено.", false)
+		d.editText(ctx, q, msgDMCancelled)
+		return nil
+
+	case "abort":
+		if d.runs.cancel(arg) {
+			d.answer(ctx, q, "Останавливаю...", false)
+		} else {
+			d.answer(ctx, q, "Уже завершено.", false)
+		}
+		return nil
+
+	case "apply":
+		return d.applyPending(ctx, q, caller, arg)
+	}
+	d.answer(ctx, q, "Неизвестное действие.", false)
+	return nil
+}
+
+func (d *DMConsole) applyPending(ctx context.Context, q telego.CallbackQuery, caller int64, id string) error {
+	act, err := d.pending.Get(ctx, id)
+	if err != nil {
+		d.answer(ctx, q, "Действие истекло или уже выполнено.", true)
+		return nil
+	}
+	if act.ActorUserID != caller {
+		d.answer(ctx, q, "Подтвердить может только инициатор.", true)
+		return nil
+	}
+	// Re-check admin at confirm time: a demotion between issuing and
+	// confirming must not authorize a destructive action.
+	if ok, aerr := d.admin.IsAdmin(act.AbsChatID, caller); aerr != nil || !ok {
+		_ = d.pending.Delete(ctx, id)
+		d.answer(ctx, q, "Вы больше не админ в этом чате.", true)
+		return nil
+	}
+	signed := dmSignedChat(act.AbsChatID)
+
+	switch act.Kind {
+	case pending.KindBan:
+		_ = d.pending.Delete(ctx, id)
+		if err := d.mod.Ban(ctx, signed, act.TargetUserID); err != nil {
+			d.answer(ctx, q, "Не удалось забанить. Проверьте право бота ограничивать участников.", true)
+			// Strip the now-dead confirm keyboard: the pending is
+			// already gone, re-tapping would only show "истекло".
+			d.editText(ctx, q, fmt.Sprintf(msgDMBanFailed, shared.EscapeHTML(act.TargetDisplay)))
+			return nil
+		}
+		d.answer(ctx, q, "Готово.", false)
+		out := fmt.Sprintf(msgDMBanned, shared.EscapeHTML(act.TargetDisplay))
+		if act.Reason != "" {
+			out += "\n" + fmt.Sprintf(msgDMReasonLine, shared.EscapeHTML(act.Reason))
+		}
+		d.editText(ctx, q, out)
+		return nil
+
+	case pending.KindCleanup:
+		_ = d.pending.Delete(ctx, id)
+		return d.runCleanup(ctx, q, caller, id, act)
+	}
+	d.answer(ctx, q, "Неизвестный тип действия.", true)
+	return nil
+}
+
+// runCleanup executes the kick loop with a Stop button. The cancelable
+// context is registered (and the chat claimed) BEFORE the Stop button
+// is rendered, so a tap in the registration window cancels the real run
+// instead of getting a false "already finished" - a silent abort
+// failure on an irreversible 200-person purge.
+func (d *DMConsole) runCleanup(ctx context.Context, q telego.CallbackQuery, caller int64, id string, act *pending.Action) error {
+	msgID := q.Message.GetMessageID()
+	chatID := q.Message.GetChat().ID
+
+	// Register the run + claim the chat FIRST. If another admin already
+	// has a cleanup running on this chat, refuse - two concurrent kick
+	// loops double the API load and show contradictory progress.
+	runCtx, cancel := context.WithCancel(d.appCtx())
+	if !d.runs.start(id, act.AbsChatID, cancel) {
+		cancel()
+		d.answer(ctx, q, "Чистка по этому чату уже идёт.", true)
+		d.editText(ctx, q, msgDMCleanupAlreadyRunning)
+		return nil
+	}
+
+	prev, err := d.cleanup.PreviewInactive(ctx, act.AbsChatID, act.Threshold, time.Now().UTC())
+	if err != nil || prev == nil || len(prev.Candidates) == 0 {
+		d.runs.done(id, act.AbsChatID)
+		cancel()
+		d.answer(ctx, q, "Кандидатов не осталось.", false)
+		d.editText(ctx, q, msgDMCleanupNothingLeft)
+		return nil
+	}
+	total := len(prev.Candidates)
+	d.answer(ctx, q, "Чистка запущена.", false)
+
+	d.editTextKB(ctx, chatID, msgID,
+		fmt.Sprintf(msgDMCleanupRunning, 0, total),
+		&telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{{
+			{Text: "✕ Остановить", CallbackData: dmCBNamespace + "abort:" + id},
+		}}})
+
+	d.wg().Add(1)
+	go func() {
+		defer d.wg().Done()
+		defer d.runs.done(id, act.AbsChatID)
+		defer cancel()
+
+		var lastEdit time.Time
+		report, _ := d.cleanup.ExecuteCleanup(runCtx, dmSignedChat(act.AbsChatID), prev.Candidates,
+			func(done, tot int, _ cleanup.ExecutionEntry) {
+				if time.Since(lastEdit) < 3*time.Second && done < tot {
+					return
+				}
+				lastEdit = time.Now()
+				d.editTextKB(context.Background(), chatID, msgID,
+					fmt.Sprintf(msgDMCleanupRunning, done, tot),
+					&telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{{
+						{Text: "✕ Остановить", CallbackData: dmCBNamespace + "abort:" + id},
+					}}})
+			})
+
+		final := msgDMCleanupDone
+		if report != nil {
+			final = fmt.Sprintf(msgDMCleanupReport, report.Kicked, report.Skipped, report.Failed)
+			if runCtx.Err() != nil {
+				final = fmt.Sprintf(msgDMCleanupAborted, report.Kicked, report.Skipped+report.Failed)
+			}
+		}
+		d.editTextKB(context.Background(), chatID, msgID, final, emptyMarkup())
+	}()
+	_ = caller
+	return nil
+}
+
+func emptyMarkup() *telego.InlineKeyboardMarkup {
+	return &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
+}
+
+func (d *DMConsole) chatTitle(ctx context.Context, absID int64) string {
+	if c, err := d.members.GetChat(ctx, absID); err == nil && c != nil && c.Title != "" {
+		return c.Title
+	}
+	return fmt.Sprintf("chat %d", absID)
+}
+
+func (d *DMConsole) answer(ctx context.Context, q telego.CallbackQuery, text string, alert bool) {
+	_ = d.bot.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
+		CallbackQueryID: q.ID, Text: text, ShowAlert: alert,
+	})
+}
+
+func (d *DMConsole) editText(ctx context.Context, q telego.CallbackQuery, body string) {
+	if q.Message == nil {
+		return
+	}
+	d.editTextKB(ctx, q.Message.GetChat().ID, q.Message.GetMessageID(), body, emptyMarkup())
+}
+
+func (d *DMConsole) editTextKB(ctx context.Context, chatID int64, msgID int, body string, kb *telego.InlineKeyboardMarkup) {
+	_, err := d.bot.EditMessageText(ctx, &telego.EditMessageTextParams{
+		ChatID:      telego.ChatID{ID: chatID},
+		MessageID:   msgID,
+		Text:        body,
+		ParseMode:   telego.ModeHTML,
+		ReplyMarkup: kb,
+	})
+	if err != nil {
+		d.log.Warn("dm edit failed", "error", err)
+	}
+}
+
+// parseCleanupPeriod accepts 7d, 30d, 6mo, 1y and bare Go durations.
+func parseCleanupPeriod(s string) (time.Duration, error) {
+	s = strings.TrimSpace(strings.ToLower(s))
+	if num, ok := strings.CutSuffix(s, "mo"); ok {
+		n, err := strconv.Atoi(num)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("bad months")
+		}
+		return time.Duration(n) * 30 * 24 * time.Hour, nil
+	}
+	if num, ok := strings.CutSuffix(s, "y"); ok {
+		n, err := strconv.Atoi(num)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("bad years")
+		}
+		return time.Duration(n) * 365 * 24 * time.Hour, nil
+	}
+	if num, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.Atoi(num)
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("bad days")
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, err
+	}
+	return d, nil
+}
+
+var _ = membership.StatusMember

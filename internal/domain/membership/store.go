@@ -21,6 +21,10 @@ const (
 	SourceReaction    Source = "reaction"
 	SourceChatMember  Source = "chat_member"
 	SourceMyChatAdmin Source = "my_chat_admin"
+	// SourceImport marks a member learned from a Telegram Desktop chat
+	// export rather than a live event. Live events overwrite it so
+	// "observed for real" always wins over "imported".
+	SourceImport Source = "import"
 )
 
 // Status mirrors Telegram's ChatMember status enum, narrowed to the values
@@ -96,6 +100,15 @@ type MemberPatch struct {
 
 	IncMessageCount  int64
 	IncReactionCount int64
+
+	// SetMessageCount / SetReactionCount carry an absolute count from a
+	// bulk history import. Applied as max(existing, value): re-running
+	// the same import is idempotent, and a partial realtime count
+	// already accumulated since deploy is never clobbered downward.
+	// Mutually exclusive in practice with the Inc* fields (a patch is
+	// either a single live event or a bulk import, never both).
+	SetMessageCount  *int64
+	SetReactionCount *int64
 
 	Now time.Time // event timestamp; falls back to time.Now() when zero
 }

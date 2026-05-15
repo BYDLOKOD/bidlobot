@@ -75,10 +75,10 @@ func (s *Service) ChatOverview(ctx context.Context, absChatID int64) (string, er
 	avgPerUser := totalMsgs / userCount
 
 	output := fmt.Sprintf(
-		"<b>Chat Statistics</b>\n"+
-			"Total messages: %s\n"+
-			"Total users: %s\n"+
-			"Average per user: %s\n",
+		"<b>Статистика чата</b>\n"+
+			"Всего сообщений: %s\n"+
+			"Всего участников: %s\n"+
+			"В среднем на участника: %s\n",
 		shared.FormatNumber(totalMsgs),
 		shared.FormatNumber(userCount),
 		shared.FormatNumber(avgPerUser),
@@ -86,7 +86,7 @@ func (s *Service) ChatOverview(ctx context.Context, absChatID int64) (string, er
 
 	if mostActive != nil {
 		output += fmt.Sprintf(
-			"Most active: %s (%s messages)\n",
+			"Самый активный: %s (%s сообщений)\n",
 			s.displayFor(ctx, absChatID, mostActive.UserID),
 			shared.FormatNumber(mostActive.MessageCount),
 		)
@@ -94,7 +94,7 @@ func (s *Service) ChatOverview(ctx context.Context, absChatID int64) (string, er
 
 	if earliest != nil {
 		output += fmt.Sprintf(
-			"Tracking since: %s",
+			"Данные с: %s",
 			shared.FormatDate(earliest.FirstSeen),
 		)
 	}
@@ -110,7 +110,7 @@ func (s *Service) Top(ctx context.Context, absChatID int64) (string, error) {
 	}
 
 	if len(statsList) == 0 {
-		return "<b>Top Users</b>\nNo data yet.", nil
+		return "<b>Топ участников</b>\nПока нет данных.", nil
 	}
 
 	sort.Slice(statsList, func(i, j int) bool {
@@ -120,7 +120,7 @@ func (s *Service) Top(ctx context.Context, absChatID int64) (string, error) {
 		return statsList[i].FirstSeen.Before(statsList[j].FirstSeen)
 	})
 
-	output := "<b>Top Users</b>\n"
+	output := "<b>Топ участников</b>\n"
 	limit := 5
 	if len(statsList) < limit {
 		limit = len(statsList)
@@ -129,7 +129,7 @@ func (s *Service) Top(ctx context.Context, absChatID int64) (string, error) {
 	for idx := 0; idx < limit; idx++ {
 		row := statsList[idx]
 		output += fmt.Sprintf(
-			"%d. %s - %s messages\n",
+			"%d. %s - %s сообщений\n",
 			idx+1,
 			s.displayFor(ctx, absChatID, row.UserID),
 			shared.FormatNumber(row.MessageCount),
@@ -144,9 +144,9 @@ func (s *Service) Today(ctx context.Context, absChatID int64) (string, error) {
 	totalMsgs, activeUsers := s.buffer.GetTodayByChat(ctx, absChatID)
 
 	output := fmt.Sprintf(
-		"<b>Today's Statistics</b>\n"+
-			"Messages: %s\n"+
-			"Active users: %s",
+		"<b>Статистика за сегодня</b>\n"+
+			"Сообщений: %s\n"+
+			"Активных участников: %s",
 		shared.FormatNumber(totalMsgs),
 		shared.FormatNumber(activeUsers),
 	)
@@ -187,11 +187,11 @@ func (s *Service) UserStats(ctx context.Context, absChatID, userID int64, _ stri
 	}
 
 	output := fmt.Sprintf(
-		"<b>Stats for %s</b>\n"+
-			"Messages: %s\n"+
-			"Rank: %d / %d\n"+
-			"First seen: %s\n"+
-			"Last seen: %s",
+		"<b>Статистика: %s</b>\n"+
+			"Сообщений: %s\n"+
+			"Место: %d из %d\n"+
+			"Первое появление: %s\n"+
+			"Последняя активность: %s",
 		s.displayFor(ctx, absChatID, userID),
 		shared.FormatNumber(userStats.MessageCount),
 		rank,

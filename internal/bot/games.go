@@ -7,6 +7,8 @@
 package bot
 
 import (
+	"time"
+
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
@@ -65,14 +67,18 @@ func registerGameRoutes(bh *th.BotHandler, sgGroup *th.HandlerGroup, a *App) {
 	if g == nil {
 		return
 	}
+	// Per-user cooldowns: games are open to everyone (by design), so a
+	// throttle is the only thing stopping one member flooding a
+	// 200-person chat. battle emits 3+ messages per call, hence the
+	// longer gate.
 	if g.Dice != nil {
-		sgGroup.HandleMessage(g.Dice.HandleDice, th.CommandEqual("dice"))
+		sgGroup.HandleMessage(a.gateMsg("dice", 5*time.Second, g.Dice.HandleDice), th.CommandEqual("dice"))
 	}
 	if g.Battle.Slash != nil {
-		sgGroup.HandleMessage(g.Battle.Slash, th.CommandEqual("battle"))
+		sgGroup.HandleMessage(a.gateMsg("battle", 30*time.Second, g.Battle.Slash), th.CommandEqual("battle"))
 	}
 	if g.Quiz.Slash != nil {
-		sgGroup.HandleMessage(g.Quiz.Slash, th.CommandEqual("quiz"))
+		sgGroup.HandleMessage(a.gateMsg("quiz", 8*time.Second, g.Quiz.Slash), th.CommandEqual("quiz"))
 	}
 	if g.Quiz.Callback != nil && g.Quiz.CallbackPredicate != nil {
 		// Quiz callbacks must be registered BEFORE the pending-action

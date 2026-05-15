@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"log/slog"
 	"time"
 
@@ -10,7 +9,6 @@ import (
 
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
-	"github.com/veschin/bidlobot/internal/text"
 )
 
 func loggingHandler(log *slog.Logger) th.Handler {
@@ -54,48 +52,6 @@ func statsCountHandler(buffer StatsIncrementer) th.Handler {
 		}
 		return ctx.Next(update)
 	}
-}
-
-func adminCheckHandler(cache *shared.AdminCache, tgBot *telego.Bot) th.Handler {
-	return func(ctx *th.Context, update telego.Update) error {
-		msg := update.Message
-		if msg == nil || msg.From == nil {
-			return nil
-		}
-
-		// Check for anonymous admin first
-		if shared.IsAnonymousAdmin(msg.From.ID) {
-			return replyText(ctx, tgBot, msg, text.ErrAnonymousAdmin)
-		}
-
-		absChatID := storage.AbsChatID(msg.Chat.ID)
-
-		isAdmin, err := cache.IsAdmin(absChatID, msg.From.ID)
-		if err != nil {
-			return replyText(ctx, tgBot, msg, text.ErrBotLostRights)
-		}
-		if !isAdmin {
-			return replyText(ctx, tgBot, msg, text.ErrNotAdmin)
-		}
-
-		canRestrict, err := cache.BotCanRestrict(absChatID)
-		if err != nil || !canRestrict {
-			return replyText(ctx, tgBot, msg, text.ErrBotNoRestrict)
-		}
-
-		return ctx.Next(update)
-	}
-}
-
-func replyText(_ *th.Context, bot *telego.Bot, msg *telego.Message, s string) error {
-	_, err := bot.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: msg.Chat.ID},
-		Text:   s,
-		ReplyParameters: &telego.ReplyParameters{
-			MessageID: msg.MessageID,
-		},
-	})
-	return err
 }
 
 func hasContent(msg *telego.Message) bool {

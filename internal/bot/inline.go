@@ -12,7 +12,6 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/pending"
-	"github.com/veschin/bidlobot/internal/storage"
 )
 
 // pendingTTL bounds how long an unconfirmed inline action can sit in
@@ -150,7 +149,6 @@ func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQue
 	parts := strings.Fields(q)
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
-	now := time.Now().UTC()
 	actor := query.From
 
 	if s.gameRouter != nil {
@@ -162,25 +160,29 @@ func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQue
 	switch cmd {
 	case "stats":
 		return toResults(statsCommands(args))
-	case "warns":
-		return toResults(warnsCommands(args))
 	case "help":
 		return toResults(helpCommands())
-	case "warn":
-		return s.warnPreview(ctx, actor, args, now)
-	case "mute":
-		return s.mutePreview(ctx, actor, args, now)
-	case "unmute":
-		return s.unmutePreview(ctx, actor, args, now)
-	case "ban":
-		return s.banPreview(ctx, actor, args, now)
-	case "unban":
-		return s.unbanPreview(ctx, actor, args, now)
-	case "cleanup":
-		return s.cleanupPreview(ctx, actor, args, now)
+	case "warn", "warns", "mute", "unmute", "ban", "unban", "cleanup":
+		// Moderation is DM-only. Inline results are posted publicly
+		// into the chat, so they can never be a private control
+		// surface - this is the architectural reason the old inline
+		// previews were removed. Point the admin to the DM console.
+		return dmRedirectInline()
 	default:
 		return toResults(filterByPrefix(catalog(), q))
 	}
+}
+
+// dmRedirectInline is the single result shown when an admin tries any
+// moderation verb via inline. Selecting it posts a short, harmless note
+// (no target, no action) and tells them to use the private console.
+func dmRedirectInline() []telego.InlineQueryResult {
+	return toResults([]inlineCommand{{
+		id:          "mod_dm_only",
+		title:       "Модерация - только в личке",
+		description: "Откройте чат со мной и отправьте /start",
+		send:        "Модерация бота доступна только в личке (так участники её не видят). Откройте личный чат со мной и отправьте /start.",
+	}})
 }
 
 // statsCommands handles only read-only /stats variants. Pure.
@@ -207,24 +209,6 @@ func statsCommands(args []string) []inlineCommand {
 			send:        send,
 		}}
 	}
-}
-
-func warnsCommands(args []string) []inlineCommand {
-	if len(args) == 0 {
-		return []inlineCommand{{
-			id:          "warns_help",
-			title:       "⚠️ /warns",
-			description: "Укажите пользователя: warns @user",
-			send:        "/warns",
-		}}
-	}
-	send := "/warns " + strings.Join(args, " ")
-	return []inlineCommand{{
-		id:          "warns_view_" + sha1Hex(send),
-		title:       "⚠️ " + send,
-		description: "Посмотреть предупреждения пользователя",
-		send:        send,
-	}}
 }
 
 func helpCommands() []inlineCommand {
@@ -301,286 +285,13 @@ func (s *InlineService) Handler() th.InlineQueryHandler {
 	}
 }
 
-// hintResult builds a single-result reply that explains expected usage.
-// Used when the query parses as a destructive command but with missing
-// or malformed arguments. No pending action is created.
-func hintResult(id, title, description string) []telego.InlineQueryResult {
-	return toResults([]inlineCommand{{id: id, title: title, description: description, send: "/help"}})
-}
 
-// errorResult is used when something internal goes wrong building the
-// preview (e.g. pending Create failed). The message is informative and
-// the keyboard is empty so the user can't trigger a half-broken flow.
-func errorResult(id, title, description string) []telego.InlineQueryResult {
-	return toResults([]inlineCommand{{id: id, title: title, description: description, send: "Извините, временная ошибка. Повторите команду."}})
-}
-
-func (s *InlineService) warnPreview(ctx context.Context, actor telego.User, args []string, now time.Time) []telego.InlineQueryResult {
-	if len(args) == 0 || !strings.HasPrefix(args[0], "@") {
-		return hintResult("warn_hint", "⚠️ warn @user причина", "Укажите цель и опционально причину")
-	}
-	target := strings.TrimPrefix(args[0], "@")
-	reason := strings.Join(args[1:], " ")
-	id, err := storage.NewID()
-	if err != nil {
-		return errorResult("warn_err", "Ошибка", err.Error())
-	}
-	action := pending.Action{
-		ID: id, Kind: pending.KindWarn,
-		ActorUserID: actor.ID, TargetDisplay: "@" + target,
-		Reason: reason, CreatedAt: now, ExpiresAt: now.Add(pendingTTL),
-	}
-	if err := s.pending.Create(ctx, action); err != nil {
-		s.log.Warn("pending.Create warn", "error", err)
-		return errorResult("warn_err", "Ошибка", err.Error())
-	}
-	preview := fmt.Sprintf("⚠️ Выдать предупреждение <b>@%s</b>?", htmlEscape(target))
-	if reason != "" {
-		preview += fmt.Sprintf("\n\n<b>Причина:</b> %s", htmlEscape(reason))
-	}
-	preview += "\n\n<i>Подтвердить может только инициатор.</i>"
-	return toResults([]inlineCommand{{
-		id:          id,
-		title:       "⚠️ Предупредить @" + target,
-		description: shortReason(reason, "без причины"),
-		preview:     preview,
-		keyboard:    confirmKeyboard(id),
-	}})
-}
-
-func (s *InlineService) mutePreview(ctx context.Context, actor telego.User, args []string, now time.Time) []telego.InlineQueryResult {
-	if len(args) == 0 || !strings.HasPrefix(args[0], "@") {
-		return hintResult("mute_hint", "🔇 mute @user 1h", "Укажите цель и длительность (например 30m, 1h, 7d)")
-	}
-	target := strings.TrimPrefix(args[0], "@")
-	durationStr := "1h"
-	if len(args) >= 2 {
-		durationStr = args[1]
-	}
-	duration, err := parseInlineDuration(durationStr)
-	if err != nil {
-		return hintResult("mute_dur_err", "🔇 Неверная длительность", "Примеры: 30m, 1h, 7d. Минимум 1m, максимум 366d.")
-	}
-	id, err := storage.NewID()
-	if err != nil {
-		return errorResult("mute_err", "Ошибка", err.Error())
-	}
-	action := pending.Action{
-		ID: id, Kind: pending.KindMute,
-		ActorUserID: actor.ID, TargetDisplay: "@" + target,
-		Duration: duration, CreatedAt: now, ExpiresAt: now.Add(pendingTTL),
-	}
-	if err := s.pending.Create(ctx, action); err != nil {
-		s.log.Warn("pending.Create mute", "error", err)
-		return errorResult("mute_err", "Ошибка", err.Error())
-	}
-	preview := fmt.Sprintf("🔇 Заглушить <b>@%s</b> на %s?\n\n<i>Подтвердить может только инициатор.</i>",
-		htmlEscape(target), formatDuration(duration))
-	return toResults([]inlineCommand{{
-		id:          id,
-		title:       fmt.Sprintf("🔇 Заглушить @%s на %s", target, formatDuration(duration)),
-		description: "Подтверждение требуется",
-		preview:     preview,
-		keyboard:    confirmKeyboard(id),
-	}})
-}
-
-func (s *InlineService) unmutePreview(ctx context.Context, actor telego.User, args []string, now time.Time) []telego.InlineQueryResult {
-	if len(args) == 0 || !strings.HasPrefix(args[0], "@") {
-		return hintResult("unmute_hint", "🔊 unmute @user", "Укажите цель")
-	}
-	target := strings.TrimPrefix(args[0], "@")
-	id, err := storage.NewID()
-	if err != nil {
-		return errorResult("unmute_err", "Ошибка", err.Error())
-	}
-	action := pending.Action{
-		ID: id, Kind: pending.KindUnmute,
-		ActorUserID: actor.ID, TargetDisplay: "@" + target,
-		CreatedAt: now, ExpiresAt: now.Add(pendingTTL),
-	}
-	if err := s.pending.Create(ctx, action); err != nil {
-		return errorResult("unmute_err", "Ошибка", err.Error())
-	}
-	preview := fmt.Sprintf("🔊 Снять mute с <b>@%s</b>?\n\n<i>Подтвердить может только инициатор.</i>", htmlEscape(target))
-	return toResults([]inlineCommand{{
-		id:          id,
-		title:       "🔊 Снять mute с @" + target,
-		description: "Подтверждение требуется",
-		preview:     preview,
-		keyboard:    confirmKeyboard(id),
-	}})
-}
-
-func (s *InlineService) banPreview(ctx context.Context, actor telego.User, args []string, now time.Time) []telego.InlineQueryResult {
-	if len(args) == 0 || !strings.HasPrefix(args[0], "@") {
-		return hintResult("ban_hint", "🚫 ban @user причина", "Укажите цель и опционально причину")
-	}
-	target := strings.TrimPrefix(args[0], "@")
-	reason := strings.Join(args[1:], " ")
-	id, err := storage.NewID()
-	if err != nil {
-		return errorResult("ban_err", "Ошибка", err.Error())
-	}
-	action := pending.Action{
-		ID: id, Kind: pending.KindBan,
-		ActorUserID: actor.ID, TargetDisplay: "@" + target,
-		Reason: reason, CreatedAt: now, ExpiresAt: now.Add(pendingTTL),
-	}
-	if err := s.pending.Create(ctx, action); err != nil {
-		return errorResult("ban_err", "Ошибка", err.Error())
-	}
-	preview := fmt.Sprintf("🚫 Забанить <b>@%s</b>?", htmlEscape(target))
-	if reason != "" {
-		preview += fmt.Sprintf("\n\n<b>Причина:</b> %s", htmlEscape(reason))
-	}
-	preview += "\n\n<i>Подтвердить может только инициатор.</i>"
-	return toResults([]inlineCommand{{
-		id:          id,
-		title:       "🚫 Забанить @" + target,
-		description: shortReason(reason, "без причины"),
-		preview:     preview,
-		keyboard:    confirmKeyboard(id),
-	}})
-}
-
-func (s *InlineService) unbanPreview(ctx context.Context, actor telego.User, args []string, now time.Time) []telego.InlineQueryResult {
-	if len(args) == 0 || !strings.HasPrefix(args[0], "@") {
-		return hintResult("unban_hint", "✅ unban @user", "Укажите цель")
-	}
-	target := strings.TrimPrefix(args[0], "@")
-	id, err := storage.NewID()
-	if err != nil {
-		return errorResult("unban_err", "Ошибка", err.Error())
-	}
-	action := pending.Action{
-		ID: id, Kind: pending.KindUnban,
-		ActorUserID: actor.ID, TargetDisplay: "@" + target,
-		CreatedAt: now, ExpiresAt: now.Add(pendingTTL),
-	}
-	if err := s.pending.Create(ctx, action); err != nil {
-		return errorResult("unban_err", "Ошибка", err.Error())
-	}
-	preview := fmt.Sprintf("✅ Разбанить <b>@%s</b>?\n\n<i>Подтвердить может только инициатор.</i>", htmlEscape(target))
-	return toResults([]inlineCommand{{
-		id:          id,
-		title:       "✅ Разбанить @" + target,
-		description: "Подтверждение требуется",
-		preview:     preview,
-		keyboard:    confirmKeyboard(id),
-	}})
-}
-
-func (s *InlineService) cleanupPreview(ctx context.Context, actor telego.User, args []string, now time.Time) []telego.InlineQueryResult {
-	if len(args) == 0 {
-		return hintResult("cleanup_hint", "🧹 cleanup <период>", "Например: cleanup 6mo, cleanup 30d, cleanup 1y")
-	}
-	threshold, err := parseInlineDuration(args[0])
-	if err != nil {
-		return hintResult("cleanup_err", "🧹 Неверный период", "Примеры: 7d, 30d, 6mo, 1y. Минимум 1d, максимум 5y.")
-	}
-	id, err := storage.NewID()
-	if err != nil {
-		return errorResult("cleanup_err", "Ошибка", err.Error())
-	}
-	action := pending.Action{
-		ID: id, Kind: pending.KindCleanup,
-		ActorUserID: actor.ID,
-		Threshold:   threshold,
-		CreatedAt:   now, ExpiresAt: now.Add(pendingTTL),
-	}
-	if err := s.pending.Create(ctx, action); err != nil {
-		return errorResult("cleanup_err", "Ошибка", err.Error())
-	}
-	preview := fmt.Sprintf(
-		"🧹 <b>Чистка инактивных за %s</b>\n\n"+
-			"Бот посчитает участников, которые не писали и не ставили реакций "+
-			"за указанный период, и покажет список перед киком.\n\n"+
-			"<i>Это только превью. Реального удаления не произойдёт без второго подтверждения.</i>",
-		formatDuration(threshold))
-	return toResults([]inlineCommand{{
-		id:          id,
-		title:       "🧹 Чистка за " + formatDuration(threshold),
-		description: "Открыть превью кандидатов",
-		preview:     preview,
-		keyboard:    cleanupPreviewKeyboard(id),
-	}})
-}
-
-// confirmKeyboard is the standard [Apply] [Cancel] inline keyboard for
-// moderation previews.
-func confirmKeyboard(id string) *telego.InlineKeyboardMarkup {
-	return &telego.InlineKeyboardMarkup{
-		InlineKeyboard: [][]telego.InlineKeyboardButton{{
-			{Text: "✅ Подтвердить", CallbackData: MakeCallback(cbApply, id)},
-			{Text: "❌ Отмена", CallbackData: MakeCallback(cbCancel, id)},
-		}},
-	}
-}
-
-// cleanupPreviewKeyboard mirrors confirmKeyboard but uses the preview
-// verb so the dispatcher can route to the cleanup-preview executor
-// (which then renders the candidate list and a confirm keyboard).
-func cleanupPreviewKeyboard(id string) *telego.InlineKeyboardMarkup {
-	return &telego.InlineKeyboardMarkup{
-		InlineKeyboard: [][]telego.InlineKeyboardButton{{
-			{Text: "📋 Показать кандидатов", CallbackData: MakeCallback(cbPreview, id)},
-			{Text: "❌ Отмена", CallbackData: MakeCallback(cbCancel, id)},
-		}},
-	}
-}
-
+// htmlEscape and formatDuration are shared rendering helpers used by the
+// callback executors (kept here after the inline destructive previews
+// were removed; they are not inline-specific).
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 	return r.Replace(s)
-}
-
-func shortReason(s, fallback string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return fallback
-	}
-	if len(s) > 80 {
-		return s[:77] + "..."
-	}
-	return s
-}
-
-// parseInlineDuration extends the moderation parser with calendar-style
-// units (mo, y) for cleanup. Months use 30 days, years use 365 - close
-// enough for an inactivity window.
-func parseInlineDuration(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0, fmt.Errorf("empty duration")
-	}
-	if d, err := time.ParseDuration(s); err == nil {
-		return d, nil
-	}
-	for _, suffix := range []struct {
-		s    string
-		mult time.Duration
-	}{
-		{"y", 365 * 24 * time.Hour},
-		{"mo", 30 * 24 * time.Hour},
-		{"w", 7 * 24 * time.Hour},
-		{"d", 24 * time.Hour},
-	} {
-		if rest, ok := strings.CutSuffix(s, suffix.s); ok {
-			n := 0
-			for _, c := range rest {
-				if c < '0' || c > '9' {
-					return 0, fmt.Errorf("not a number: %q", rest)
-				}
-				n = n*10 + int(c-'0')
-			}
-			if n == 0 {
-				return 0, fmt.Errorf("zero %s", suffix.s)
-			}
-			return time.Duration(n) * suffix.mult, nil
-		}
-	}
-	return 0, fmt.Errorf("unrecognized duration: %q", s)
 }
 
 func formatDuration(d time.Duration) string {

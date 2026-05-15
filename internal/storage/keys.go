@@ -42,6 +42,14 @@ func ChatKey(absChatID int64) []byte {
 	return []byte(fmt.Sprintf("c:%020d", absChatID))
 }
 
+// DMSessionKey maps an admin's private-chat user id to their selected
+// target chat. One session per admin: managing two chats means
+// re-selecting, which keeps "which chat am I about to act in"
+// unambiguous.
+func DMSessionKey(adminUserID int64) []byte {
+	return []byte(fmt.Sprintf("dm:%020d", adminUserID))
+}
+
 func AbsChatID(chatID int64) int64 {
 	if chatID < 0 {
 		return -chatID

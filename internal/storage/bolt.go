@@ -25,6 +25,7 @@ var buckets = []string{
 	"pending_actions",
 	"dice_leaderboard",
 	"quiz_leaderboard",
+	"dm_sessions",
 }
 
 type BoltStore struct {

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"strings"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -34,6 +35,22 @@ func privatePredicate() th.Predicate {
 			}
 		}
 		return false
+	}
+}
+
+// dmCallbackPredicate matches callback queries from a private chat
+// whose data is in the DM-console namespace. Keeps DM callbacks off the
+// public dispatcher and vice versa.
+func dmCallbackPredicate() th.Predicate {
+	return func(_ context.Context, update telego.Update) bool {
+		cb := update.CallbackQuery
+		if cb == nil || cb.Message == nil {
+			return false
+		}
+		if cb.Message.GetChat().Type != telego.ChatTypePrivate {
+			return false
+		}
+		return strings.HasPrefix(cb.Data, dmCBNamespace)
 	}
 }
 

@@ -77,14 +77,14 @@ func (s *Service) ListWarnings(ctx context.Context, targetUserID, absChatID int6
 	}
 
 	if len(warnings) == 0 {
-		return "No warnings.", nil
+		return "Предупреждений нет.", nil
 	}
 
 	var result string
 	if len(warnings) < 4 {
-		result = fmt.Sprintf("Warnings for user (warning: %d/3)\n", len(warnings))
+		result = fmt.Sprintf("Предупреждения (%d/3)\n", len(warnings))
 	} else {
-		result = fmt.Sprintf("Warnings for user (warning: %d total)\n", len(warnings))
+		result = fmt.Sprintf("Предупреждения (всего %d)\n", len(warnings))
 	}
 
 	for i, w := range warnings {
@@ -92,9 +92,9 @@ func (s *Service) ListWarnings(ctx context.Context, targetUserID, absChatID int6
 		dateStr := shared.FormatDate(w.Timestamp)
 		reason := w.Reason
 		if reason == "" {
-			reason = "(no reason)"
+			reason = "(без причины)"
 		}
-		result += fmt.Sprintf("%d. %s - by %s, %s\n", i+1, shared.EscapeHTML(reason), issuerDisplay, dateStr)
+		result += fmt.Sprintf("%d. %s - выдал %s, %s\n", i+1, shared.EscapeHTML(reason), issuerDisplay, dateStr)
 	}
 
 	return result, nil
