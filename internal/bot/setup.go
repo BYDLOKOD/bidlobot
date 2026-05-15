@@ -23,16 +23,27 @@ func setCommands(ctx context.Context, bot *telego.Bot) error {
 		{Command: "ban", Description: "Забанить участника"},
 		{Command: "unban", Description: "Разбанить участника"},
 		{Command: "cleanup", Description: "Чистка неактивных"},
+		{Command: "import", Description: "Импорт истории чата"},
 		{Command: "help", Description: "Справка"},
 	}
 
 	// Group + admin-in-group menus expose ONLY the public,
-	// non-moderation surface (read-only stats + games).
+	// non-moderation surface (read-only stats + games). Telegram accepts
+	// digit-leading command names (8ball verified against setMyCommands);
+	// subcommands like "stats month" are not separate menu entries.
 	groupCommands := []telego.BotCommand{
-		{Command: "stats", Description: "Статистика чата"},
+		{Command: "stats", Description: "Статистика чата (top/today/month)"},
 		{Command: "dice", Description: "Бросить кубик"},
 		{Command: "battle", Description: "Реакция-баттл X vs Y"},
 		{Command: "quiz", Description: "Угадай язык по коду"},
+		{Command: "poll", Description: "Опрос: вопрос | вар1 | вар2"},
+		{Command: "8ball", Description: "Спросить шар предсказаний"},
+		{Command: "roast", Description: "Поджарить участника"},
+		{Command: "praise", Description: "Похвалить участника"},
+		{Command: "guess", Description: "Угадай число 1-100"},
+		{Command: "hangman", Description: "Виселица (IT-слова)"},
+		{Command: "duel", Description: "Дуэль: /duel @user"},
+		{Command: "trivia", Description: "IT-викторина"},
 		{Command: "help", Description: "Справка"},
 	}
 

@@ -30,8 +30,43 @@ func (r *GamesInlineRouter) Route(cmd string, args []string, _ telego.User) ([]t
 		return r.battle(args), true
 	case "quiz":
 		return r.quiz(args), true
+	case "poll":
+		return r.passthrough("poll", "📊 Опрос", "Вопрос | вар1 | вар2 (или: poll quiz Вопрос | *Верный | ...)", args), true
+	case "8ball":
+		return r.passthrough("8ball", "🎱 Шар предсказаний", "Задайте вопрос: 8ball катить в прод?", args), true
+	case "roast":
+		return r.passthrough("roast", "🔥 Поджарить", "/roast [@user]", args), true
+	case "praise":
+		return r.passthrough("praise", "👏 Похвалить", "/praise [@user]", args), true
+	case "guess":
+		return r.passthrough("guess", "🔢 Угадай число", "/guess - старт, /guess N - попытка, /guess top", args), true
+	case "hangman":
+		return r.passthrough("hangman", "🪢 Виселица", "/hangman - старт, /hangman <буква>", args), true
+	case "duel":
+		return r.passthrough("duel", "⚔️ Дуэль", "/duel @user - кто кого", args), true
+	case "trivia":
+		return r.passthrough("trivia", "🎓 IT-викторина", "/trivia - вопрос, /trivia top", args), true
 	}
 	return nil, false
+}
+
+// passthrough builds a single pure slash-command suggestion (mirrors the
+// dice/quiz pattern): with no args it shows the usage hint, otherwise it
+// forwards the typed args to the slash handler, which does the work and
+// owns all validation. Keeps one code path for inline and slash entry.
+func (r *GamesInlineRouter) passthrough(cmd, title, hint string, args []string) []telego.InlineQueryResult {
+	send := "/" + cmd
+	desc := hint
+	if len(args) > 0 {
+		send += " " + strings.Join(args, " ")
+		desc = "Отправить " + send
+	}
+	return toResults([]inlineCommand{{
+		id:          "games_" + cmd + "_" + sha1Hex(send),
+		title:       title,
+		description: desc,
+		send:        send,
+	}})
 }
 
 // dice surfaces a single result that, when chosen, sends "/dice" or
