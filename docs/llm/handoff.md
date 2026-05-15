@@ -6,6 +6,9 @@ kind: guide
 # Handoff: next-session action plan
 
 Last rewritten 2026-05-15, end of the cleanup-campaign-rework session.
+Owner feedback + a privacy-leak directive captured 2026-05-16 (see *Known
+live bugs* and *Privacy / personal-data leak*); the rest of this file is
+the 2026-05-15 cleanup-campaign state and still current.
 
 ## State (what is true right now)
 
@@ -44,6 +47,58 @@ Last rewritten 2026-05-15, end of the cleanup-campaign-rework session.
   membership row keeps a campaign non-empty, so `/cleanup` re-run is
   refused for that chat; escape is the documented `/cleanup stop`.
 
+## Known live bugs (owner-reported 2026-05-16, deployed `6942061`)
+
+Captured from owner observation of the deployed bot; fixes in progress
+this session (no deploy - owner redeploys later). All three are
+user-triggered commands that notify/act on third parties or show a wrong
+identity. Common root for 1 & 3: no invariant that user-triggered output
+stays inert and that targets are validated chat members. Memory:
+`command-output-no-third-party-ping`.
+
+1. **Stats output @-mentions everyone.** `/stats top` / `/stats` /
+   monthly nominations render literal `@handle`
+   (`1. Олег (@veschin) - 75 ...`). Telegram makes that a real mention,
+   so anyone reading stats pings every listed member - reading stats
+   mass-summons the chat. **The spec is the root**: `30_stats.md` itself
+   mandates `@username` everywhere (`@poweruser`, "Users:
+   Name (@username)"). Fix the renderer AND `30_stats.md` in the same
+   commit: emit inert text - `@` stripped (`veschin`) or name only;
+   never `@handle`, `tg://user?id=`, or `text_mention`.
+2. **Import-only users show the operator's contact name.** Members with
+   no @username (Telegram-Desktop-imported) render as the *exporting
+   account's address-book label*, not their real profile name - e.g.
+   `Member (id 409000004)` is Oleg's private contact label. The
+   export `from` field is address-book-relative (`35_history_import.md`
+   ~line 73 wrongly calls it "Irrelevant"). Fix: resolve import-only
+   identity via `getChatMember` at render (the bot is nobody's contact
+   -> neutral public name), cache on the membership row, render inertly
+   per (1).
+3. **`/duel` targets anyone.** `/duel @anyone` and even
+   `/duel @1111111111111111111111111` are accepted - challenges users
+   not in the chat and malformed/non-existent handles, and pings real
+   ones. Fix: validate the target resolves to a present member of THIS
+   chat (membership table or `getChatMember` status), reject
+   non-members / malformed input with a clear error, render inert. Open
+   product Q (owner decides, do not assume): may an in-chat duel
+   deliberately notify the challenged member? Pinging non-members is
+   never acceptable regardless.
+
+## Privacy / personal-data leak (owner directive 2026-05-16)
+
+Owner: "в апстрим репу пролезло много личных данных" - he already
+deleted a test-data folder that contained his bio. Directive: audit the
+working tree AND git history for all personal-data leaks (bio, real
+names, the user's handle/ids, the БЫДЛОКОД export, emails, phones,
+secrets/keys, hardcoded personal chat ids), clean the working tree, and
+**prepare** (do not autonomously execute) a `git filter-repo` history
+scrub + force-push. The force-push to `origin` is the one coordinated
+action left for the owner's return ("когда я приду ... мы передеплоим");
+a backup bundle is taken before any rewrite. Any *live* secret found in
+history must be **rotated** by the owner regardless of scrub (a pushed
+secret is already compromised). Audit findings -> a devlog; the ready
+runbook -> linked from there and from this handoff on completion.
+
 ## Next (pick one - choices, not a queue)
 
 - **Deploy now (~10 min).** Run the Upgrade block in
@@ -58,6 +113,14 @@ Last rewritten 2026-05-15, end of the cleanup-campaign-rework session.
   chat (the code reposts-then-deletes and logs+degrades by design - not
   a code bug on this branch). Verify the bot's admin rights in that
   chat; only investigate code if rights are confirmed present.
+- **Fix the three live bugs + scrub the leak (in progress this
+  session).** Recommended: they degrade every `/stats` and `/duel` in
+  the live community and the leak is owner-flagged "важно". No deploy -
+  owner redeploys on return.
+- **Expand mini-game content ~20x.** 8ball and the other phrase-driven
+  games need far larger, varied pools for replayability - owner
+  explicitly praised the games and asked for the depth (memory:
+  `working-style-doxme`). Not a deploy blocker; bundle with the fixes.
 
 ## Read order
 
@@ -68,7 +131,8 @@ Last rewritten 2026-05-15, end of the cleanup-campaign-rework session.
    exception, env.
 5. [devlog/06_cleanup_campaign_rework.md](devlog/06_cleanup_campaign_rework.md)
    (+ 05 for the evidence-grading rationale).
-6. memory: `ux_moderation_privacy`, `bydlokod-import-workflow`,
+6. memory: `command-output-no-third-party-ping`,
+   `ux_moderation_privacy`, `bydlokod-import-workflow`,
    `project_direction`.
 
 ## Smoke test (run before touching anything)
@@ -123,3 +187,12 @@ are ambiguous, confirm them explicitly before implementing, not after.
    parser.
 7. `handoff.md` is rewritten each session, never appended. Specs change
    in the same commit as the code. Devlogs are append-only.
+8. No user-triggered command may emit `@handle` / `tg://user?id=` /
+   `text_mention` for a third party, and every targeted command (games,
+   moderation) must validate the target is a member of THIS chat. The
+   only sanctioned member-notifying output is the owner-approved
+   gracekick tag. (`command-output-no-third-party-ping`)
+9. Never commit personal data or secrets - no real bios, no exported
+   chat data, no personal chat ids, no keys. Test fixtures are
+   synthetic. The 31 MB БЫДЛОКОД export is never committed
+   (`bydlokod-import-workflow`).
