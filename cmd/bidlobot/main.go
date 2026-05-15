@@ -272,5 +272,18 @@ func (r *membershipDisplayResolver) UserDisplay(ctx context.Context, absChatID, 
 	// no @handle in the export data - they show just the name until
 	// they write live (live tracking then captures the username and
 	// SourceMessage overwrites SourceImport).
-	return shared.UserDisplayFull(m.Username, m.FirstName)
+	d := shared.UserDisplayFull(m.Username, m.FirstName)
+	if d == "" {
+		return "" // nothing known -> caller falls back to "User <id>"
+	}
+	if m.Username == "" {
+		// No @handle: a display name alone is NOT unique - several
+		// members can share one, and Telegram-Desktop-imported users
+		// have no username at all. Append the stable numeric id so two
+		// distinct same-name users never collapse into one line. The
+		// id disappears automatically once the user writes live and a
+		// @handle (globally unique) becomes available.
+		d += fmt.Sprintf(" (id %d)", userID)
+	}
+	return d
 }

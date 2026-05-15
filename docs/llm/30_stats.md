@@ -86,12 +86,18 @@ Last seen: Today
 - Numbers: thousands separator comma (`12,847`)
 - Dates: `Mon DD, YYYY`. Today (UTC) -> `Today`
 - Users: `Name (@username)` when both are known; `@username` if no
-  name; the escaped name if no username. History imported from a
-  Telegram Desktop export has display names but **no usernames** (the
-  export carries none), so import-only users show just the name until
-  they write live - live tracking then captures the @handle and
-  `SourceMessage` overwrites `SourceImport`. (`shared.UserDisplayFull`;
-  output is HTML-safe, renderers must not re-escape it.)
+  name. Counting is always keyed by the stable `user_id`, never by
+  name, so distinct same-name members are separate rows (the legacy
+  chat-export.org instead merged by name string - this is stricter).
+  When there is **no @username** the display name alone is not unique
+  (several members can share one; Telegram-Desktop-imported users carry
+  no username at all), so the stats resolver appends the numeric id:
+  `Name (id 12345)`. The id drops off automatically once the user
+  writes live and a globally-unique @handle is captured
+  (`SourceMessage` overwrites `SourceImport`). `shared.UserDisplayFull`
+  builds the name/handle part (HTML-safe; renderers must not re-escape);
+  the id suffix is added by the membership display resolver where the
+  id is known.
 
 ## Monthly statistics (retroactive nominations)
 
