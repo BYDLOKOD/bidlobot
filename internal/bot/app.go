@@ -15,6 +15,7 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
+	"github.com/veschin/bidlobot/internal/domain/summarize"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/testutil"
 )
@@ -39,6 +40,14 @@ type App struct {
 	games       *GamesRegistry
 	dmConsole   *DMConsole
 	cooldown    *cooldown
+
+	// summarize is the optional GLM chat-summarization feature. nil when
+	// GLM_API_KEY is unset: the bot then runs without it, the recorder
+	// is not wired, and /summarize replies "not configured" to admins.
+	// summarizeSender is the concrete rate-limited client (it carries
+	// EditMessageText, which shared.TelegramAPI does not expose).
+	summarize       *summarize.Service
+	summarizeSender summarizeSender
 
 	// sender is the rate-limited + retried wrapper used for every
 	// outgoing message on the public surface (help, onboarding, the
@@ -145,6 +154,17 @@ func (a *App) AttachGames(g *GamesRegistry) {
 // bot then has no private control surface).
 func (a *App) AttachDMConsole(d *DMConsole) {
 	a.dmConsole = d
+}
+
+// AttachSummarize installs the optional GLM chat-summarization feature.
+// Call before Run so registerRoutes wires the passive recorder and the
+// /summarize command. A nil service or sender is a no-op (feature off).
+func (a *App) AttachSummarize(svc *summarize.Service, sender summarizeSender) {
+	if svc == nil || sender == nil {
+		return
+	}
+	a.summarize = svc
+	a.summarizeSender = sender
 }
 
 func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {

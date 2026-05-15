@@ -84,6 +84,20 @@ Optional:
 - `RECORD_UPDATES` -- JSONL path inside the container; if set, every
   incoming update is appended for offline replay. Ship as a bind mount
   if you need to pull recordings from the host.
+- `GLM_API_KEY` -- enables the optional `/summarize` chat summarization
+  (Zhipu GLM). Empty/unset disables the whole feature; the bot starts
+  normally and `/summarize` replies "not configured" to admins.
+  `GLM_BASE_URL`/`GLM_MODEL` overrides select the endpoint family:
+  defaults are the general pay-as-you-go
+  `https://open.bigmodel.cn/api/paas/v4` + `glm-5` (needs a funded
+  account); a **GLM Coding Plan** key instead requires
+  `GLM_BASE_URL=https://api.z.ai/api/coding/paas/v4` + e.g.
+  `GLM_MODEL=glm-4.6` (the general endpoint returns code 1113 for a
+  coding-plan key). Persistent 1113 = wrong endpoint for the key type
+  OR an exhausted plan - check `GLM_BASE_URL` first. The coding
+  endpoint is documented by z.ai as for supported coding tools; using
+  it for this bot is an operator/ToS decision. See
+  [45_summarize.md](45_summarize.md).
 
 Daily inactive cleanup (all optional; the feature is OFF until
 `CLEANUP_DAILY_ENABLED` is truthy). This is the only feature that posts
@@ -214,7 +228,13 @@ What never leaks into logs:
 
 - `TG_BOT_TOKEN` (telego's default replacer redacts; do not enable
   telego `WithDebug`, which prints raw payloads).
+- `GLM_API_KEY` -- the glm client logs only model / status / token
+  usage, never the key or the transcript.
 - Message text -- only `chat_id`, `user_id`, command, duration_ms.
+  (The `/summarize` feature *sends* recent message text to the external
+  GLM provider over TLS to produce the summary - see the privacy note
+  in [45_summarize.md](45_summarize.md) - but never writes it to disk
+  or logs.)
 
 What does:
 

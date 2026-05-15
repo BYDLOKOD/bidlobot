@@ -7,7 +7,7 @@ kind: spec
 
 ## What this bot does
 
-Group management for IT supergroups in Telegram. Six capability areas:
+Group management for IT supergroups in Telegram. Seven capability areas:
 
 1. **Statistics** - message counters per user, top contributors, activity reports.
 2. **Moderation** - warn/mute/ban with 3-strike auto-mute. Telegram-native admin model.
@@ -23,6 +23,7 @@ Group management for IT supergroups in Telegram. Six capability areas:
 6. **YouTube `si=` sanitizer** - strips the share-tracking param
    (delete + attributed repost). This is NOT the dropped "YouTube
    Summary" (no LLM). [55_youtube_sanitizer.md](55_youtube_sanitizer.md).
+7. **Chat summarization** - admin-only `/summarize [N]`: an LLM (Zhipu GLM) condenses the last N messages the bot heard since start. Optional, off unless `GLM_API_KEY` is set. RAM-only window, no history persistence. Added 2026-05-15 at the owner's explicit request. Spec: [45_summarize.md](45_summarize.md).
 
 **Command surfaces (revised 2026-05-15 after the privacy rework):**
 
@@ -74,6 +75,15 @@ Group management for IT supergroups in Telegram. Six capability areas:
 | i18n switching | All user-facing strings in Russian |
 | Bot-managed admin list | Duplicates Telegram's native admin system |
 
+> **Reconciliation (2026-05-15).** "YouTube Summary" stays dropped: it
+> summarized an *external video* and its GLM/BigModel.cn dependency was
+> the stated objection. *Chat summarization* (capability 5) is a
+> distinct, owner-requested feature - it summarizes the chat's own
+> recent messages - and deliberately accepts the GLM/bigmodel.cn
+> dependency for that one admin-only, opt-in feature. The GLM-dependency
+> rationale therefore no longer bars chat-summary; it still bars
+> reviving YouTube summary without a fresh explicit ask.
+
 ## Deployment model
 
 Single Go binary. Long-polling. Embedded bbolt key-value database.
@@ -88,6 +98,8 @@ Env vars:
 - `CLEANUP_DAILY_THRESHOLD` (default: `6mo`; `30d`/`6mo`/`1y`/Go duration)
 - `CLEANUP_GRACE` (default: `72h`)
 - `CLEANUP_DAILY_BATCH` (default: `15`)
+- `GLM_API_KEY` (optional; enables `/summarize`. `GLM_BASE_URL`,
+  `GLM_MODEL` optional overrides)
 
 ## ID scheme
 
@@ -105,6 +117,7 @@ Examples:
 | Command | Context | Access |
 |---------|---------|--------|
 | `/stats [top\|today\|@user]` | supergroup | all |
+| `/summarize [N]` (alias `/итог`) | supergroup | admins |
 | `/warn @user [reason]` | supergroup | admins |
 | `/warns @user` | supergroup | all |
 | `/warns clear @user` | supergroup | admins |

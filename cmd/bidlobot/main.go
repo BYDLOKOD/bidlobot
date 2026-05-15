@@ -22,7 +22,9 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
+	"github.com/veschin/bidlobot/internal/domain/summarize"
 	"github.com/veschin/bidlobot/internal/shared"
+	"github.com/veschin/bidlobot/internal/shared/glm"
 	"github.com/veschin/bidlobot/internal/shared/ratelimit"
 	"github.com/veschin/bidlobot/internal/shared/retry"
 	"github.com/veschin/bidlobot/internal/shared/tgclient"
@@ -151,6 +153,33 @@ func main() {
 	cleanupExecutor.RegisterAll(dispatcher)
 	// SetAppContext is called below once the signal-aware context exists.
 
+	// Optional chat summarization via GLM (Zhipu bigmodel.cn). Disabled
+	// when GLM_API_KEY is unset: the bot starts normally without it. The
+	// key lives only in the process env (.env is gitignored); it is
+	// never logged here or by the glm package.
+	var summarizeSvc *summarize.Service
+	if cfg.GLMAPIKey != "" {
+		glmClient, gerr := glm.New(glm.Config{
+			APIKey:  cfg.GLMAPIKey,
+			BaseURL: cfg.GLMBaseURL,
+			Model:   cfg.GLMModel,
+			Logger:  log,
+		})
+		if gerr != nil {
+			log.Error("init glm client", "error", gerr)
+			os.Exit(1)
+		}
+		summarizeSvc = summarize.NewService(
+			summarize.NewBuffer(summarize.BufferConfig{}),
+			glmClient,
+			summarize.Config{},
+			log,
+		)
+		log.Info("chat summarization enabled", "model", glmClient.Model())
+	} else {
+		log.Info("chat summarization disabled (GLM_API_KEY unset)")
+	}
+
 	// tgClient (rate-limited + retried) is the public-surface sender:
 	// help, onboarding, the moderation-redirect notice - same budget as
 	// games/stats so a busy chat stays inside Telegram's 20 msg/min/chat.
@@ -195,6 +224,9 @@ func main() {
 		log,
 	)
 	app.AttachDMConsole(dmConsole)
+	if summarizeSvc != nil {
+		app.AttachSummarize(summarizeSvc, tgClient)
+	}
 
 	// Daily inactive lifecycle (tag -> grace -> kick). OFF unless the
 	// operator opts in: it is the only feature that posts publicly and
@@ -227,6 +259,10 @@ func main() {
 	cleanupExecutor.AttachWaitGroup(app.InFlight())
 	dmConsole.SetAppContext(ctx)
 	dmConsole.AttachWaitGroup(app.InFlight())
+	if summarizeSvc != nil {
+		summarizeSvc.SetAppContext(ctx)
+		summarizeSvc.AttachWaitGroup(app.InFlight())
+	}
 
 	go func() {
 		if err := app.Run(ctx, statsHandler); err != nil {
