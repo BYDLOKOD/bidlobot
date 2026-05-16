@@ -128,21 +128,37 @@ git filter-repo --force \
   --path-glob 'cmd/seed/*' --path-glob 'cmd/demo/*' --path-glob 'cmd/dbread/*' \
   --path-glob 'cmd/smoke/*' --path-glob 'cmd/bidlobot-import/*' \
   --path testdata/mock_freeform_input.txt --path testdata/chat_export_sample.json \
-  --replace-text /path/to/scrub-expressions.txt
+  --replace-text /path/to/scrub-expressions.txt \
+  --mailmap /path/to/scrub-mailmap
 
-# 4. Verify zero residual PII (every count must print 0).
-for t in 100000007 200000008 TestCity redacted@example e2e_test_bot \
-         1009000003 '"username":"alisa00"' '"first_name":"Алия"' \
-         '[REDACTED PERSONAL BIO]"$t "; git grep -lI "$t" $(git rev-list --all) 2>/dev/null | wc -l
-done
+# scrub-mailmap rewrites BOTH author and committer identity (filter-repo
+# applies a mailmap to both). The owner's real personal email was in
+# EVERY commit's author+committer field; map it to the GitHub noreply,
+# the standard non-leaking, attribution-preserving form. One line:
+#   <NN+handle@users.noreply.github.com> <real-personal-email>
+
+# 4. Verify zero residual - CONTENT *and* METADATA. `git grep` only
+#    searches trees; author/committer email + commit messages are
+#    METADATA and invisible to it. A grep-only pass hid the email leak
+#    once already - do not repeat that mistake.
+#  4a. content - derive needles from the expressions file (keeps raw
+#      PII out of THIS doc); every count must be 0:
+awk -F'==>' '{sub(/^regex:/,"",$1);print $1}' /path/to/scrub-expressions.txt \
+ | while read -r t; do printf '%s ' "$t"; \
+     git grep -lI "$t" $(git rev-list --all) 2>/dev/null | wc -l; done
+#  4b. metadata - no real email/name in any identity field:
+git log --all --format='%ae%n%ce%n%an%n%cn' | sort -u   # eyeball: no real PII
+#  4c. messages - git log --all --format='%B' | grep -i <real-email>  -> none
 
 # 5. Sanity: clone HEAD, go build ./... && go test ./...  (expect 21 ok).
 
-# 6. COORDINATED, IRREVERSIBLE - only with the owner, after step 4 == all 0:
-git push --force --all   git@github.com:veschin/bidlobot.git
-git push --force --tags  git@github.com:veschin/bidlobot.git
-# origin currently has: master, feat/monthly-stats-dm-import-games-yt.
-# Then: every existing clone must be re-cloned (old SHAs are gone).
+# 6. COORDINATED, IRREVERSIBLE - only after 4a/4b/4c all clean:
+git push --force --all   <origin>
+git push --force --tags  <origin>
+# origin has: master + feat/monthly-stats-dm-import-games-yt. Then
+# every existing clone (incl. the deploy host) must re-clone or
+# `git fetch && git reset --hard origin/master` - a rewrite breaks
+# `git pull --ff-only`.
 ```
 
 Post-push reality: force-push is not erasure. If the repo was ever
