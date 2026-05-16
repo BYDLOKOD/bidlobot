@@ -21,13 +21,13 @@ Introduced in `9851c0b` ("snapshot Go rewrite"), an ancestor of
   salary band, birth year, home city, hardware, GitHub). Orphan: no
   code referenced it (the profiles/bio domain was archived).
 - `testdata/session1.jsonl`, `session2.jsonl` - recorded Telegram
-  updates carrying the owner's real user id `100000007`, `@veschin`,
-  first name, premium flag; `session1.jsonl` also embeds the full bio
-  as a message. Used only by the assertion-light
+  updates carrying the owner's real user id, handle, first name,
+  premium flag; `session1.jsonl` also embeds the full bio as a
+  message. Used only by the assertion-light
   `internal/bot/replay_test.go`.
-- `testdata/chat_export_sample.json` - a sample of the real БЫДЛОКОД
-  export (real chat id `1009000003`, real user id). Orphan: referenced
-  only in prose in devlog 04.
+- `testdata/chat_export_sample.json` - a sample of the real community
+  export (real chat id + many real member ids/names). Orphan:
+  referenced only in prose in devlog 04.
 - Deleted-from-HEAD but live in history: `cmd/seed/main.go` (bio +
   `redacted@example.com` + ids), `cmd/demo/main.go`,
   `cmd/dbread/main.go`, `cmd/smoke/main.go`, `cmd/bidlobot-import/*`
