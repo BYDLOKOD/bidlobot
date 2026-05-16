@@ -7,17 +7,30 @@ kind: guide
 
 Last rewritten 2026-05-16, end of the privacy-leak + owner-feedback
 session. The cleanup-campaign baseline (2026-05-15) below is unchanged
-and still current; this session added 2 LOCAL commits on top.
+and still current; this session's work is now PUSHED to origin/master.
 
 ## State (what is true right now)
 
-- `origin/master` = `f203fc9` (NOT moved this session). Local `master`
-  is **2 commits AHEAD, 0 behind, NOT pushed**:
-  - `513b8d5` chore(privacy): purge real PII from testdata + handoff.
-  - `<next>` the 3 bug fixes + S1 + game-content expansion + specs +
-    devlog 07 (the commit this handoff ships with).
-- Nothing pushed, nothing deployed (owner explicitly withheld both;
-  redeploy is coordinated on the owner's return).
+- `origin/master` = `7c76068` (**PUSHED this session**, in sync, linear,
+  clean fast-forward - NO force-push was used). History:
+  - `7e56a89` Delete testdata directory (the **owner's own** commit,
+    pushed separately; rebased onto, not clobbered).
+  - `05b6178` chore(privacy): sanitized PII-free `session{1,2}.jsonl`
+    kept (owner's 7e56a89 had deleted them, which broke `replay_test`;
+    sanitized fixtures restore green tests + zero PII).
+  - `7c76068` the 3 bug fixes + S1 + game-content + specs + devlog 07.
+- **Not deployed yet.** The host (`<deploy-host>:/opt/bidlobot`) still
+  runs the old binary until the Upgrade block is run there (a manual
+  on-host action; Claude has no access to that host).
+- Personal-data leak still in **git history** (pre-`7e56a89`
+  ancestors): 7e56a89 only removed files at HEAD, not from history; no
+  scrub/force-push was done. devlog 07 runbook still pending, owner's
+  call. NOTE: once that scrub force-pushes, the host's `/opt/bidlobot`
+  clone must be re-cloned / `git reset --hard origin/master` - a
+  rewrite breaks `git pull --ff-only`.
+- Keys: owner explicitly accepted the `TG_BOT_TOKEN`/`GLM_API_KEY`
+  compromise risk (2026-05-16) - documented, not re-litigated. Host
+  `/opt/bidlobot/env` is unchanged by Upgrade (`env_file` persists).
 - Shipped earlier (prod baseline `6942061`, on `origin/master`):
   evidence-graded `/cleanup`, the command-started cleanup **campaign**
   (`gracekick`), `/summarize` (GLM), docs.
@@ -104,20 +117,25 @@ owner-only: (a) rotate `TG_BOT_TOKEN` (@BotFather) + `GLM_API_KEY`
 transcript; (b) run devlog-07 steps 1-6 to scrub history and
 force-push (coordinated, irreversible).
 
-## Next (owner actions on return - ORDERED, not a free choice)
+## Next
 
-1. **Rotate creds first (~5 min, owner-only, do before anything).**
-   `TG_BOT_TOKEN` via @BotFather, `GLM_API_KEY` via z.ai. Independent
-   of git; the keys are already exposed via a chat transcript.
-2. **Scrub history + force-push (coordinated, irreversible).** Follow
-   [devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md)
-   steps 1-6. Step 4 (residual-PII grep == 0 on the origin mirror) is
-   gating; do not skip it on the strength of the dry-run.
-3. **Then push this session's 2 local commits**, then **deploy** (the
-   Upgrade block in [70_deployment.md](70_deployment.md); watch the
-   four startup log lines). Order matters: scrub rewrites history, so
-   push the cleanup branch only as part of / after the scrub, not
-   before.
+- **DONE this session:** code pushed to `origin/master` (`7c76068`,
+  clean fast-forward). Was the gating step for deploy.
+- **DEPLOY (remaining; owner, on the host).** On
+  `<deploy-host>:/opt/bidlobot`:
+  `git fetch origin && git checkout master && git pull --ff-only &&
+  docker compose up -d --build && docker compose logs -f bot`. Expect,
+  in order: `starting build=...` -> `authenticated bot=... can_read_all=`
+  -> `health server listening addr=:8080` -> `bot started, polling for
+  updates`. No DB migration, nothing auto-activates (`/cleanup` needs
+  an admin DM; `/summarize` needs `GLM_API_KEY` already in host env).
+- **Creds:** owner accepted the compromise risk (2026-05-16). Not a
+  blocker; not re-litigated. Rotation stays advisable but is the
+  owner's call; `env`-var design = one-line host change, no code.
+- **Personal-data scrub (owner's call, still pending).** devlog 07
+  runbook. Independent of deploy. If/when run, the force-push rewrites
+  history -> re-clone or `git reset --hard origin/master` on the deploy
+  host afterwards (`git pull --ff-only` will fail post-rewrite).
 - Still open, independent: **YouTube-si= delete** - owner reported
   "reposts but doesn't delete the original"; most likely the bot lacks
   the **Delete Messages** admin right in that chat (code
