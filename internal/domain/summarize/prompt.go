@@ -44,10 +44,13 @@ name [HH:MM] message text
 Write the summary IN RUSSIAN, as PLAIN TEXT only - no Markdown, no HTML, no asterisks, no backticks, no links markup. Keep it under 2800 characters total. Structure it as these sections, each on its own lines, omitting any section that has no content:
 
 Кратко: 2-3 sentences, the gist.
-Темы: the main discussion threads, one per line, prefixed with "- ".
+Темы: the main discussion threads, one per line, prefixed with "- ". For each topic, note the key participants (names as they appear in the transcript) in parentheses.
 Решения: concrete decisions or conclusions, "- " prefixed; omit if none.
 Ссылки: notable links/resources mentioned, "- " prefixed; omit if none.
 Вопросы: unresolved questions left open, "- " prefixed; omit if none.
+
+If the transcript is followed by a "---" separator and questions, add a section:
+Ответы: answer each question based only on the transcript content. If the transcript does not contain enough information to answer, say so explicitly.
 
 Summarize only what is actually in the transcript. Do not invent participants, facts, or links. Do not repeat these instructions. Do not address the reader.`
 
@@ -68,7 +71,7 @@ type BuildResult struct {
 // stops before the first message that would exceed budgetTokens. The
 // kept messages are then emitted oldest -> newest so the model reads the
 // conversation in order. Returns ok=false when the window is empty.
-func BuildPrompt(entries []Entry, requested, available, budgetTokens int) (BuildResult, bool) {
+func BuildPrompt(entries []Entry, requested, available, budgetTokens int, questions string) (BuildResult, bool) {
 	if len(entries) == 0 {
 		return BuildResult{Requested: requested, Available: available}, false
 	}
@@ -95,15 +98,17 @@ func BuildPrompt(entries []Entry, requested, available, budgetTokens int) (Build
 
 	var sb strings.Builder
 	for _, e := range kept {
-		// No leading '@': a literal @handle here would be echoed by the
-		// model and rendered as a real, notifying Telegram mention in
-		// the public result. Names are plain; the output is additionally
-		// mention-defused downstream as defense in depth.
 		sb.WriteString(sanitizeLine(e.Name))
 		sb.WriteString(" [")
 		sb.WriteString(e.TS.Format("15:04"))
 		sb.WriteString("] ")
 		sb.WriteString(sanitizeLine(e.Text))
+		sb.WriteByte('\n')
+	}
+
+	if q := strings.TrimSpace(questions); q != "" {
+		sb.WriteString("\n---\n")
+		sb.WriteString(sanitizeLine(q))
 		sb.WriteByte('\n')
 	}
 

@@ -111,19 +111,21 @@ func (a *App) handleSummarize(_ *th.Context, msg telego.Message) error {
 		return a.replySummarize(&msg, text.MsgSummarizeNotConfigured)
 	}
 
-	n := parseSummarizeN(msg.Text)
+	args := parseSummarizeArgs(msg.Text)
+	requester := summarizeName(msg.From)
 
 	available := a.summarize.Available(absChatID)
 	if available == 0 {
 		return a.replySummarize(&msg, text.MsgSummarizeEmpty)
 	}
 
+	if body, meta, ok := a.summarize.TryCache(absChatID, args.n, args.questions); ok {
+		return a.replySummarize(&msg, composeSummaryMessage(body, meta, requester, nil))
+	}
+
 	if !a.summarize.TryAcquire(absChatID) {
 		return a.replySummarize(&msg, text.MsgSummarizeBusy)
 	}
-	// Process-wide paid-API ceiling. Checked AFTER the per-chat slot so
-	// a busy chat never consumes global budget; release the slot if the
-	// global window is full.
 	if !a.summarize.GlobalAllow() {
 		a.summarize.Release(absChatID)
 		return a.replySummarize(&msg, text.ErrSummarizeGlobalLimit)
@@ -137,8 +139,6 @@ func (a *App) handleSummarize(_ *th.Context, msg telego.Message) error {
 	})
 	pcancel()
 	if err != nil || placeholder == nil {
-		// Could not post the message we would later edit: free the slot
-		// and bail. Nothing was shown, so no error reply either.
 		a.summarize.Release(absChatID)
 		a.log.Warn("summarize placeholder send failed", "abs_chat_id", absChatID, "error", err)
 		return nil
@@ -146,11 +146,10 @@ func (a *App) handleSummarize(_ *th.Context, msg telego.Message) error {
 
 	signedChatID := msg.Chat.ID
 	placeholderID := placeholder.MessageID
-	requester := summarizeName(msg.From)
 
 	a.summarize.Go(func() {
 		defer a.summarize.Release(absChatID)
-		body, meta, serr := a.summarize.Summarize(absChatID, n)
+		body, meta, serr := a.summarize.Summarize(absChatID, args.n, args.questions)
 		final := composeSummaryMessage(body, meta, requester, serr)
 		ectx, ecancel := a.summarize.OpContext(summarizeEditTO)
 		defer ecancel()
@@ -233,27 +232,34 @@ func (a *App) replySummarize(msg *telego.Message, body string) error {
 	return err
 }
 
-// parseSummarizeN extracts the message count from "/summarize 50". A
-// missing or non-numeric argument falls back to the default rather than
-// erroring - the friendlier behavior for a quick admin command. The
-// result is clamped to [1, summarizeMaxN]; the live window size is the
-// other (lower) bound, enforced downstream.
-func parseSummarizeN(cmdText string) int {
+type summarizeArgs struct {
+	n         int
+	questions string
+}
+
+func parseSummarizeArgs(cmdText string) summarizeArgs {
+	args := summarizeArgs{n: summarizeDefaultN}
 	parts := strings.Fields(cmdText)
-	for _, tok := range parts[min(1, len(parts)):] {
-		if strings.ContainsRune(tok, '@') {
-			continue // command token written as /summarize@BotName
-		}
-		v, err := strconv.Atoi(tok)
-		if err != nil || v <= 0 {
-			continue
-		}
-		if v > summarizeMaxN {
-			return summarizeMaxN
-		}
-		return v
+	if len(parts) <= 1 {
+		return args
 	}
-	return summarizeDefaultN
+
+	rest := parts[1:]
+	for len(rest) > 0 && strings.HasPrefix(rest[0], "@") {
+		rest = rest[1:]
+	}
+	if len(rest) == 0 {
+		return args
+	}
+
+	if v, err := strconv.Atoi(rest[0]); err == nil && v > 0 {
+		args.n = min(v, summarizeMaxN)
+		rest = rest[1:]
+	}
+	if len(rest) > 0 {
+		args.questions = strings.Join(rest, " ")
+	}
+	return args
 }
 
 // summarizeName is a clean plain display token for the transcript and

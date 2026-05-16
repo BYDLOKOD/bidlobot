@@ -34,31 +34,45 @@ transcript. Wired only when the feature is configured.
 
 ## Invocation & authorization
 
-- Public supergroup command `/summarize [N]`, alias `/итог [N]`. The
-  alias is matched by `textCommandPredicate`, **not** `th.CommandEqual`:
-  telego's CommandEqual compiles to an ASCII-only RE2 `\w` regex that
-  never matches Cyrillic. Typed-only (setMyCommands also rejects
-  non-ASCII names, so it stays out of the slash menu). `N` defaults to
-  200, parsed leniently (first positive int after the command, `@bot`
-  token skipped), clamped to `[1, 4000]` and to the live window size.
+- Public supergroup command `/summarize [N] [questions...]`, alias
+  `/итог [N] [questions...]`. The alias is matched by
+  `textCommandPredicate`, **not** `th.CommandEqual`: telego's
+  CommandEqual compiles to an ASCII-only RE2 `\w` regex that never
+  matches Cyrillic. Typed-only (setMyCommands also rejects non-ASCII
+  names, so it stays out of the slash menu). `N` defaults to 200
+  (first token after command/`@bot` parsed as int; if not a number,
+  everything is treated as questions), clamped to `[1, 4000]` and to
+  the live window size. Everything after `N` (or after the command if
+  no `N` given) is the **questions text**, passed to the LLM as
+  additional instructions after a `---` separator. Questions are
+  sanitized via `sanitizeLine` (collapsed to single line, no format
+  injection).
 - Admin-only via `shared.AdminCache` (getChatAdministrators, 60s TTL,
   re-checked every call) - the project standard. Non-admins get **no
   reply** (anti-spam). Anonymous admins are told to disable anonymous
   mode (no `From.ID` to match - same limit the DM moderation surface
   documents).
 - Cost controls on a paid API: per-admin 90s cooldown via `gateMsg`
-  (silent drop); per-chat single-flight (a second `/summarize` while one
-  runs replies "уже собираю"); and a **process-wide ceiling** across all
-  chats/admins (`GlobalAllow`, default 40 calls / rolling hour) - the
-  single-flight is per-chat only, so without the global cap an admin in
-  many chats (or a compromised account) is an unbounded financial DoS.
-  Checked after the per-chat slot so a busy chat never burns global
-  budget.
+  (silent drop); **response cache** (RAM-only, 10-minute TTL,
+  `Config.CacheTTL`) keyed by `(chatID, lastMsgID, N, questionsHash)` -
+  a cache hit returns the stored result directly without acquiring the
+  single-flight slot, the global budget, or calling GLM (the `gateMsg`
+  cooldown still applies since it fires before the handler); per-chat
+  single-flight (a second `/summarize` while one runs replies "уже
+  собираю"); and a **process-wide ceiling** across all chats/admins
+  (`GlobalAllow`, default 40 calls / rolling hour) - the single-flight
+  is per-chat only, so without the global cap an admin in many chats (or
+  a compromised account) is an unbounded financial DoS. Checked after
+  the per-chat slot so a busy chat never burns global budget. The cache
+  auto-invalidates when new messages arrive (different `lastMsgID`) or
+  the TTL expires; different `N` or different questions are separate
+  keys.
 - The expensive call runs in a tracked background goroutine
   (`App.InFlight()` + app context, like the cleanup executor): a
   placeholder message is posted, then `EditMessageText`-swapped in place
   for the result - one public artifact, never two; SIGTERM cancels it
-  cleanly inside the shutdown budget.
+  cleanly inside the shutdown budget. Cache hits skip the placeholder
+  dance entirely and reply inline.
 
 ## Token budget & provider
 
@@ -96,7 +110,8 @@ member could steer the summary into mass-pinging the chat. The
 transcript therefore feeds plain names (no leading `@`) and the final
 body+footer is run through `defuseMentions` (a U+2060 WORD JOINER after
 every `@`, invisible, breaks the mention parse). Russian, sectioned
-(Кратко / Темы / Решения / Ссылки / Вопросы, empties omitted), capped
+(Кратко / Темы / Решения / Ссылки / Вопросы / Ответы, empties omitted;
+Ответы appears only when questions were provided), capped
 ~2800 chars by the prompt and hard-truncated at 3500 runes. Footer
 discloses provenance: `- итог M сообщений (HH:MM-HH:MM UTC),
 сгенерировано внешним AI (GLM) по запросу @admin`.
@@ -130,6 +145,21 @@ assuming the plan is empty.
 for one admin-only feature, mitigated by: RAM-only (no disk/backup),
 opt-in (off without the key), explicit in-message provenance footer,
 key never logged. Operators should disclose this to their community.
+
+## Topic attribution
+
+The Темы section instructs the model to note key participants (names as
+they appear in the transcript) in parentheses for each topic:
+
+```
+Темы:
+- деплой новой версии (user1, user2): обсудили сроки, решили катить в пятницу
+- баг в авторизации (user3): описал проблему, пока без решения
+```
+
+This is prompt-level guidance, not enforced structurally; the model may
+occasionally omit attributions for topics with many participants or
+unclear ownership.
 
 ## Documented limitations (v1, not silent)
 

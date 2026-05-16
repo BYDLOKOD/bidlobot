@@ -31,6 +31,7 @@ type Config struct {
 	CallTimeout       time.Duration // hard ceiling per GLM call (default below)
 	GlobalMaxCalls    int           // process-wide cap per GlobalWindow (default below)
 	GlobalWindow      time.Duration // rolling window for GlobalMaxCalls (default below)
+	CacheTTL          time.Duration // how long a summary stays cached (default 10m)
 }
 
 const (
@@ -75,6 +76,8 @@ type Service struct {
 	globalWindow time.Duration
 	gmu          sync.Mutex
 	gcalls       []time.Time // attempt timestamps in the rolling window
+
+	cache *cache
 }
 
 // NewService wires the orchestrator. buf and llm are required.
@@ -109,6 +112,7 @@ func NewService(buf *Buffer, llm Completer, cfg Config, log *slog.Logger) *Servi
 	if s.globalWindow <= 0 {
 		s.globalWindow = defaultGlobalWindow
 	}
+	s.cache = newCache(cfg.CacheTTL)
 	return s
 }
 
@@ -196,17 +200,41 @@ type Meta struct {
 	To        time.Time
 }
 
+// TryCache returns a previously cached summary for this chat/N/questions
+// combination if the underlying message window has not changed and the
+// TTL has not expired. A hit avoids the single-flight lock, the global
+// budget, and the GLM call entirely.
+func (s *Service) TryCache(absChatID int64, requested int, questions string) (string, Meta, bool) {
+	entries, _ := s.buf.Window(absChatID, requested)
+	if len(entries) == 0 {
+		return "", Meta{}, false
+	}
+	key := cacheKey{
+		chatID:    absChatID,
+		lastMsgID: entries[len(entries)-1].MsgID,
+		n:         requested,
+		qHash:     questionsHash(questions),
+	}
+	body, meta, ok := s.cache.get(key)
+	if ok {
+		s.log.Info("summarize cache hit",
+			"abs_chat_id", absChatID, "included", meta.Included)
+	}
+	return body, meta, ok
+}
+
 // Summarize builds the prompt from the chat's window and calls GLM. It
 // derives its own deadline from the app context so a hung provider
 // cannot outlive shutdown. Returns ErrNoMessages when the window is
 // empty, ErrBusy is enforced by the caller via TryAcquire, and the
-// glm.Err* sentinels (wrapped) on provider failures.
-func (s *Service) Summarize(absChatID int64, requested int) (string, Meta, error) {
+// glm.Err* sentinels (wrapped) on provider failures. A successful
+// result is cached for future TryCache hits.
+func (s *Service) Summarize(absChatID int64, requested int, questions string) (string, Meta, error) {
 	entries, available := s.buf.Window(absChatID, requested)
 	if len(entries) == 0 {
 		return "", Meta{Available: 0, Requested: requested}, ErrNoMessages
 	}
-	built, ok := BuildPrompt(entries, requested, available, s.inputBudget)
+	built, ok := BuildPrompt(entries, requested, available, s.inputBudget, questions)
 	if !ok {
 		return "", Meta{Available: available, Requested: requested}, ErrNoMessages
 	}
@@ -230,6 +258,14 @@ func (s *Service) Summarize(absChatID int64, requested int) (string, Meta, error
 			"error", err)
 		return "", meta, err
 	}
+
+	s.cache.set(cacheKey{
+		chatID:    absChatID,
+		lastMsgID: entries[len(entries)-1].MsgID,
+		n:         requested,
+		qHash:     questionsHash(questions),
+	}, text, meta)
+
 	s.log.Info("summarize ok",
 		"abs_chat_id", absChatID, "included", built.Included,
 		"est_tokens", built.EstTokens,

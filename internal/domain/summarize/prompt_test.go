@@ -34,14 +34,14 @@ func mkEntries(n int, body string) []Entry {
 }
 
 func TestBuildPrompt_EmptyWindow(t *testing.T) {
-	if _, ok := BuildPrompt(nil, 10, 0, 1000); ok {
+	if _, ok := BuildPrompt(nil, 10, 0, 1000, ""); ok {
 		t.Fatalf("empty window must return ok=false")
 	}
 }
 
 func TestBuildPrompt_AllFitChronological(t *testing.T) {
 	entries := mkEntries(5, "hello")
-	res, ok := BuildPrompt(entries, 5, 5, 1_000_000)
+	res, ok := BuildPrompt(entries, 5, 5, 1_000_000, "")
 	if !ok || res.Included != 5 {
 		t.Fatalf("included = %d ok=%v, want 5/true", res.Included, ok)
 	}
@@ -60,7 +60,7 @@ func TestBuildPrompt_AllFitChronological(t *testing.T) {
 func TestBuildPrompt_DropsOldestUnderBudget(t *testing.T) {
 	// Each line ~ EstimateTokens("wordwordword")=6 + name 2 + overhead 8.
 	entries := mkEntries(50, "wordwordword")
-	res, ok := BuildPrompt(entries, 50, 50, EstimateTokens(systemPrompt)+60)
+	res, ok := BuildPrompt(entries, 50, 50, EstimateTokens(systemPrompt)+60, "")
 	if !ok || res.Included == 0 || res.Included >= 50 {
 		t.Fatalf("included = %d, want a trimmed suffix (0 < n < 50)", res.Included)
 	}
@@ -75,11 +75,49 @@ func TestBuildPrompt_DropsOldestUnderBudget(t *testing.T) {
 
 func TestBuildPrompt_SingleOversizedMessageKept(t *testing.T) {
 	entries := mkEntries(3, strings.Repeat("x", 100000))
-	res, ok := BuildPrompt(entries, 3, 3, 10) // budget far below one message
+	res, ok := BuildPrompt(entries, 3, 3, 10, "") // budget far below one message
 	if !ok || res.Included != 1 {
 		t.Fatalf("included = %d ok=%v, want exactly the newest 1", res.Included, ok)
 	}
 	if res.Messages[1].Content == "" {
 		t.Fatalf("transcript empty for oversized single message")
+	}
+}
+
+func TestBuildPrompt_QuestionsAppended(t *testing.T) {
+	entries := mkEntries(3, "hello")
+	res, ok := BuildPrompt(entries, 3, 3, 1_000_000, "что решили по деплою?")
+	if !ok {
+		t.Fatalf("ok=false with questions")
+	}
+	body := res.Messages[1].Content
+	if !strings.Contains(body, "---") {
+		t.Fatalf("questions separator not found in transcript")
+	}
+	if !strings.Contains(body, "что решили по деплою?") {
+		t.Fatalf("questions text not found in transcript")
+	}
+}
+
+func TestBuildPrompt_EmptyQuestionsNoSeparator(t *testing.T) {
+	entries := mkEntries(3, "hello")
+	res, ok := BuildPrompt(entries, 3, 3, 1_000_000, "")
+	if !ok {
+		t.Fatalf("ok=false")
+	}
+	if strings.Contains(res.Messages[1].Content, "---") {
+		t.Fatalf("empty questions must not add separator")
+	}
+}
+
+func TestBuildPrompt_TopicAttributionInSystemPrompt(t *testing.T) {
+	entries := mkEntries(1, "hello")
+	res, ok := BuildPrompt(entries, 1, 1, 1_000_000, "")
+	if !ok {
+		t.Fatalf("ok=false")
+	}
+	sys := res.Messages[0].Content
+	if !strings.Contains(sys, "key participants") {
+		t.Fatalf("system prompt must instruct topic attribution with participants")
 	}
 }
