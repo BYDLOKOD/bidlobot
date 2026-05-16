@@ -28,9 +28,17 @@ cleanup-campaign baseline (2026-05-15) is unchanged and still current.
   seen, already processing live community updates. The pre-deploy
   container had been `unhealthy` on an old feat-branch build - the
   redeploy cleared it. The fixed code (below) is live.
-- `GLM_API_KEY` is **unset on the host** -> `/summarize` is off
-  (expected; opt-in). Cleanup campaign wired, command-driven, nothing
-  auto-active. No DB migration.
+- `/summarize` **enabled** (2026-05-16): GLM_API_KEY/BASE_URL/MODEL
+  copied from local `.env` to host env, container recreated; startup
+  logs `chat summarization enabled model=glm-4.6`; a live GLM probe
+  returned a real completion (Coding-Plan endpoint, no 1113). Host env
+  backed up (`env.bak.*`). Cleanup campaign wired, command-driven,
+  nothing auto-active. No DB migration.
+- **Bot runs Telegram privacy ON** (`can_read_all_group_messages=False`,
+  verified via getMe). It only receives commands / @mentions / replies
+  - **NOT plain group messages**. Deliberate import-driven-model
+  choice, but it means the YouTube-si= sanitizer and live message
+  stats structurally cannot fire (see Next).
 - `go build ./...`, `go test ./...` (all packages ok, 0 failures),
   `go vet`, `gofmt`, `validate.sh` green at the rewritten HEAD.
 - Cleanup model: DM `/cleanup <period>` confirm **seeds** a per-chat
@@ -88,12 +96,20 @@ re-verify clean.
 - **Operator smoke test the live bot** (~5 min): in the chat, `/stats
   top` must list names with **no `@`** and ping nobody; `/duel
   @not_a_member` must be refused; `/duel @member` works.
-- **YouTube-si= delete** - owner reported "reposts but doesn't delete
-  the original"; most likely the bot lacks the **Delete Messages**
-  admin right in that chat (code reposts-then-deletes and degrades by
-  design). Verify the right before touching code.
-- **BYDLOKOD backfill** still pending (memory `bydlokod-import-
-  workflow`): bot not yet in that chat; add-as-admin -> DM `/import`.
+- **YouTube-si= sanitizer doesn't fire** - ROOT CAUSE FOUND
+  (2026-05-16, corrects an earlier wrong "missing Delete-right"
+  guess): it IS implemented (`youtube_sanitizer.go:443-456`,
+  repost-then-delete, registered `routes.go:73`) but the bot runs
+  **privacy ON**, so plain messages (a bare YouTube link) never reach
+  it - 0 sanitizer activity in 12h on a 200-person chat confirms.
+  Fundamental tension: the sanitizer needs privacy OFF; the
+  cleanup/import model wants privacy ON; Telegram privacy is
+  all-or-nothing. To enable: @BotFather `/setprivacy` -> Disable, then
+  **remove + re-add the bot** (Telegram re-evaluates privacy only on
+  re-join); cost = all message content then transits the bot. Owner's
+  operating-model decision; do NOT treat as a code bug.
+- **BYDLOKOD backfill: DONE** (owner-confirmed 2026-05-16; bot is in
+  the chat, history imported; re-import is idempotent if topping up).
 - Optional: more game-content volume in the safe pools; rotate creds;
   ask GitHub Support to expire cached pre-scrub commits.
 
