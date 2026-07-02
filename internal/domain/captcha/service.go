@@ -35,12 +35,12 @@ func NewService(store Store, api shared.TelegramAPI, log *slog.Logger, timeout t
 // sweep interval so the gap between expiry and kick stays small.
 func (s *Service) Timeout() time.Duration { return s.timeout }
 
-// OnJoin handles a newcomer: drops any stale challenge for the same user
-// (rejoin edge case), generates a fresh puzzle, posts it with answer
-// buttons, persists it (so the callback can resolve it), then mutes the
-// newcomer for the timeout window. The mute is defense-in-depth: if the
-// bot lacks CanRestrict it is logged and skipped, and the captcha+kick
-// still work via the buttons.
+// OnJoin handles a new chat member. It clears any prior challenge first
+// (rejoin edge case), generates a fresh puzzle, mutes the newcomer, then
+// posts the captcha with answer buttons and persists it (so the callback
+// can resolve it). The mute is defense-in-depth: if the bot lacks
+// CanRestrict it is logged and skipped, and the captcha+kick still work
+// via the buttons.
 func (s *Service) OnJoin(ctx context.Context, user telego.User, signedChatID, absChatID int64, now time.Time) error {
 	// Rejoin guard: a user kicked mid-captcha who rejoins gets a fresh
 	// challenge. The old one MUST be deleted or the sweeper would later
@@ -58,6 +58,11 @@ func (s *Service) OnJoin(ctx context.Context, user telego.User, signedChatID, ab
 	c := Generate(user.ID, absChatID, now, s.timeout)
 	c.Username = user.Username
 	c.FirstName = user.FirstName
+
+	// Mute BEFORE posting the captcha so there is no window where the
+	// newcomer can send messages. Best-effort: a failure (bot demoted
+	// mid-operation) is logged at WARN; captcha + kick still work.
+	s.mute(ctx, absChatID, user.ID, now)
 
 	mention := renderMention(user.Username, user.FirstName, user.ID)
 	body := fmt.Sprintf("%s\n\n<b>%s = ?</b>\n\n%s",
@@ -86,9 +91,6 @@ func (s *Service) OnJoin(ctx context.Context, user telego.User, signedChatID, ab
 		return fmt.Errorf("persist challenge: %w", err)
 	}
 
-	// Mute (best-effort). Failures are expected only if the bot was
-	// demoted mid-operation; captcha + kick remain functional.
-	s.mute(ctx, absChatID, user.ID, now)
 	return nil
 }
 

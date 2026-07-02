@@ -128,6 +128,23 @@ func TestOnJoinPostsCaptchaAndMutes(t *testing.T) {
 		t.Fatal("expected a RestrictChatMember (mute) call")
 	}
 
+	// Mute MUST precede SendMessage (no spam window).
+	var sawMute, sawMessage bool
+	for _, c := range api.Calls {
+		switch c.Method {
+		case "RestrictChatMember":
+			sawMute = true
+		case "SendMessage":
+			if !sawMute {
+				t.Fatal("RestrictChatMember (mute) must precede SendMessage")
+			}
+			sawMessage = true
+		}
+	}
+	if !sawMessage {
+		t.Fatal("SendMessage not found in API calls")
+	}
+
 	// The challenge is persisted with the posted message id.
 	if n := countStore(store); n != 1 {
 		t.Fatalf("expected 1 stored challenge, got %d", n)

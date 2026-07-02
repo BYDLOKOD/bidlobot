@@ -257,7 +257,7 @@ func main() {
 	// ban+unban sequence, so it has no dependency on cleanupSvc.
 	if cfg.CaptchaEnabled {
 		captchaRepo := storage.NewCaptchaRepo(db)
-		captchaSvc := captcha.NewService(captchaRepo, tgClient, log, cfg.CaptchaTimeout)
+		captchaSvc := captcha.NewService(captchaRepo, tgClient.Bot(), log, cfg.CaptchaTimeout)
 		app.AttachCaptcha(captchaSvc)
 		log.Info("captcha enabled", "timeout", cfg.CaptchaTimeoutRaw)
 	}

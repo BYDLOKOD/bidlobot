@@ -60,7 +60,7 @@ func loadConfig() Config {
 
 	grace, _ := cleanup.ParsePeriod(graceRaw)
 
-	captchaTimeoutRaw := envOr("CAPTCHA_TIMEOUT", "10m")
+	captchaTimeoutRaw := envOr("CAPTCHA_TIMEOUT", "1m")
 	captchaTimeout, _ := time.ParseDuration(captchaTimeoutRaw)
 
 	return Config{
