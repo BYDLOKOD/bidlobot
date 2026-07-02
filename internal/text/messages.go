@@ -44,7 +44,7 @@ const (
 	// mention (@username or a tg://user link); messages carrying it are
 	// sent with ParseMode HTML.
 	MsgCaptchaGreeting = "Добро пожаловать, %s! Решите капчу, чтобы остаться в чате:"
-	MsgCaptchaWrong    = "Неправильно, попробуйте ещё раз."
+	MsgCaptchaWrong    = "Неправильный ответ."
 	MsgCaptchaNotYours = "Эта капча не для вас."
 	MsgCaptchaExpired  = "Капча просрочена или не найдена."
 	MsgCaptchaSolved   = "Добро пожаловать, %s!"

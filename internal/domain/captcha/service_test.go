@@ -198,7 +198,7 @@ func TestOnAnswerCorrectClearsAndUnmutes(t *testing.T) {
 	}
 }
 
-func TestOnAnswerWrongKeepsChallenge(t *testing.T) {
+func TestOnAnswerWrongKicksAndDeletes(t *testing.T) {
 	t.Parallel()
 	svc, store, api := newTestService(t)
 	now := time.Now().UTC()
@@ -209,22 +209,28 @@ func TestOnAnswerWrongKeepsChallenge(t *testing.T) {
 	}
 	ch, _ := store.GetByUser(context.Background(), 200, 100)
 
-	// Pick a wrong answer (one that differs from the correct sum).
-	wrong := ch.CorrectAnswer + 100 // far from any distractor, guaranteed wrong
+	wrong := ch.CorrectAnswer + 100 // guaranteed wrong
 	q := telego.CallbackQuery{ID: "q1", From: telego.User{ID: 100}}
 	if err := svc.OnAnswer(context.Background(), q, ch.ID, wrong); err != nil {
 		t.Fatalf("OnAnswer: %v", err)
 	}
 
-	// Challenge MUST survive a wrong answer.
-	if _, err := store.Get(context.Background(), ch.ID); err != nil {
-		t.Fatalf("challenge must survive a wrong answer, got err=%v", err)
+	// Challenge MUST be deleted after a wrong-answer kick.
+	if _, err := store.Get(context.Background(), ch.ID); err != ErrNotFound {
+		t.Fatalf("challenge must be deleted after wrong-answer kick, got err=%v", err)
 	}
-	// No edit on a wrong answer.
-	if api.CallCount("EditMessageText") != 0 {
-		t.Fatal("wrong answer must NOT edit the message")
+	// Kick: ban + unban.
+	if api.CallCount("BanChatMember") != 1 {
+		t.Fatalf("expected 1 BanChatMember (kick), got %d", api.CallCount("BanChatMember"))
 	}
-	// Toast carries the "wrong" hint.
+	if api.CallCount("UnbanChatMember") != 1 {
+		t.Fatalf("expected 1 UnbanChatMember (rejoinable), got %d", api.CallCount("UnbanChatMember"))
+	}
+	// Message edited to kicked.
+	if api.CallCount("EditMessageText") != 1 {
+		t.Fatalf("expected 1 EditMessageText (kicked notice), got %d", api.CallCount("EditMessageText"))
+	}
+	// Toast.
 	if api.CallCount("AnswerCallbackQuery") == 0 {
 		t.Fatal("expected an AnswerCallbackQuery (toast) on wrong answer")
 	}

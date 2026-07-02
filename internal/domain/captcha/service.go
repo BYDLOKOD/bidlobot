@@ -93,8 +93,8 @@ func (s *Service) OnJoin(ctx context.Context, user telego.User, signedChatID, ab
 }
 
 // OnAnswer resolves a button tap. It answers the callback in EVERY path so
-// the button spinner never hangs. Wrong answers keep the challenge alive
-// (the buttons stay); only the correct answer clears it and unmutes.
+// the button spinner never hangs. Wrong answer: toast + kick (rejoinable).
+// Correct answer: clear + welcome + unmute.
 func (s *Service) OnAnswer(ctx context.Context, query telego.CallbackQuery, challengeID string, answer int) error {
 	c, err := s.store.Get(ctx, challengeID)
 	if err != nil {
@@ -109,8 +109,17 @@ func (s *Service) OnAnswer(ctx context.Context, query telego.CallbackQuery, chal
 		return nil
 	}
 	if answer != c.CorrectAnswer {
-		// Wrong: keep the challenge and the buttons so the user retries.
+		// Wrong answer: toast, then kick (rejoinable). Same kick sequence
+		// as the timeout sweeper but driven by the callback, not a tick.
 		s.answer(ctx, query.ID, text.MsgCaptchaWrong)
+		if kerr := s.kick(ctx, *c); kerr != nil {
+			s.log.Warn("captcha: wrong-answer kick failed", "challenge", c.ID, "error", kerr)
+			return nil // leave challenge for sweeper retry
+		}
+		s.editResolved(ctx, *c, text.MsgCaptchaKicked)
+		if derr := s.store.Delete(ctx, c.ID); derr != nil {
+			s.log.Warn("captcha: delete after wrong-answer kick failed", "challenge", c.ID, "error", derr)
+		}
 		return nil
 	}
 
