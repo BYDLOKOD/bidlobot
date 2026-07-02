@@ -41,6 +41,14 @@ type Config struct {
 	GLMAPIKey  string
 	GLMBaseURL string
 	GLMModel   string
+
+	// Captcha for new chat members (opt-in). When CaptchaEnabled is false
+	// (the default) the bot runs exactly as before - no join messages, no
+	// buttons, no sweep. CaptchaTimeoutRaw is kept beside the parsed
+	// CaptchaTimeout so --check-config can report a bad value precisely.
+	CaptchaEnabled    bool
+	CaptchaTimeoutRaw string
+	CaptchaTimeout    time.Duration
 }
 
 // loadConfig reads Config from environment without performing validation.
@@ -51,6 +59,9 @@ func loadConfig() Config {
 	graceRaw := envOr("CLEANUP_GRACE", "72h")
 
 	grace, _ := cleanup.ParsePeriod(graceRaw)
+
+	captchaTimeoutRaw := envOr("CAPTCHA_TIMEOUT", "10m")
+	captchaTimeout, _ := time.ParseDuration(captchaTimeoutRaw)
 
 	return Config{
 		Token:      os.Getenv("TG_BOT_TOKEN"),
@@ -67,6 +78,10 @@ func loadConfig() Config {
 		GLMAPIKey:  strings.TrimSpace(os.Getenv("GLM_API_KEY")),
 		GLMBaseURL: strings.TrimSpace(os.Getenv("GLM_BASE_URL")),
 		GLMModel:   strings.TrimSpace(os.Getenv("GLM_MODEL")),
+
+		CaptchaEnabled:    envBool("CAPTCHA_ENABLED", false),
+		CaptchaTimeoutRaw: captchaTimeoutRaw,
+		CaptchaTimeout:    captchaTimeout,
 	}
 }
 
@@ -181,6 +196,17 @@ func (c Config) Validate() error {
 	}
 	if c.CleanupDailyBatch != 0 && (c.CleanupDailyBatch < 1 || c.CleanupDailyBatch > 50) {
 		errs = append(errs, fmt.Errorf("CLEANUP_DAILY_BATCH: must be 1..50, got %d", c.CleanupDailyBatch))
+	}
+	if c.CaptchaEnabled {
+		// CaptchaTimeout is parsed in loadConfig; a zero value means the
+		// raw string did not parse. Range 1m..30m: below 1m a human
+		// can't answer, above 30m the mute window is needlessly long.
+		switch {
+		case c.CaptchaTimeout <= 0:
+			errs = append(errs, fmt.Errorf("CAPTCHA_TIMEOUT: invalid duration %q", c.CaptchaTimeoutRaw))
+		case c.CaptchaTimeout < time.Minute || c.CaptchaTimeout > 30*time.Minute:
+			errs = append(errs, fmt.Errorf("CAPTCHA_TIMEOUT: must be 1m..30m, got %q", c.CaptchaTimeoutRaw))
+		}
 	}
 
 	if len(errs) == 0 {

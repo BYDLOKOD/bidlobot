@@ -16,6 +16,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
+	"github.com/veschin/bidlobot/internal/domain/captcha"
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
@@ -249,6 +250,17 @@ func main() {
 	log.Info("inactive-cleanup campaign wired (command-driven)",
 		"daily_at_utc", cfg.CleanupDailyAtRaw,
 		"grace", cfg.CleanupGraceRaw, "batch", cfg.CleanupDailyBatch)
+
+	// New-member captcha (opt-in via CAPTCHA_ENABLED). When off, the bot
+	// is unchanged. The service reuses tgClient (rate-limited + retried)
+	// for every send/edit/restrict/kick; the kick is a self-contained
+	// ban+unban sequence, so it has no dependency on cleanupSvc.
+	if cfg.CaptchaEnabled {
+		captchaRepo := storage.NewCaptchaRepo(db)
+		captchaSvc := captcha.NewService(captchaRepo, tgClient, log, cfg.CaptchaTimeout)
+		app.AttachCaptcha(captchaSvc)
+		log.Info("captcha enabled", "timeout", cfg.CaptchaTimeoutRaw)
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

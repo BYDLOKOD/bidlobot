@@ -35,10 +35,9 @@ const (
 
 // summarizeSender is the narrow Telegram surface the feature needs:
 // SendMessage for the placeholder and EditMessageText to swap in the
-// result. shared.TelegramAPI deliberately omits EditMessageText, so -
-// exactly like the cleanup executor - we take the concrete rate-limited
-// *tgclient.Client (which satisfies this) rather than widening the
-// shared interface for one consumer.
+// result. shared.TelegramAPI now covers both (EditMessageText was added
+// for the captcha domain), but the narrow interface is retained so tests
+// inject a fake without stubbing the full API surface.
 type summarizeSender interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)

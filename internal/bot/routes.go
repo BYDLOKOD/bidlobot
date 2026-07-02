@@ -33,6 +33,23 @@ func reactionFanout(a *App, log *slog.Logger) th.MessageReactionHandler {
 	}
 }
 
+// chatMemberFanout returns the single chat_member handler that runs both
+// membership tracking (always) and the new-member captcha (when wired).
+// Telego routes chat_member to the first matching handler only, so - like
+// reactionFanout - both observers must share one entry point. The captcha
+// handler is nil-tolerant: when the feature is off it is a pure
+// pass-through to membership.
+func chatMemberFanout(a *App, log *slog.Logger) th.ChatMemberUpdatedHandler {
+	membership := membershipChatMemberHandler(a.memberSvc, a.adminCache, log)
+	captcha := captchaChatMemberHandler(a.captchaSvc, log)
+	return func(ctx *th.Context, cmu telego.ChatMemberUpdated) error {
+		if err := membership(ctx, cmu); err != nil {
+			log.Warn("membership chat-member handler failed", "error", err)
+		}
+		return captcha(ctx, cmu)
+	}
+}
+
 func registerRoutes(
 	bh *th.BotHandler,
 	a *App,
@@ -101,15 +118,20 @@ func registerRoutes(
 
 	bh.HandleMessageReaction(reactionFanout(a, a.log), th.AnyMessageReaction())
 	bh.HandleMyChatMemberUpdated(membershipMyChatMemberHandler(a.memberSvc, a, a.log))
-	bh.HandleChatMemberUpdated(membershipChatMemberHandler(a.memberSvc, a.adminCache, a.log))
+	bh.HandleChatMemberUpdated(chatMemberFanout(a, a.log))
 
 	if a.inlineSvc != nil {
 		bh.HandleInlineQuery(a.inlineSvc.Handler())
 	}
 
-	// DM-console callbacks (namespace "dm:"). The public dispatcher
-	// ("v1:") is still wired for any non-moderation callback infra, but
-	// no surface now feeds it destructive pendings.
+	// Callback ordering matters: first match wins. The captcha predicate
+	// ("cap:") must precede the catch-all "v1:" dispatcher, or a new
+	// member's answer button would be swallowed by the "Кнопка устарела"
+	// fallback. DM-console callbacks ("dm:") are private-chat-scoped and
+	// never collide with either public namespace.
+	if a.captchaSvc != nil {
+		bh.HandleCallbackQuery(captchaCallbackHandler(a.captchaSvc, a.log), captchaCallbackPredicate())
+	}
 	if a.dmConsole != nil {
 		bh.HandleCallbackQuery(a.dmConsole.HandleCallback, dmCallbackPredicate())
 	}

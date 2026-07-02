@@ -31,6 +31,8 @@ var buckets = []string{
 	"stats_month_state",
 	"stats_month_summary",
 	"import_states",
+	"captcha",
+	"captcha_user_idx",
 	"gracekick",
 }
 

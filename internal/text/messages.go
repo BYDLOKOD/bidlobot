@@ -39,4 +39,14 @@ const (
 	ErrSummarizeTimeout       = "Не успел суммировать за отведённое время. Попробуйте меньшее N."
 	ErrSummarizeProvider      = "Временная ошибка суммаризации. Попробуйте позже."
 	ErrSummarizeGlobalLimit   = "Слишком много суммаризаций за последний час (по всем чатам). Попробуйте позже."
+
+	// New-member captcha. The %s in Greeting/Solved/Kicked is an HTML
+	// mention (@username or a tg://user link); messages carrying it are
+	// sent with ParseMode HTML.
+	MsgCaptchaGreeting = "Добро пожаловать, %s! Решите капчу, чтобы остаться в чате:"
+	MsgCaptchaWrong    = "Неправильно, попробуйте ещё раз."
+	MsgCaptchaNotYours = "Эта капча не для вас."
+	MsgCaptchaExpired  = "Капча просрочена или не найдена."
+	MsgCaptchaSolved   = "Добро пожаловать, %s!"
+	MsgCaptchaKicked   = "%s кикнут: не решил капчу."
 )

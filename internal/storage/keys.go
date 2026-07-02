@@ -112,6 +112,18 @@ func GraceKickChatPrefix(absChatID int64) []byte {
 	return []byte(fmt.Sprintf("gk:%020d:", absChatID))
 }
 
+// CaptchaKey is one open captcha challenge, keyed by its 16-hex id.
+func CaptchaKey(challengeID string) []byte {
+	return []byte(fmt.Sprintf("cc:%s", challengeID))
+}
+
+// CaptchaUserIndex lets GetByUser find the open challenge for (chat, user)
+// in one read - the value is the challenge id. Used by OnJoin to drop a
+// stale challenge when a user rejoins before the timeout fires.
+func CaptchaUserIndex(absChatID, userID int64) []byte {
+	return []byte(fmt.Sprintf("ccu:%020d:%020d", absChatID, userID))
+}
+
 func AbsChatID(chatID int64) int64 {
 	if chatID < 0 {
 		return -chatID

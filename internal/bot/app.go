@@ -11,6 +11,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/captcha"
 	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
@@ -42,10 +43,12 @@ type App struct {
 	cooldown    *cooldown
 
 	// summarize is the optional GLM chat-summarization feature. nil when
-	// GLM_API_KEY is unset: the bot then runs without it, the recorder
+	// GLMAPIKey is unset: the bot then runs without it, the recorder
 	// is not wired, and /summarize replies "not configured" to admins.
-	// summarizeSender is the concrete rate-limited client (it carries
-	// EditMessageText, which shared.TelegramAPI does not expose).
+	// summarizeSender is the narrow Telegram surface the feature needs
+	// (SendMessage + EditMessageText); shared.TelegramAPI now covers both,
+	// but the narrow interface is kept so tests inject a fake without
+	// stubbing the full API surface.
 	summarize       *summarize.Service
 	summarizeSender summarizeSender
 
@@ -72,6 +75,10 @@ type App struct {
 	// fires.
 	dailyCleanup  *gracekick.Service
 	dailyAtMinUTC int
+
+	// captchaSvc is the opt-in new-member captcha. nil (default) means
+	// the feature is off: no join messages, no buttons, no sweep.
+	captchaSvc *captcha.Service
 }
 
 // InFlight exposes the WaitGroup for executors that need to register
@@ -239,6 +246,23 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 			a.runDailyCleanup(ctx)
 		}()
 	}
+	if a.captchaSvc != nil {
+		// Sized from the timeout so the expiry->kick gap stays small.
+		// Tracked in inFlight: the tick kicks + writes bbolt, so Stop
+		// must wait for it before the DB closes.
+		interval := a.captchaSvc.Timeout() / 3
+		if interval > 30*time.Second {
+			interval = 30 * time.Second
+		}
+		if interval < 5*time.Second {
+			interval = 5 * time.Second
+		}
+		a.inFlight.Add(1)
+		go func() {
+			defer a.inFlight.Done()
+			a.runCaptchaSweep(ctx, interval)
+		}()
+	}
 
 	if a.healthServer != nil {
 		a.healthServer.Start()
@@ -299,6 +323,33 @@ func (a *App) AttachDailyCleanup(svc *gracekick.Service, atMinUTC int) {
 		atMinUTC = 600
 	}
 	a.dailyAtMinUTC = atMinUTC
+}
+
+// AttachCaptcha enables the opt-in new-member captcha. Call before Run so
+// registerRoutes wires the join fanout and the callback predicate. A nil
+// svc leaves the feature off.
+func (a *App) AttachCaptcha(svc *captcha.Service) {
+	a.captchaSvc = svc
+}
+
+// runCaptchaSweep ticks every interval and kicks every user whose captcha
+// expired unanswered. The interval is sized from the configured timeout
+// (min 30s, capped at timeout/3) so the gap between expiry and kick stays
+// small relative to the answer window. Tracked in inFlight so Stop waits
+// for an in-flight tick before the DB closes.
+func (a *App) runCaptchaSweep(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if err := a.captchaSvc.Sweep(ctx, time.Now().UTC()); err != nil {
+				a.log.Warn("captcha sweep failed", "error", err)
+			}
+		}
+	}
 }
 
 // runDailyCleanup fires once per day at dailyAtMinUTC. Each tick walks
