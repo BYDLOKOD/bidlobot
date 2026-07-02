@@ -19,3 +19,9 @@ type TelegramAPI interface {
 	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
 	GetMe(ctx context.Context) (*telego.User, error)
 }
+
+// DisplayResolver returns a chat-local display name for a user.
+// A nil resolver is tolerated - callers fall back to "User <id>".
+type DisplayResolver interface {
+	UserDisplay(ctx context.Context, absChatID, userID int64) string
+}

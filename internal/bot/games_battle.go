@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"time"
@@ -11,7 +12,6 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/games/battle"
-	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
@@ -102,7 +102,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 	h.registry.Add(b)
 
 	header := fmt.Sprintf("\U0001F94A <b>%s vs %s</b>\nГолосуйте реакциями за %s.\nКаждый участник учитывается один раз на сторону.",
-		shared.EscapeHTML(left), shared.EscapeHTML(right), formatBattleWindow(h.duration))
+		html.EscapeString(left), html.EscapeString(right), formatBattleWindow(h.duration))
 	if _, sendErr := h.bot.SendMessage(bgCtx, &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: msg.Chat.ID},
 		Text:      header,
@@ -119,7 +119,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 
 	leftMsg, err := h.bot.SendMessage(bgCtx, &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: msg.Chat.ID},
-		Text:      fmt.Sprintf("За <b>%s</b> - реакция на это сообщение.", shared.EscapeHTML(left)),
+		Text:      fmt.Sprintf("За <b>%s</b> - реакция на это сообщение.", html.EscapeString(left)),
 		ParseMode: telego.ModeHTML,
 	})
 	if err != nil {
@@ -131,7 +131,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 
 	rightMsg, err := h.bot.SendMessage(bgCtx, &telego.SendMessageParams{
 		ChatID:    telego.ChatID{ID: msg.Chat.ID},
-		Text:      fmt.Sprintf("За <b>%s</b> - реакция на это сообщение.", shared.EscapeHTML(right)),
+		Text:      fmt.Sprintf("За <b>%s</b> - реакция на это сообщение.", html.EscapeString(right)),
 		ParseMode: telego.ModeHTML,
 	})
 	if err != nil {
@@ -215,8 +215,8 @@ func renderBattleResult(r *battle.Result, leftRaw, rightRaw string) string {
 	if right == "" {
 		right = rightRaw
 	}
-	left = shared.EscapeHTML(left)
-	right = shared.EscapeHTML(right)
+	left = html.EscapeString(left)
+	right = html.EscapeString(right)
 
 	switch {
 	case r.NoVotes:

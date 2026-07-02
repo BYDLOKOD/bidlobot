@@ -9,24 +9,17 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
-// DisplayResolver returns a chat-local display name for a user (e.g.
-// "@alice" or "Alice"). The Service uses it to print real names in
-// /stats output instead of bare user IDs. A nil resolver is tolerated
-// - output then falls back to "User <id>".
-type DisplayResolver interface {
-	UserDisplay(ctx context.Context, absChatID, userID int64) string
-}
 
 type Service struct {
 	buffer  *Buffer
 	store   Store
-	display DisplayResolver
+	display shared.DisplayResolver
 	log     *slog.Logger
 }
 
 // NewService создаёт сервис статистики с буфером и хранилищем.
 // display может быть nil - тогда имена пользователей не подставляются.
-func NewService(store Store, buffer *Buffer, display DisplayResolver, log *slog.Logger) *Service {
+func NewService(store Store, buffer *Buffer, display shared.DisplayResolver, log *slog.Logger) *Service {
 	return &Service{
 		buffer:  buffer,
 		store:   store,

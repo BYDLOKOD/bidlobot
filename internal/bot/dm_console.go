@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -22,7 +23,6 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/pending"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/histimport"
-	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
@@ -249,7 +249,7 @@ func (d *DMConsole) handleStart(ctx context.Context, caller int64) error {
 			d.send(ctx, caller, msgDMError, nil)
 			return nil
 		}
-		d.send(ctx, caller, fmt.Sprintf(msgDMReady, shared.EscapeHTML(managed[0].Title))+dmHelpBody, nil)
+		d.send(ctx, caller, fmt.Sprintf(msgDMReady, html.EscapeString(managed[0].Title))+dmHelpBody, nil)
 		return nil
 	default:
 		return d.showChatPickerList(ctx, caller, managed)
@@ -311,17 +311,27 @@ func (d *DMConsole) resolveTarget(ctx context.Context, absChatID int64, arg stri
 		if err != nil || m == nil || m.UserID == 0 {
 			return 0, "", false, false
 		}
-		return m.UserID, shared.UserDisplay(m.Username, m.FirstName), m.IsBot, true
+		return m.UserID, memberDisplay(m.Username, m.FirstName), m.IsBot, true
 	}
 	if uid, err := strconv.ParseInt(arg, 10, 64); err == nil && uid > 0 {
 		display = arg
 		if m, merr := d.members.GetMember(ctx, uid, absChatID); merr == nil && m != nil {
-			display = shared.UserDisplay(m.Username, m.FirstName)
+			display = memberDisplay(m.Username, m.FirstName)
 			isBot = m.IsBot
 		}
 		return uid, display, isBot, true
 	}
 	return 0, "", false, false
+}
+
+// memberDisplay returns a raw (non-HTML-escaped) display name: first name
+// if non-empty, otherwise username. Callers must escape before embedding
+// in HTML-parsed Telegram messages.
+func memberDisplay(username, firstName string) string {
+	if firstName != "" {
+		return firstName
+	}
+	return username
 }
 
 func (d *DMConsole) handleStats(ctx context.Context, caller int64, args []string) error {
@@ -385,7 +395,7 @@ func (d *DMConsole) handleWarns(ctx context.Context, caller int64, args []string
 			d.send(ctx, caller, msgDMError, nil)
 			return nil
 		}
-		d.send(ctx, caller, fmt.Sprintf(msgDMWarnsCleared, shared.EscapeHTML(disp)), nil)
+		d.send(ctx, caller, fmt.Sprintf(msgDMWarnsCleared, html.EscapeString(disp)), nil)
 		return nil
 	}
 	if len(args) == 0 {
@@ -438,9 +448,9 @@ func (d *DMConsole) handleModeration(ctx context.Context, caller int64, cmd stri
 			d.send(ctx, caller, msgDMError, nil)
 			return nil
 		}
-		out := fmt.Sprintf(msgDMWarned, shared.EscapeHTML(disp), count)
+		out := fmt.Sprintf(msgDMWarned, html.EscapeString(disp), count)
 		if rest != "" {
-			out += "\n" + fmt.Sprintf(msgDMReasonLine, shared.EscapeHTML(rest))
+			out += "\n" + fmt.Sprintf(msgDMReasonLine, html.EscapeString(rest))
 		}
 		if count >= 3 {
 			if err := d.mod.AutoMute(ctx, signed, uid); err != nil {
@@ -469,21 +479,21 @@ func (d *DMConsole) handleModeration(ctx context.Context, caller int64, cmd stri
 			d.send(ctx, caller, msgDMPermOrTransient, nil)
 			return nil
 		}
-		d.send(ctx, caller, fmt.Sprintf(msgDMMuted, shared.EscapeHTML(disp), dur.String()), nil)
+		d.send(ctx, caller, fmt.Sprintf(msgDMMuted, html.EscapeString(disp), dur.String()), nil)
 		return nil
 	case "unmute":
 		if err := d.mod.Unmute(ctx, signed, uid); err != nil {
 			d.send(ctx, caller, msgDMError, nil)
 			return nil
 		}
-		d.send(ctx, caller, fmt.Sprintf(msgDMUnmuted, shared.EscapeHTML(disp)), nil)
+		d.send(ctx, caller, fmt.Sprintf(msgDMUnmuted, html.EscapeString(disp)), nil)
 		return nil
 	case "unban":
 		if err := d.mod.Unban(ctx, signed, uid); err != nil {
 			d.send(ctx, caller, escErr(err), nil)
 			return nil
 		}
-		d.send(ctx, caller, fmt.Sprintf(msgDMUnbanned, shared.EscapeHTML(disp)), nil)
+		d.send(ctx, caller, fmt.Sprintf(msgDMUnbanned, html.EscapeString(disp)), nil)
 		return nil
 	case "ban":
 		if err := d.mod.ValidateTarget(ctx, abs, caller, uid, isBot, "ban"); err != nil {
@@ -521,9 +531,9 @@ func (d *DMConsole) confirmBan(ctx context.Context, caller, abs, target int64, d
 		d.send(ctx, caller, msgDMError, nil)
 		return nil
 	}
-	body := fmt.Sprintf(msgDMConfirmBan, shared.EscapeHTML(disp))
+	body := fmt.Sprintf(msgDMConfirmBan, html.EscapeString(disp))
 	if reason != "" {
-		body += "\n" + fmt.Sprintf(msgDMReasonLine, shared.EscapeHTML(reason))
+		body += "\n" + fmt.Sprintf(msgDMReasonLine, html.EscapeString(reason))
 	}
 	d.send(ctx, caller, body, dmConfirmKeyboard(id))
 	return nil
@@ -536,7 +546,7 @@ func dmConfirmKeyboard(id string) *telego.InlineKeyboardMarkup {
 	}}}
 }
 
-func escErr(err error) string { return shared.EscapeHTML(err.Error()) }
+func escErr(err error) string { return html.EscapeString(err.Error()) }
 
 // parseModDuration accepts 30m,1h,12h and Nd (days). Mirrors the public
 // handler's accepted range so behavior is identical across surfaces.

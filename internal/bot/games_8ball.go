@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"html"
 	"log/slog"
 	"math/rand"
 	"strings"
@@ -9,8 +10,6 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-
-	"github.com/veschin/bidlobot/internal/shared"
 )
 
 // eightBallSender is the narrow telego surface the /8ball handler needs.
@@ -138,7 +137,7 @@ func (h *EightBallHandler) HandleEightBall(_ *th.Context, msg telego.Message) er
 	}
 	answer := eightBallAnswers[r.Intn(len(eightBallAnswers))]
 
-	body := "\U0001F3B1 " + shared.EscapeHTML(answer)
+	body := "\U0001F3B1 " + html.EscapeString(answer)
 	return h.reply(msg, body)
 }
 

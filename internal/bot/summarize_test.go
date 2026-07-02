@@ -4,9 +4,9 @@ import "testing"
 
 func TestParseSummarizeArgs(t *testing.T) {
 	tests := []struct {
-		input     string
-		wantN     int
-		wantQ     string
+		input string
+		wantN int
+		wantQ string
 	}{
 		{"/summarize", summarizeDefaultN, ""},
 		{"/summarize 500", 500, ""},

@@ -1,6 +1,7 @@
 package histimport
 
 import (
+	"html"
 	"fmt"
 	"sort"
 	"strings"
@@ -106,7 +107,7 @@ func FormatDMReport(res *Result) string {
 			name = fmt.Sprintf("user %d", a.UserID)
 		}
 		fmt.Fprintf(&b, "%d. %s - %s\n", i+1,
-			shared.EscapeHTML(name), shared.FormatNumber(a.Count))
+			html.EscapeString(name), shared.FormatNumber(a.Count))
 	}
 
 	if res.MonthlyAccepted > 0 || res.MonthlyDeduped > 0 || res.MonthlySkippedLive > 0 {

@@ -1,6 +1,7 @@
 package moderation
 
 import (
+	"html"
 	"context"
 	"fmt"
 	"log/slog"
@@ -94,7 +95,7 @@ func (s *Service) ListWarnings(ctx context.Context, targetUserID, absChatID int6
 		if reason == "" {
 			reason = "(без причины)"
 		}
-		result += fmt.Sprintf("%d. %s - выдал %s, %s\n", i+1, shared.EscapeHTML(reason), issuerDisplay, dateStr)
+		result += fmt.Sprintf("%d. %s - выдал %s, %s\n", i+1, html.EscapeString(reason), issuerDisplay, dateStr)
 	}
 
 	return result, nil

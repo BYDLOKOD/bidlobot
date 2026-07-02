@@ -1,6 +1,7 @@
 package monthstats
 
 import (
+	"html"
 	"context"
 	"fmt"
 	"log/slog"
@@ -11,12 +12,6 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
-// DisplayResolver returns a chat-local display name (e.g. "@alice" or
-// "Alice") for a user. A nil resolver falls back to "User <id>". Same
-// shape as stats.DisplayResolver; an adapter is wired in cmd/bidlobot.
-type DisplayResolver interface {
-	UserDisplay(ctx context.Context, absChatID, userID int64) string
-}
 
 // Service renders the legacy chat-export.org monthly nominations and owns
 // the seal/memoization lifecycle: a past (immutable) month is rendered
@@ -27,12 +22,12 @@ type DisplayResolver interface {
 type Service struct {
 	store   Store
 	buffer  *Buffer
-	display DisplayResolver
+	display shared.DisplayResolver
 	log     *slog.Logger
 	now     func() time.Time // injectable clock for deterministic seal tests
 }
 
-func NewService(store Store, buffer *Buffer, display DisplayResolver, log *slog.Logger) *Service {
+func NewService(store Store, buffer *Buffer, display shared.DisplayResolver, log *slog.Logger) *Service {
 	return &Service{
 		store:   store,
 		buffer:  buffer,
@@ -232,7 +227,7 @@ func (s *Service) render(ctx context.Context, abs int64, month string, meta *Mon
 
 	if meta.LongestRunes > 0 {
 		name := s.displayFor(ctx, abs, meta.LongestUserID) // already HTML-safe
-		ex := shared.EscapeHTML(meta.LongestExcerpt)
+		ex := html.EscapeString(meta.LongestExcerpt)
 		cut := ""
 		if !meta.LongestFull {
 			cut = " <i>(обрезано)</i>"

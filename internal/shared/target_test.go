@@ -63,8 +63,8 @@ func TestResolveTargetNoTarget(t *testing.T) {
 	}
 
 	_, _, err := ResolveTarget(msg)
-	if err != ErrNoTarget {
-		t.Fatalf("expected ErrNoTarget, got %v", err)
+	if err != errNoTarget {
+		t.Fatalf("expected errNoTarget, got %v", err)
 	}
 }
 

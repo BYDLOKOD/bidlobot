@@ -2,15 +2,48 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mymmrac/telego"
 
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/storage"
 	"github.com/veschin/bidlobot/internal/testutil"
 )
+
+// RecordedUpdate is one entry in a JSONL recording captured by the
+// RECORD_UPDATES facility (cmd/replay). Each line is a standalone
+// JSON object with a timestamp, an update_id, and the raw Update.
+type RecordedUpdate struct {
+	Timestamp string        `json:"ts"`
+	UpdateID  int           `json:"update_id"`
+	Raw       telego.Update `json:"update"`
+}
+
+// LoadRecording reads a JSONL recording file and returns all entries.
+func LoadRecording(path string) ([]RecordedUpdate, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var updates []RecordedUpdate
+	dec := json.NewDecoder(f)
+	for dec.More() {
+		var u RecordedUpdate
+		if err := dec.Decode(&u); err != nil {
+			return updates, err
+		}
+		updates = append(updates, u)
+	}
+	return updates, nil
+}
 
 // replayThroughDomain dispatches a recorded JSONL session through the
 // same domain calls that the production middleware/handlers make. It
@@ -30,7 +63,7 @@ func replayThroughDomain(t *testing.T, jsonlPath string) (*storage.MembershipRep
 	memberRepo := storage.NewMembershipRepo(store.DB())
 	memberSvc := membership.NewService(memberRepo, testLogger())
 
-	updates, err := testutil.LoadRecording(jsonlPath)
+	updates, err := LoadRecording(jsonlPath)
 	if err != nil {
 		t.Fatalf("LoadRecording(%s): %v", jsonlPath, err)
 	}

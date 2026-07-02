@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"os"
@@ -590,7 +591,7 @@ func renderImportConfirm(title string, st *histimport.Stats) string {
 	}
 	top := topThree(st)
 	return fmt.Sprintf(msgImportConfirm,
-		shared.EscapeHTML(title),
+		html.EscapeString(title),
 		shared.FormatNumber(st.TotalMessages),
 		len(st.Users),
 		period,
@@ -635,7 +636,7 @@ func topThree(st *histimport.Stats) string {
 	}
 	for i := 0; i < n; i++ {
 		fmt.Fprintf(&b, "\n%d. %s - %s", i+1,
-			shared.EscapeHTML(all[i].name), shared.FormatNumber(all[i].count))
+			html.EscapeString(all[i].name), shared.FormatNumber(all[i].count))
 	}
 	return b.String()
 }

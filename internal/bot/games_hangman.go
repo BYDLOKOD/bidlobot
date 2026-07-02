@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"time"
@@ -75,11 +76,11 @@ func (h *HangmanHandler) HandleHangman(_ *th.Context, msg telego.Message) error 
 	case hangman.GuessWon:
 		return h.reply(msg, fmt.Sprintf(
 			"🎉 %s отгадал слово: <b>%s</b>!\nНовая игра: /hangman",
-			display, shared.EscapeHTML(out.Word)))
+			display, html.EscapeString(out.Word)))
 	case hangman.GuessLost:
 		return h.reply(msg, fmt.Sprintf(
 			"💀 Виселица. Слово было: <b>%s</b>.\nНовая игра: /hangman",
-			shared.EscapeHTML(out.Word)))
+			html.EscapeString(out.Word)))
 	case hangman.GuessHit:
 		return h.reply(msg, renderHangmanBoard("✅ Есть буква!", out.Masked, out.UsedLetters, out.WrongLeft))
 	default: // GuessMiss
@@ -140,8 +141,8 @@ func renderHangmanBoard(headline, masked string, used []string, wrongLeft int) s
 	return fmt.Sprintf(
 		"🪢 <b>Виселица</b>\n%s\n\n<code>%s</code>\n\nБуквы: %s\nОшибок осталось: %d/%d",
 		headline,
-		shared.EscapeHTML(spaced),
-		shared.EscapeHTML(usedLine),
+		html.EscapeString(spaced),
+		html.EscapeString(usedLine),
 		wrongLeft, hangman.MaxWrong,
 	)
 }

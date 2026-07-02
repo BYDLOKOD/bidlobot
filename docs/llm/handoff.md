@@ -110,6 +110,30 @@ re-verify clean.
   operating-model decision; do NOT treat as a code bug.
 - **BYDLOKOD backfill: DONE** (owner-confirmed 2026-05-16; bot is in
   the chat, history imported; re-import is idempotent if topping up).
+- **TikTok video repost (wishlist, owner ask 2026-05-26, NOT
+  implemented).** On a supergroup message carrying a TikTok video
+  link, the bot should fetch the video without watermark, repost
+  attributed to the original sender (display name inert per
+  `command-output-no-third-party-ping` - no `@`, no
+  `tg://user?id=`), then delete the original. Same shape as the
+  YouTube `si=` sanitizer
+  ([55_youtube_sanitizer.md](55_youtube_sanitizer.md),
+  `internal/bot/youtube_sanitizer.go`) - passive supergroup
+  middleware after the membership/stats observers,
+  repost-then-delete. **Same privacy gate** as the YT sanitizer
+  above: privacy ON -> a bare TikTok link never reaches the bot,
+  so shipping needs the identical `/setprivacy` Disable + bot
+  remove-and-re-add (one switch unblocks both features). Open
+  choices to settle with owner before coding: (a)
+  download-no-watermark via an external service (tikwm /
+  yt-dlp's TikTok extractor) vs. download + ffmpeg crop -
+  service-side is simpler but adds a network/legal dependency,
+  crop-side is self-contained but needs ffmpeg in the image and
+  risks clipping captions; (b) Telegram bot upload ceiling
+  (~50 MB) caps long/HD clips - decline-with-note, never silent
+  drop; (c) inherits the YT sanitizer's documented gaps
+  (`edited_message`, media-group siblings). No spec yet - write
+  `56_tiktok_repost.md` when picked up.
 - Optional: more game-content volume in the safe pools; rotate creds;
   ask GitHub Support to expire cached pre-scrub commits.
 

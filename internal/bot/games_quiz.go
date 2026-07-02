@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"math/rand"
 	"strconv"
@@ -248,7 +249,7 @@ func (h *QuizHandler) dispatchCallback(ctx context.Context, query telego.Callbac
 	body := fmt.Sprintf(
 		"%s\n\n✅ Первым угадал %s - это %s.",
 		renderQuizBody(snippet.Code),
-		shared.EscapeHTML(display),
+		display,
 		snippet.Answer.Title(),
 	)
 	return quizCallbackResponse{
@@ -260,7 +261,7 @@ func (h *QuizHandler) dispatchCallback(ctx context.Context, query telego.Callbac
 // renderQuizBody is the message body shown when the quiz is posted and
 // reused (with an appended winner line) when the quiz is solved.
 func renderQuizBody(code string) string {
-	return "\U0001F9E9 <b>Угадай язык по сниппету</b>\n<pre>" + shared.EscapeHTML(code) + "</pre>"
+	return "\U0001F9E9 <b>Угадай язык по сниппету</b>\n<pre>" + html.EscapeString(code) + "</pre>"
 }
 
 // renderQuizKeyboard builds the four-button inline keyboard. Buttons

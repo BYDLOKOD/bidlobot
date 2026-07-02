@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"math/rand"
 	"strconv"
@@ -309,14 +310,14 @@ func (h *TriviaHandler) dispatchCallback(ctx context.Context, query telego.Callb
 	body := fmt.Sprintf(
 		"%s\n\n✅ Первым ответил %s - правильно: %s.",
 		renderTriviaBody(tr.Question),
-		shared.EscapeHTML(display),
-		shared.EscapeHTML(correctAnswer),
+		display,
+		html.EscapeString(correctAnswer),
 	)
 	return triviaCallbackResponse{Toast: "Верно!", EditedText: body}
 }
 
 func renderTriviaBody(question string) string {
-	return "❓ <b>IT-викторина</b>\n\n" + shared.EscapeHTML(question)
+	return "❓ <b>IT-викторина</b>\n\n" + html.EscapeString(question)
 }
 
 // renderTriviaKeyboard builds the four-button keyboard. callback_data:

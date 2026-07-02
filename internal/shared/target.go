@@ -8,7 +8,7 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-var ErrNoTarget = errors.New("no target specified")
+var errNoTarget = errors.New("no target specified")
 
 type Target struct {
 	UserID      int64
@@ -24,13 +24,13 @@ func ResolveTarget(msg *telego.Message) (target Target, reason string, err error
 			Username:    from.Username,
 			DisplayName: displayName(from),
 		}
-		reason = extractReason(msg.Text)
+		reason = strings.Join(commandArgs(msg.Text), " ")
 		return
 	}
 
 	args := commandArgs(msg.Text)
 	if len(args) == 0 {
-		return target, "", ErrNoTarget
+		return target, "", errNoTarget
 	}
 
 	first := args[0]
@@ -41,7 +41,7 @@ func ResolveTarget(msg *telego.Message) (target Target, reason string, err error
 		target.UserID = uid
 		target.DisplayName = first
 	} else {
-		return target, "", ErrNoTarget
+		return target, "", errNoTarget
 	}
 
 	if len(args) > 1 {
@@ -58,13 +58,6 @@ func commandArgs(text string) []string {
 	return parts[1:]
 }
 
-func extractReason(text string) string {
-	parts := strings.Fields(text)
-	if len(parts) <= 1 {
-		return ""
-	}
-	return strings.Join(parts[1:], " ")
-}
 
 func displayName(u *telego.User) string {
 	if u.Username != "" {
@@ -73,6 +66,3 @@ func displayName(u *telego.User) string {
 	return u.FirstName
 }
 
-func DisplayNameOf(u *telego.User) string {
-	return displayName(u)
-}

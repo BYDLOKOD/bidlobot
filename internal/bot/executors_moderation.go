@@ -57,7 +57,7 @@ func (e *ModerationExecutor) resolveTarget(ctx context.Context, action *pending.
 	}
 	m, err := e.members.GetMemberByUsername(ctx, action.AbsChatID, username)
 	if err != nil {
-		return 0, false, false, fmt.Sprintf("Бот не знает @%s в этом чате. Пользователь должен хотя бы раз написать или отреагировать.", username)
+		return 0, false, false, fmt.Sprintf("Бот не знает пользователя %s в этом чате. Пользователь должен хотя бы раз написать или отреагировать.", username)
 	}
 	return m.UserID, m.IsBot, true, ""
 }

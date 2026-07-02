@@ -33,6 +33,7 @@ package bot
 
 import (
 	"context"
+	"html"
 	"log/slog"
 	"net/url"
 	"regexp"
@@ -472,7 +473,7 @@ func repost(
 ) error {
 	captionBody := header
 	if newCaption != "" {
-		captionBody += "\n" + shared.EscapeHTML(newCaption)
+		captionBody += "\n" + html.EscapeString(newCaption)
 	}
 
 	switch {
@@ -515,7 +516,7 @@ func repost(
 	default:
 		body := header
 		if newText != "" {
-			body += "\n" + shared.EscapeHTML(newText)
+			body += "\n" + html.EscapeString(newText)
 		}
 		_, err := snd.SendMessage(ctx, &telego.SendMessageParams{
 			ChatID:    telego.ChatID{ID: msg.Chat.ID},
@@ -539,7 +540,7 @@ func replyFallback(
 ) {
 	var b strings.Builder
 	if len(cleanedLinks) > 0 {
-		b.WriteString(shared.EscapeHTML(strings.Join(cleanedLinks, "\n")))
+		b.WriteString(html.EscapeString(strings.Join(cleanedLinks, "\n")))
 		b.WriteString("\n")
 	}
 	b.WriteString(msgYTFallbackNote)

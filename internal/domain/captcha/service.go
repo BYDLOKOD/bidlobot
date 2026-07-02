@@ -1,6 +1,7 @@
 package captcha
 
 import (
+	"html"
 	"context"
 	"errors"
 	"fmt"
@@ -293,7 +294,7 @@ func renderMention(username, firstName string, userID int64) string {
 	if r := []rune(name); len(r) > 32 {
 		name = string(r[:32])
 	}
-	return fmt.Sprintf(`<a href="tg://user?id=%d">%s</a>`, userID, shared.EscapeHTML(name))
+	return fmt.Sprintf(`<a href="tg://user?id=%d">%s</a>`, userID, html.EscapeString(name))
 }
 
 // sendPerms returns a ChatPermissions with every send capability set to v.

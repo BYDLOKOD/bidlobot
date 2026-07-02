@@ -146,6 +146,19 @@ func (e *dmEnv) seedMember(id int64, username string, lastMsg time.Time) {
 	}
 }
 
+func (e *dmEnv) seedMemberNamed(id int64, username, firstName string, lastMsg time.Time) {
+	e.t.Helper()
+	_, err := e.members.UpsertMember(context.Background(), membership.MemberPatch{
+		UserID: id, AbsChatID: e.absChat,
+		Username: &username, FirstName: &firstName,
+		Status: membership.StatusMember, KnownVia: membership.SourceImport,
+		LastMessageAt: lastMsg, SetMessageCount: ptrI64(1), Now: lastMsg,
+	})
+	if err != nil {
+		e.t.Fatal(err)
+	}
+}
+
 func ptrI64(v int64) *int64 { return &v }
 
 func TestDMStartAutoSelectsSingleChat(t *testing.T) {
@@ -201,6 +214,21 @@ func TestDMWarnRunsPrivatelyAndStaysOffPublicChat(t *testing.T) {
 		if s.ChatID.ID != dmAdminID {
 			t.Fatalf("a message leaked outside the DM to chat %d", s.ChatID.ID)
 		}
+	}
+}
+
+func TestDMWarnEscapesTargetDisplayOnce(t *testing.T) {
+	e := newDMEnv(t)
+	e.seedMemberNamed(dmTargetID, "", "Tom & Jerry", time.Now())
+	e.dmMsg("/start")
+	e.dmMsg("/warn 555 flooding")
+
+	last := e.snd.lastSendText()
+	if strings.Contains(last, "Tom &amp;amp; Jerry") {
+		t.Fatalf("target display was double-escaped: %q", last)
+	}
+	if !strings.Contains(last, "Tom &amp; Jerry") {
+		t.Fatalf("target display should be escaped once: %q", last)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"sync"
+	"strings"
 	"testing"
 	"time"
 
@@ -185,6 +186,9 @@ func TestExecutorWarnUnknownTarget(t *testing.T) {
 	}
 	if resp.EditedText != "" {
 		t.Fatal("must not edit message on alert")
+	}
+	if strings.Contains(resp.AnswerText, "@ghost") {
+		t.Fatalf("unknown target alert must not include Telegram mention: %q", resp.AnswerText)
 	}
 }
 

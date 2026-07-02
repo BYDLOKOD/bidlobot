@@ -12,6 +12,7 @@
 package gracekick
 
 import (
+	"html"
 	"context"
 	"fmt"
 	"log/slog"
@@ -460,7 +461,7 @@ func mention(r Record) string {
 		name = "участник"
 	}
 	name = truncUTF16(name, 32)
-	return fmt.Sprintf(`<a href="tg://user?id=%d">%s</a>`, r.UserID, shared.EscapeHTML(name))
+	return fmt.Sprintf(`<a href="tg://user?id=%d">%s</a>`, r.UserID, html.EscapeString(name))
 }
 
 // formatDur renders a grace duration in plain Russian ("3 дня").

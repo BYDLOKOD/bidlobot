@@ -112,7 +112,7 @@ func TestTriviaCallbackCorrectAwardsCredit(t *testing.T) {
 	cq := telego.CallbackQuery{
 		ID:   "cb1",
 		Data: makeTriviaCallback(triviaIdx, correctIdx),
-		From: telego.User{ID: 300, Username: "bob"},
+		From: telego.User{ID: 300, FirstName: "Tom & Jerry"},
 		Message: &telego.Message{
 			MessageID: int(msgID),
 			Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
@@ -124,6 +124,12 @@ func TestTriviaCallbackCorrectAwardsCredit(t *testing.T) {
 	}
 	if !strings.Contains(resp.EditedText, "Первым ответил") {
 		t.Errorf("edited body should mention first solver, got %q", resp.EditedText)
+	}
+	if strings.Contains(resp.EditedText, "Tom &amp;amp; Jerry") {
+		t.Fatalf("winner display was double-escaped: %q", resp.EditedText)
+	}
+	if !strings.Contains(resp.EditedText, "Tom &amp; Jerry") {
+		t.Fatalf("winner display should be escaped once: %q", resp.EditedText)
 	}
 	if h.active.active() != 0 {
 		t.Errorf("solved trivia must be evicted; active=%d", h.active.active())

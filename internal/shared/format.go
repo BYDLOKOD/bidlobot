@@ -2,17 +2,32 @@ package shared
 
 import (
 	"fmt"
+	"html"
+	"strconv"
 	"strings"
 	"time"
-
-	"golang.org/x/text/language"
-	"golang.org/x/text/message"
 )
 
-var printer = message.NewPrinter(language.English)
-
 func FormatNumber(n int64) string {
-	return printer.Sprintf("%d", n)
+	if n < 0 {
+		return "-" + FormatNumber(-n)
+	}
+	if n < 1000 {
+		return strconv.FormatInt(n, 10)
+	}
+	s := strconv.FormatInt(n, 10)
+	var b strings.Builder
+	b.Grow(len(s) + (len(s)-1)/3)
+	off := len(s) % 3
+	if off == 0 {
+		off = 3
+	}
+	b.WriteString(s[:off])
+	for i := off; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 func FormatDate(t time.Time) string {
@@ -24,12 +39,6 @@ func FormatDate(t time.Time) string {
 	return t.UTC().Format("Jan 2, 2006")
 }
 
-func EscapeHTML(s string) string {
-	s = strings.ReplaceAll(s, "&", "&amp;")
-	s = strings.ReplaceAll(s, "<", "&lt;")
-	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
-}
 
 // UserDisplay renders a member's identity as INERT text: the handle is
 // shown WITHOUT a leading '@'. A literal "@handle" of a real account is
@@ -43,7 +52,7 @@ func UserDisplay(username, firstName string) string {
 	if username != "" {
 		return username
 	}
-	return EscapeHTML(firstName)
+	return html.EscapeString(firstName)
 }
 
 // UserDisplayFull shows BOTH the human name and the handle when known:
@@ -56,7 +65,7 @@ func UserDisplay(username, firstName string) string {
 // callers fall back to "User <id>". Output is HTML-safe (name escaped;
 // handle chars are [A-Za-z0-9_]); callers must NOT re-escape it.
 func UserDisplayFull(username, firstName string) string {
-	name := EscapeHTML(strings.TrimSpace(firstName))
+	name := html.EscapeString(strings.TrimSpace(firstName))
 	switch {
 	case name != "" && username != "":
 		return fmt.Sprintf("%s (%s)", name, username)

@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"html"
 	"strconv"
 	"strings"
 	"time"
@@ -254,7 +255,7 @@ func (d *DMConsole) HandleCallback(thctx *th.Context, q telego.CallbackQuery) er
 		}
 		title := d.chatTitle(ctx, absID)
 		d.answer(ctx, q, "Выбран чат: "+title, false)
-		d.editText(ctx, q, fmt.Sprintf(msgDMReady, shared.EscapeHTML(title))+dmHelpBody)
+		d.editText(ctx, q, fmt.Sprintf(msgDMReady, html.EscapeString(title))+dmHelpBody)
 		return nil
 
 	case "cancel":
@@ -321,13 +322,13 @@ func (d *DMConsole) applyPending(ctx context.Context, q telego.CallbackQuery, ca
 			d.answer(ctx, q, "Не удалось забанить. Проверьте право бота ограничивать участников.", true)
 			// Strip the now-dead confirm keyboard: the pending is
 			// already gone, re-tapping would only show "истекло".
-			d.editText(ctx, q, fmt.Sprintf(msgDMBanFailed, shared.EscapeHTML(act.TargetDisplay)))
+			d.editText(ctx, q, fmt.Sprintf(msgDMBanFailed, html.EscapeString(act.TargetDisplay)))
 			return nil
 		}
 		d.answer(ctx, q, "Готово.", false)
-		out := fmt.Sprintf(msgDMBanned, shared.EscapeHTML(act.TargetDisplay))
+		out := fmt.Sprintf(msgDMBanned, html.EscapeString(act.TargetDisplay))
 		if act.Reason != "" {
-			out += "\n" + fmt.Sprintf(msgDMReasonLine, shared.EscapeHTML(act.Reason))
+			out += "\n" + fmt.Sprintf(msgDMReasonLine, html.EscapeString(act.Reason))
 		}
 		d.editText(ctx, q, out)
 		return nil

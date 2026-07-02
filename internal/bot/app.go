@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"log/slog"
-	"os"
 	"sync"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/domain/summarize"
 	"github.com/veschin/bidlobot/internal/shared"
-	"github.com/veschin/bidlobot/internal/testutil"
 )
 
 // ShutdownTimeout caps how long App.Stop blocks waiting for in-flight
@@ -206,22 +204,6 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 		return err
 	}
 	a.handler = bh
-
-	if os.Getenv("RECORD_UPDATES") != "" {
-		recPath := os.Getenv("RECORD_UPDATES")
-		rec, err := testutil.NewRecorder(recPath)
-		if err != nil {
-			a.log.Error("recorder init failed", "error", err)
-		} else {
-			bh.Use(rec.Middleware())
-			a.log.Info("recording updates", "path", recPath)
-			defer func() {
-				rec.Close()
-				a.log.Info("recorded updates", "count", rec.Count())
-			}()
-		}
-	}
-
 	if a.healthCheck != nil {
 		bh.Use(a.healthMiddleware())
 	}

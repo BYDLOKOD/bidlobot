@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"html"
 	"log/slog"
 	"math/rand"
 	"strings"
@@ -181,7 +182,7 @@ func (h *QuipHandler) handle(msg telego.Message, templates []string) error {
 // makes Telegram notify that account, so "/roast @victim" would ping
 // the victim on every invocation. Bare text is inert. The token is
 // taken verbatim from user input, so it is escaped via
-// shared.EscapeHTML before being placed into an HTML-parsed message; a
+// html.EscapeString before being placed into an HTML-parsed message; a
 // crafted "argument" like "<b>" can never inject markup.
 func resolveQuipTarget(msg telego.Message) string {
 	arg := strings.TrimSpace(commandArgs(msg.Text))
@@ -195,7 +196,7 @@ func resolveQuipTarget(msg telego.Message) string {
 		}
 		handle := strings.TrimPrefix(arg, "@")
 		if handle != "" {
-			return shared.EscapeHTML(handle)
+			return html.EscapeString(handle)
 		}
 	}
 	display := shared.UserDisplay(msg.From.Username, msg.From.FirstName)

@@ -42,22 +42,6 @@ func TestFormatDate(t *testing.T) {
 	}
 }
 
-func TestEscapeHTML(t *testing.T) {
-	tests := []struct {
-		in, want string
-	}{
-		{"hello", "hello"},
-		{"<b>bold</b>", "&lt;b&gt;bold&lt;/b&gt;"},
-		{"a & b", "a &amp; b"},
-		{"<script>alert('xss')</script>", "&lt;script&gt;alert('xss')&lt;/script&gt;"},
-	}
-	for _, tt := range tests {
-		got := EscapeHTML(tt.in)
-		if got != tt.want {
-			t.Errorf("EscapeHTML(%q) = %q, want %q", tt.in, got, tt.want)
-		}
-	}
-}
 
 func TestUserDisplay(t *testing.T) {
 	// Inert by design: the handle is shown WITHOUT '@' so a stats or
