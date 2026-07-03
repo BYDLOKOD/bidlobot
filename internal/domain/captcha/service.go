@@ -1,20 +1,25 @@
 package captcha
 
 import (
-	"html"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoutil"
 
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/text"
 )
+
+//go:embed assets/welcome.mp4
+var welcomeAnim []byte
 
 // Service drives the captcha lifecycle: post on join, resolve on answer,
 // kick on timeout. It owns every Telegram call (send, edit, restrict, kick,
@@ -130,9 +135,10 @@ func (s *Service) OnAnswer(ctx context.Context, query telego.CallbackQuery, chal
 	if derr := s.store.Delete(ctx, c.ID); derr != nil {
 		s.log.Warn("captcha: delete on solve failed", "challenge", c.ID, "error", derr)
 	}
-	s.editResolved(ctx, *c, text.MsgCaptchaSolved)
+	s.editResolved(ctx, *c, text.MsgCaptchaSolved) // ponytail: stamp has no %s; editResolved stays generic for MsgCaptchaKicked
 	s.unmute(ctx, c.AbsChatID, c.UserID)
-	s.answer(ctx, query.ID, "") // clear the spinner, no toast
+	s.answer(ctx, query.ID, "") // clear the spinner FIRST so the user is not blocked on the upload
+	s.sendWelcome(ctx, *c)      // best-effort; last so the gif upload never delays the spinner
 	return nil
 }
 
@@ -252,6 +258,20 @@ func (s *Service) editResolved(ctx context.Context, c Challenge, tmpl string) {
 	})
 	if err != nil {
 		s.log.Warn("captcha: edit resolved notice failed", "challenge", c.ID, "error", err)
+	}
+}
+
+// sendWelcome posts the welcome animation (embedded MP4) with the greeting +
+// onboarding questions as an HTML caption. Best-effort: a failure is logged
+// and swallowed (the user already solved the captcha; nothing should surface).
+func (s *Service) sendWelcome(ctx context.Context, c Challenge) {
+	if _, err := s.api.SendAnimation(ctx, &telego.SendAnimationParams{
+		ChatID:    telego.ChatID{ID: -c.AbsChatID},
+		Animation: telegoutil.FileFromBytes(welcomeAnim, "welcome.mp4"),
+		Caption:   fmt.Sprintf(text.MsgCaptchaWelcome, renderMention(c.Username, c.FirstName, c.UserID)),
+		ParseMode: telego.ModeHTML,
+	}); err != nil {
+		s.log.Warn("captcha: welcome animation failed", "challenge", c.ID, "error", err)
 	}
 }
 

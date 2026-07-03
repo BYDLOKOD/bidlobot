@@ -93,6 +93,18 @@ func lastEditText(api *testutil.MockAPI) string {
 	return ""
 }
 
+// lastAnimationCaption returns the Caption of the most recent SendAnimation call, or "".
+func lastAnimationCaption(api *testutil.MockAPI) string {
+	for i := len(api.Calls) - 1; i >= 0; i-- {
+		if api.Calls[i].Method == "SendAnimation" {
+			if p, ok := api.Calls[i].Params.(*telego.SendAnimationParams); ok {
+				return p.Caption
+			}
+		}
+	}
+	return ""
+}
+
 func TestOnJoinPostsCaptchaAndMutes(t *testing.T) {
 	t.Parallel()
 	svc, store, api := newTestService(t)
@@ -201,9 +213,12 @@ func TestOnAnswerCorrectClearsAndUnmutes(t *testing.T) {
 	if _, err := store.Get(context.Background(), ch.ID); err != ErrNotFound {
 		t.Fatalf("challenge must be deleted on correct answer, got err=%v", err)
 	}
-	// Message edited to a welcome.
-	if txt := lastEditText(api); !strings.Contains(txt, "Добро пожаловать") {
-		t.Fatalf("expected solved edit, got %q", txt)
+	// Message edited to the solved stamp, plus the welcome animation caption.
+	if txt := lastEditText(api); !strings.Contains(txt, "Капча пройдена") {
+		t.Fatalf("expected solved stamp, got %q", txt)
+	}
+	if cap := lastAnimationCaption(api); !strings.Contains(cap, "Добро пожаловать") {
+		t.Fatalf("expected welcome animation caption, got %q", cap)
 	}
 	// Unmute: a second RestrictChatMember beyond the join-time mute.
 	if got, want := api.CallCount("RestrictChatMember"), muteAfterJoin+1; got != want {

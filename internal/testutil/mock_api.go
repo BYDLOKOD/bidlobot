@@ -81,6 +81,13 @@ func (m *MockAPI) EditMessageText(_ context.Context, params *telego.EditMessageT
 	return &telego.Message{MessageID: params.MessageID, Chat: telego.Chat{ID: params.ChatID.ID}}, nil
 }
 
+func (m *MockAPI) SendAnimation(_ context.Context, params *telego.SendAnimationParams) (*telego.Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Calls = append(m.Calls, APICall{"SendAnimation", params})
+	return &telego.Message{MessageID: len(m.Calls), Chat: telego.Chat{ID: params.ChatID.ID}}, nil
+}
+
 func (m *MockAPI) GetChatAdministrators(_ context.Context, params *telego.GetChatAdministratorsParams) ([]telego.ChatMember, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

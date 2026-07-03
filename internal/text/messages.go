@@ -47,6 +47,12 @@ const (
 	MsgCaptchaWrong    = "Неправильный ответ."
 	MsgCaptchaNotYours = "Эта капча не для вас."
 	MsgCaptchaExpired  = "Капча просрочена или не найдена."
-	MsgCaptchaSolved   = "Добро пожаловать, %s!"
-	MsgCaptchaKicked   = "%s кикнут: не решил капчу."
+	MsgCaptchaSolved   = "Капча пройдена"
+	MsgCaptchaWelcome  = "<b>Добро пожаловать, %s! 🎉</b>\n\n" +
+		"- Скинь свой (neo/fast)fetch\n" +
+		"- Чем ты занимаешься?\n" +
+		"- Какой у тебя грейд?\n" +
+		"- Сколько платят?\n" +
+		"- Почему решил зайти в чат?"
+	MsgCaptchaKicked = "%s кикнут: не решил капчу."
 )

@@ -29,6 +29,18 @@ func lastEditText(api *testutil.MockAPI) string {
 	return ""
 }
 
+// lastAnimationCaption returns the Caption of the most recent SendAnimation call, or "".
+func lastAnimationCaption(api *testutil.MockAPI) string {
+	for i := len(api.Calls) - 1; i >= 0; i-- {
+		if api.Calls[i].Method == "SendAnimation" {
+			if p, ok := api.Calls[i].Params.(*telego.SendAnimationParams); ok {
+				return p.Caption
+			}
+		}
+	}
+	return ""
+}
+
 // botFakeStore is an in-memory captcha.Store for the handler-level tests.
 type botFakeStore struct {
 	mu   sync.Mutex
@@ -193,12 +205,15 @@ func TestCaptchaFullFlowThroughHandlers(t *testing.T) {
 		t.Fatalf("callback handler: %v", err)
 	}
 
-	// Resolved: challenge gone, message edited to the welcome.
+	// Resolved: challenge gone, message edited to the solved stamp, welcome animation posted.
 	if _, err := store.Get(context.Background(), ch.ID); err != captcha.ErrNotFound {
 		t.Fatalf("challenge must be cleared after a correct answer, got err=%v", err)
 	}
-	if txt := lastEditText(api); !strings.Contains(txt, "Добро пожаловать") {
-		t.Fatalf("expected solved edit, got %q", txt)
+	if txt := lastEditText(api); !strings.Contains(txt, "Капча пройдена") {
+		t.Fatalf("expected solved stamp, got %q", txt)
+	}
+	if cap := lastAnimationCaption(api); !strings.Contains(cap, "Добро пожаловать") {
+		t.Fatalf("expected welcome animation caption, got %q", cap)
 	}
 }
 

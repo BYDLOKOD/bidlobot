@@ -9,6 +9,7 @@ import (
 type TelegramAPI interface {
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
+	SendAnimation(ctx context.Context, params *telego.SendAnimationParams) (*telego.Message, error)
 	GetChatAdministrators(ctx context.Context, params *telego.GetChatAdministratorsParams) ([]telego.ChatMember, error)
 	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
 	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
