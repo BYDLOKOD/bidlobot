@@ -15,6 +15,7 @@ import (
 
 	"github.com/veschin/bidlobot/internal/domain/captcha"
 	"github.com/veschin/bidlobot/internal/testutil"
+	"github.com/veschin/bidlobot/internal/text"
 )
 
 // lastEditText returns the Text of the most recent EditMessageText call, or "".
@@ -39,6 +40,20 @@ func lastAnimationCaption(api *testutil.MockAPI) string {
 		}
 	}
 	return ""
+}
+
+// waitForSendAnimation polls until OnAnswer's async sendWelcome goroutine
+// records a SendAnimation call, or fails after 2s.
+func waitForSendAnimation(t *testing.T, api *testutil.MockAPI) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if api.CallCount("SendAnimation") > 0 {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for async SendAnimation")
 }
 
 // botFakeStore is an in-memory captcha.Store for the handler-level tests.
@@ -209,9 +224,10 @@ func TestCaptchaFullFlowThroughHandlers(t *testing.T) {
 	if _, err := store.Get(context.Background(), ch.ID); err != captcha.ErrNotFound {
 		t.Fatalf("challenge must be cleared after a correct answer, got err=%v", err)
 	}
-	if txt := lastEditText(api); !strings.Contains(txt, "Капча пройдена") {
-		t.Fatalf("expected solved stamp, got %q", txt)
+	if txt := lastEditText(api); txt != text.MsgCaptchaSolved {
+		t.Fatalf("expected solved stamp %q, got %q", text.MsgCaptchaSolved, txt)
 	}
+	waitForSendAnimation(t, api)
 	if cap := lastAnimationCaption(api); !strings.Contains(cap, "Добро пожаловать") {
 		t.Fatalf("expected welcome animation caption, got %q", cap)
 	}

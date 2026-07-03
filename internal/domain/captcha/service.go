@@ -124,7 +124,7 @@ func (s *Service) OnAnswer(ctx context.Context, query telego.CallbackQuery, chal
 			s.log.Warn("captcha: wrong-answer kick failed", "challenge", c.ID, "error", kerr)
 			return nil // leave challenge for sweeper retry
 		}
-		s.editResolved(ctx, *c, text.MsgCaptchaKicked)
+		s.editResolved(ctx, *c, fmt.Sprintf(text.MsgCaptchaKicked, renderMention(c.Username, c.FirstName, c.UserID)))
 		if derr := s.store.Delete(ctx, c.ID); derr != nil {
 			s.log.Warn("captcha: delete after wrong-answer kick failed", "challenge", c.ID, "error", derr)
 		}
@@ -135,10 +135,10 @@ func (s *Service) OnAnswer(ctx context.Context, query telego.CallbackQuery, chal
 	if derr := s.store.Delete(ctx, c.ID); derr != nil {
 		s.log.Warn("captcha: delete on solve failed", "challenge", c.ID, "error", derr)
 	}
-	s.editResolved(ctx, *c, text.MsgCaptchaSolved) // ponytail: stamp has no %s; editResolved stays generic for MsgCaptchaKicked
+	s.editResolved(ctx, *c, text.MsgCaptchaSolved)
 	s.unmute(ctx, c.AbsChatID, c.UserID)
-	s.answer(ctx, query.ID, "") // clear the spinner FIRST so the user is not blocked on the upload
-	s.sendWelcome(ctx, *c)      // best-effort; last so the gif upload never delays the spinner
+	s.answer(ctx, query.ID, "")                // clear the spinner FIRST so the user is not blocked on the upload
+	go s.sendWelcome(context.Background(), *c) // async best-effort: the gif upload must never block the update loop
 	return nil
 }
 
@@ -156,7 +156,7 @@ func (s *Service) Sweep(ctx context.Context, now time.Time) error {
 				"challenge", c.ID, "user_id", c.UserID, "error", kerr)
 			continue
 		}
-		s.editResolved(ctx, c, text.MsgCaptchaKicked)
+		s.editResolved(ctx, c, fmt.Sprintf(text.MsgCaptchaKicked, renderMention(c.Username, c.FirstName, c.UserID)))
 		if derr := s.store.Delete(ctx, c.ID); derr != nil {
 			s.log.Warn("captcha sweep: delete failed",
 				"challenge", c.ID, "error", derr)
@@ -246,13 +246,13 @@ func chatDefaultPerms(ctx context.Context, api shared.TelegramAPI, signedID int6
 	return sendPerms(true), nil // unrestricted chat: allow everything
 }
 
-// editResolved rewrites the announcement message. tmpl is a printf format
-// whose single %s is the user mention. The keyboard is removed.
-func (s *Service) editResolved(ctx context.Context, c Challenge, tmpl string) {
+// editResolved rewrites the announcement message and removes its keyboard.
+// body is the final, already-rendered message text.
+func (s *Service) editResolved(ctx context.Context, c Challenge, body string) {
 	_, err := s.api.EditMessageText(ctx, &telego.EditMessageTextParams{
 		ChatID:      telego.ChatID{ID: -c.AbsChatID},
 		MessageID:   c.MessageID,
-		Text:        fmt.Sprintf(tmpl, renderMention(c.Username, c.FirstName, c.UserID)),
+		Text:        body,
 		ParseMode:   telego.ModeHTML,
 		ReplyMarkup: &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}},
 	})
