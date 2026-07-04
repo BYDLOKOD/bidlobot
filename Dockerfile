@@ -26,6 +26,10 @@ RUN apk add --no-cache git
 
 
 
+# Download yt-dlp static binary (newer than Alpine package; avoids known bugs)
+RUN mkdir -p /out && \
+    wget -q -O /out/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux && \
+    chmod +x /out/yt-dlp
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
@@ -49,7 +53,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 FROM alpine:${ALPINE_VERSION} AS runtime
 
-RUN apk add --no-cache ca-certificates tzdata wget tini ffmpeg yt-dlp && \
+RUN apk add --no-cache ca-certificates tzdata wget tini ffmpeg && \
     addgroup -S -g 65532 bidlobot && \
     adduser -S -u 65532 -G bidlobot -h /var/lib/bidlobot -s /sbin/nologin bidlobot && \
     install -d -o bidlobot -g bidlobot -m 0750 /var/lib/bidlobot && \
@@ -63,6 +67,7 @@ RUN apk add --no-cache ca-certificates tzdata wget tini ffmpeg yt-dlp && \
 COPY --from=build /out/bidlobot         /usr/local/bin/bidlobot
 COPY --from=build /out/bidlobot-backup  /usr/local/bin/bidlobot-backup
 COPY --from=build /out/bidlobot-probe   /usr/local/bin/bidlobot-probe
+COPY --from=build /out/yt-dlp /usr/local/bin/yt-dlp
 
 USER bidlobot:bidlobot
 WORKDIR /var/lib/bidlobot

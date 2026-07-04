@@ -1,27 +1,22 @@
 package bot
 
-// TikTok video repost middleware.
+// TikTok video repost.
 //
-// When a supergroup message contains a TikTok video link, the bot
-// downloads the video (via yt-dlp), trims the watermark end-screen
-// (last ~2s, via ffmpeg), reposts it attributed to the original
-// sender (display name only, no @, no tg://user?id=), then deletes
-// the original. Same privacy gate as the YouTube sanitizer: privacy
+// When a supergroup message contains a TikTok video link, the bot downloads
+// the video, trims the watermark end-screen (last ~2s), reposts attributed
+// to the original sender (display name only, no @, no tg://user?id=), then
+// deletes the original. Same privacy gate as the YouTube sanitizer: privacy
 // must be OFF.
 //
-// The download + trim + upload can take 5--15 seconds, so the handler
-// fires a background goroutine (like the welcome GIF) rather than
-// blocking the update loop.
-//
-// Design notes / documented v1 gaps:
-//   - edited_message: OUT OF SCOPE. Only new messages are processed.
-//   - media group / album: only the caption-bearing item processed.
+// Design notes / documented v1 gaps (mirroring youtube_sanitizer.go):
+//   - edited_message: OUT OF SCOPE for v1. The router only feeds
+//     update.Message here; an edit that introduces a TikTok link is not
+//     re-processed. Explicit gap.
+//   - media groups / albums: only the caption-bearing item is processed.
 //   - reply / forward context: lost on repost.
-//   - no delete right: video repost stands, original remains (repost-first).
-//   - bot crash mid-pipeline: original may survive (no data loss since
-//     delete only happens after successful SendVideo).
-//   - TikTok photo/slideshow: yt-dlp picks best mp4; if none, download
-//     fails and the decline note is posted.
+//   - text_link entities: detected but the URL is in entity.URL, not text.
+//     We use the entity URL for the download but do not attempt to rewrite
+//     inline text (same UTF-16 offset problem as YT sanitizer).
 
 import (
 	"context"
@@ -35,12 +30,40 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/shared"
 )
+
+// --- Constants -----------------------------------------------------------
+
+const (
+	// msgTikTokHeader is the attribution header for a reposted TikTok.
+	// %s = sender display name (UserDisplay, no @, no tg://user?id=).
+	msgTikTokHeader = "\U0001F464 <b>%s</b> \u043F\u0438\u0441\u0430\u043B(\u0430):"
+
+	// msgTikTokSizeLimit is the decline note when video exceeds Telegram's 50 MB cap.
+	msgTikTokSizeLimit = "\u26A0\uFE0F \u0412\u0438\u0434\u0435\u043E \u0438\u0437 TikTok \u0441\u043B\u0438\u0448\u043A\u043E\u043C \u0431\u043E\u043B\u044C\u0448\u043E\u0435 \u0434\u043B\u044F \u0437\u0430\u0433\u0440\u0443\u0437\u043A\u0438 (>50 \u041C\u0411)."
+
+	// msgTikTokDownloadFail is the note when download/processing fails.
+	msgTikTokDownloadFail = "\u26A0\uFE0F \u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0441\u043A\u0430\u0447\u0430\u0442\u044C \u0432\u0438\u0434\u0435\u043E \u0438\u0437 TikTok."
+)
+
+const (
+	// trimDefaultSec is how many seconds to crop from the video end.
+	trimDefaultSec = 2.0
+
+	// maxVideoSize is Telegram's bot upload limit for video (50 MB).
+	maxVideoSize = 50 * 1024 * 1024
+
+	// tiktokDownloadTimeout caps the yt-dlp invocation.
+	tiktokDownloadTimeout = 60 * time.Second
+)
+
+// --- Host detection ------------------------------------------------------
 
 // tiktokHosts is the exact set of TikTok hosts that carry video links.
 var tiktokHosts = map[string]struct{}{
@@ -53,102 +76,212 @@ var tiktokHosts = map[string]struct{}{
 //
 //	https://www.tiktok.com/@user/video/123456789
 //	https://vm.tiktok.com/ABCDEF/
+//	https://vt.tiktok.com/ZSCqHSWxM/
 //	https://m.tiktok.com/v/123456789.html
 //	tiktok.com/@user/video/123456789 (scheme-less, edge case)
+//
+// Conservative: stops at whitespace and trailing punctuation.
 var tiktokURLRe = regexp.MustCompile(`(?i)\b((?:https?://)?(?:www\.|m\.)?(?:(?:vm|vt)\.)?tiktok\.com[/\S]*[^\s<>"')\]]*)`)
 
-// TikTok repost constants.
-const (
-	// msgTikTokHeader is the attribution header for a reposted TikTok.
-	// %s = sender display name (UserDisplay, no @, no tg://user?id=).
-	msgTikTokHeader = "\U0001F464 <b>%s</b> писал(а):"
-
-	// msgTikTokSizeLimit is the decline note when video exceeds Telegram's 50 MB cap.
-	msgTikTokSizeLimit = "\u26A0\ufe0f Видео из TikTok слишком большое для загрузки (>50 МБ)."
-
-	// msgTikTokDownloadFail is the note when download/processing fails.
-	msgTikTokDownloadFail = "\u26A0\ufe0f Не удалось скачать видео из TikTok."
-
-	// trimDefaultSec is how many seconds to crop from the video end.
-	trimDefaultSec = 2.0
-
-	// maxVideoSize is Telegram's bot upload limit for video (50 MB).
-	maxVideoSize = 50 * 1024 * 1024
-)
-
-// tiktokReposter is the supergroup middleware for TikTok video repost.
-func tiktokReposter(a *App) th.Handler {
-	return func(ctx *th.Context, update telego.Update) error {
-		msg := update.Message
-		if msg == nil {
-			return ctx.Next(update)
-		}
-		act, tiktokURL := tiktokDecision(msg)
-		if !act {
-			return ctx.Next(update)
-		}
-		// Fire-and-forget: download + trim + upload in background.
-		// context.Background() is mandatory -- the per-update ctx is
-		// cancelled when the handler returns.
-		go processTikTok(context.Background(), a.sanitizerSender(), a.log, msg, tiktokURL, "")
-		return ctx.Next(update)
+// isTikTokHost lower-cases host, drops any port, strips a single leading
+// "www." or "m." or "vm." or "vt." label, and checks the exact allowlist.
+func isTikTokHost(host string) bool {
+	host = strings.ToLower(host)
+	if h, _, ok := strings.Cut(host, ":"); ok {
+		host = h
 	}
+	for _, pfx := range []string{"www.", "m.", "vm.", "vt."} {
+		if rest, ok := strings.CutPrefix(host, pfx); ok {
+			host = rest
+			break
+		}
+	}
+	_, ok := tiktokHosts[host]
+	return ok
 }
+
+// --- Decision gate (unit-testable) --------------------------------------
 
 // tiktokDecision is the pure gate: applies the exclusion set and returns
 // the first TikTok URL found in the message text/caption. Returns
 // act=false when the message must be passed through untouched.
 func tiktokDecision(msg *telego.Message) (act bool, tiktokURL string) {
-	if msg.From == nil || msg.From.IsBot || shared.IsAnonymousAdmin(msg.From.ID) || msg.SenderChat != nil {
+	if msg == nil {
+		return false, ""
+	}
+	if msg.From == nil || msg.From.IsBot ||
+		shared.IsAnonymousAdmin(msg.From.ID) || msg.SenderChat != nil {
 		return false, ""
 	}
 
-	// Scan text body for TikTok URLs.
-	text := firstNonEmpty(msg.Text, msg.Caption)
-	if text != "" {
-		if u := firstTikTokURL(text); u != "" {
-			return true, u
-		}
-	}
-
-	// Scan entities for url/text_link pointing at TikTok hosts.
+	// Check text entities first (url/text_link types pointing at TikTok hosts).
 	for _, e := range msg.Entities {
-		if e.Type == "url" || e.Type == "text_link" {
-			if isTikTokHostURL(e.URL) {
+		if (e.Type == "url" || e.Type == "text_link") && e.URL != "" {
+			if u, err := url.Parse(e.URL); err == nil && isTikTokHost(u.Host) {
 				return true, e.URL
 			}
 		}
 	}
+	for _, e := range msg.CaptionEntities {
+		if (e.Type == "url" || e.Type == "text_link") && e.URL != "" {
+			if u, err := url.Parse(e.URL); err == nil && isTikTokHost(u.Host) {
+				return true, e.URL
+			}
+		}
+	}
+
+	// Scan bare URLs in text and caption.
+	for _, m := range []string{msg.Text, msg.Caption} {
+		for _, tok := range tiktokURLRe.FindAllString(m, -1) {
+			core := strings.TrimRight(tok, trailingPunct)
+			if u, err := url.Parse(ensureScheme(core)); err == nil && isTikTokHost(u.Host) {
+				return true, core
+			}
+		}
+	}
+
 	return false, ""
 }
 
-// firstTikTokURL extracts the first TikTok URL from text via the regex
-// scanner, stripping trailing sentence punctuation.
-func firstTikTokURL(text string) string {
-	match := tiktokURLRe.FindString(text)
-	if match == "" {
-		return ""
+// ensureScheme prepends https:// to a URL if it has no scheme.
+// url.Parse on a scheme-less host/path pair (e.g. tiktok.com/@user/video/123)
+// treats the whole string as opaque data with an empty Host.
+func ensureScheme(raw string) string {
+	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
+		return raw
 	}
-	return strings.TrimRight(match, trailingPunct)
+	return "https://" + raw
 }
 
-// isTikTokHostURL parses rawURL and checks whether its host is a TikTok host.
-func isTikTokHostURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
+// --- Video download ------------------------------------------------------
+
+// downloadTikTok fetches a TikTok video via yt-dlp to a temp directory.
+// Returns the file path (caller must os.Remove when done).
+// On failure returns an error describing what went wrong.
+func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error) {
+	dlURL := ensureScheme(rawURL)
+
+	dlCtx, cancel := context.WithTimeout(ctx, tiktokDownloadTimeout)
+	defer cancel()
+
+	// DO NOT use --print filename: on yt-dlp 2024.12.03 (Alpine package),
+	// this flag + non-TTY stderr causes yt-dlp to exit 0, print the filename,
+	// but NOT write the file. Instead we find the downloaded file by reading
+	// the workDir (created fresh per download, so it contains exactly one file).
+	cmd := exec.CommandContext(dlCtx,
+		"yt-dlp",
+		"-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+		"--no-playlist",
+		"-o", workDir+"/video.%(ext)s",
+		dlURL,
+	)
+
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return false
+		return "", fmt.Errorf("yt-dlp failed: %w\n%s", err, string(output))
 	}
-	host := strings.ToLower(u.Hostname())
-	host = strings.TrimPrefix(host, "www.")
-	host = strings.TrimPrefix(host, "m.")
-	_, ok := tiktokHosts[host]
-	return ok
+
+	// Find the downloaded file in the workDir.
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		return "", fmt.Errorf("reading work dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			return filepath.Join(workDir, e.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
 }
+
+// --- Video trimming ------------------------------------------------------
+
+// videoDurationSec returns the duration of a video file in seconds via ffprobe.
+func videoDurationSec(ctx context.Context, videoPath string) (float64, error) {
+	cmd := exec.CommandContext(ctx,
+		"ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		videoPath,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return 0, fmt.Errorf("ffprobe: %w", err)
+	}
+	dur, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil {
+		return 0, fmt.Errorf("parsing duration %q: %w", string(out), err)
+	}
+	return dur, nil
+}
+
+// trimVideoEnd crops the last trimSeconds from videoPath, writing to a new
+// temp file. Uses ffmpeg stream copy (no re-encode). Returns the cropped
+// file path (caller must os.Remove when done). If the video is too short
+// or ffmpeg fails, returns the original path unchanged.
+func trimVideoEnd(ctx context.Context, videoPath, workDir string, trimSeconds float64) (string, error) {
+	dur, err := videoDurationSec(ctx, videoPath)
+	if err != nil {
+		return videoPath, fmt.Errorf("probing duration, keeping original: %w", err)
+	}
+	if dur <= trimSeconds+1.0 {
+		// Video too short to trim; return original.
+		return videoPath, nil
+	}
+
+	newDur := fmt.Sprintf("%.3f", dur-trimSeconds)
+	outPath := filepath.Join(workDir, "trimmed.mp4")
+
+	cmd := exec.CommandContext(ctx,
+		"ffmpeg",
+		"-y",
+		"-i", videoPath,
+		"-t", newDur,
+		"-c", "copy",
+		"-avoid_negative_ts", "make_zero",
+		outPath,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return videoPath, fmt.Errorf("ffmpeg trim failed, keeping original: %w\n%s", err, string(out))
+	}
+	return outPath, nil
+}
+
+// --- Middleware ----------------------------------------------------------
+
+// tiktokReposter is the supergroup middleware. It mirrors youtubeSanitizer
+// structurally but runs the heavy download+trim+upload asynchronously so it
+// never stalls the sequential update loop (same lesson as welcome GIF).
+func tiktokReposter(a *App) th.Handler {
+	return func(thctx *th.Context, update telego.Update) error {
+		msg := update.Message
+		if msg == nil {
+			return thctx.Next(update)
+		}
+		act, tiktokURL := tiktokDecision(msg)
+		if !act {
+			return thctx.Next(update)
+		}
+		// Fire-and-forget: download + trim + upload in background.
+		// context.Background() is mandatory -- the per-update ctx is
+		// cancelled when the handler returns.
+		go processTikTok(context.Background(), a.sanitizerSender(), a.log, msg, tiktokURL, "")
+		return thctx.Next(update)
+	}
+}
+
+// --- Pipeline ------------------------------------------------------------
 
 // processTikTok runs the full pipeline: download (if videoPath is ""),
 // trim, size-check, upload, delete-original.
+//
 // videoPath is "" in production (download via yt-dlp), or a pre-created
 // temp file path in tests (bypasses yt-dlp).
+//
+// Package-level (not a method) so tests can call it without an App.
+// The goroutine is NOT tracked in App.inFlight: TikTok repost is best-effort;
+// a shutdown mid-pipeline loses one video repost, which is acceptable.
 func processTikTok(
 	ctx context.Context,
 	snd youtubeMediaSender,
@@ -160,92 +293,93 @@ func processTikTok(
 	chatID := msg.Chat.ID
 	msgID := msg.GetMessageID()
 
-	// Create a temp work directory for downloads.
-	workDir, err := os.MkdirTemp("", "bidlobot-tiktok-*")
+	// Temp directory for this download.
+	workDir, err := os.MkdirTemp("", "bidlobot-tiktok-")
 	if err != nil {
-		log.Error("tiktok reposter: failed to create temp dir",
-			"chat_id", chatID, "message_id", msgID, "error", err)
+		log.Error("tiktok: creating temp dir", "chat_id", chatID, "error", err)
 		return
 	}
 	defer os.RemoveAll(workDir)
 
-	downloaded := videoPath != ""
-
-	if !downloaded {
-		path, err := downloadTikTok(ctx, tiktokURL, workDir)
-		if err != nil {
-			log.Warn("tiktok reposter: download failed",
-				"chat_id", chatID, "message_id", msgID, "url", tiktokURL, "error", err)
-			sendTikTokFallback(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
+	// Step 1: Download.
+	if videoPath == "" {
+		var dlErr error
+		videoPath, dlErr = downloadTikTok(ctx, tiktokURL, workDir)
+		if dlErr != nil {
+			log.Warn("tiktok: download failed", "chat_id", chatID, "url", tiktokURL, "error", dlErr)
+			sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
 			return
 		}
-		videoPath = path
+		defer os.Remove(videoPath)
+	} else {
 		defer os.Remove(videoPath)
 	}
 
-	// Trim watermark end-screen.
-	trimmed, trimErr := trimVideoEnd(ctx, videoPath, workDir, trimDefaultSec)
+	// Step 2: Trim watermark end-screen.
+	trimmedPath, trimErr := trimVideoEnd(ctx, videoPath, workDir, trimDefaultSec)
 	if trimErr != nil {
-		log.Warn("tiktok reposter: trim failed, posting untrimmed",
-			"chat_id", chatID, "message_id", msgID, "error", trimErr)
-	} else if trimmed != videoPath {
-		defer os.Remove(trimmed)
-		videoPath = trimmed
+		log.Warn("tiktok: trim failed, posting untrimmed", "chat_id", chatID, "error", trimErr)
+		// trimmedPath == videoPath on failure; continue with original.
 	}
+	if trimmedPath != videoPath {
+		defer os.Remove(trimmedPath)
+	}
+	finalPath := trimmedPath
 
-	// Size check.
-	fi, err := os.Stat(videoPath)
+	// Step 3: Size check.
+	fi, err := os.Stat(finalPath)
 	if err != nil {
-		log.Error("tiktok reposter: stat failed",
-			"chat_id", chatID, "message_id", msgID, "path", videoPath, "error", err)
-		sendTikTokFallback(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
+		log.Error("tiktok: stat video", "chat_id", chatID, "path", finalPath, "error", err)
+		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
 		return
 	}
 	if fi.Size() > maxVideoSize {
-		log.Info("tiktok reposter: video too large",
-			"chat_id", chatID, "message_id", msgID, "size", fi.Size())
-		sendTikTokFallback(ctx, snd, log, chatID, msgID, msgTikTokSizeLimit)
+		log.Info("tiktok: video too large", "chat_id", chatID, "size", fi.Size())
+		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokSizeLimit)
 		return
 	}
 
-	// Build attribution header.
-	display := shared.UserDisplay(msg.From.Username, msg.From.FirstName)
-	header := strings.Replace(msgTikTokHeader, "%s", html.EscapeString(display), 1)
-
-	// Upload the video.
-	file, err := os.Open(videoPath)
+	// Step 4: Open for upload.
+	file, err := os.Open(finalPath)
 	if err != nil {
-		log.Error("tiktok reposter: open failed",
-			"chat_id", chatID, "message_id", msgID, "path", videoPath, "error", err)
-		sendTikTokFallback(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
+		log.Error("tiktok: opening video for upload", "chat_id", chatID, "error", err)
+		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
 		return
 	}
 	defer file.Close()
 
-	_, err = snd.SendVideo(ctx, &telego.SendVideoParams{
+	// Step 5: Repost (first, before delete - repost-first contract).
+	display := shared.UserDisplay(msg.From.Username, msg.From.FirstName)
+	header := strings.Replace(msgTikTokHeader, "%s", display, 1)
+	caption := header
+	if msg.Caption != "" {
+		caption += "\n" + html.EscapeString(msg.Caption)
+	}
+
+	_, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		Video:     telego.InputFile{File: file},
-		Caption:   header,
+		Caption:   caption,
 		ParseMode: telego.ModeHTML,
 	})
-	if err != nil {
-		log.Error("tiktok reposter: SendVideo failed",
-			"chat_id", chatID, "message_id", msgID, "error", err)
+	if sendErr != nil {
+		log.Warn("tiktok: repost failed; leaving original intact", "chat_id", chatID, "error", sendErr)
 		return
 	}
 
-	// Delete original only after successful repost.
+	// Step 6: Delete original (only after successful repost).
 	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		MessageID: msgID,
 	}); delErr != nil {
-		log.Info("tiktok reposter: reposted but delete failed; original kept",
+		log.Info("tiktok: reposted but delete failed; original kept",
 			"chat_id", chatID, "message_id", msgID, "error", delErr)
 	}
 }
 
-// sendTikTokFallback posts a note in the chat and best-effort deletes the original.
-func sendTikTokFallback(
+// sendDecline replies with a note and best-effort deletes the original.
+// Used when download/size-limit failures make a repost impossible.
+func sendDecline(
 	ctx context.Context,
 	snd youtubeMediaSender,
 	log *slog.Logger,
@@ -253,106 +387,22 @@ func sendTikTokFallback(
 	msgID int,
 	note string,
 ) {
-	_, _ = snd.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Text:      note,
-		ParseMode: telego.ModeHTML,
+	_, err := snd.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telego.ChatID{ID: chatID},
+		Text:   note,
+		ReplyParameters: &telego.ReplyParameters{
+			MessageID: msgID,
+		},
 	})
-	// Best-effort delete.
-	if err := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
+	if err != nil {
+		log.Warn("tiktok: decline note send failed", "chat_id", chatID, "error", err)
+	}
+	// Best-effort delete of the original TikTok link (decline note is in reply).
+	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		MessageID: msgID,
-	}); err != nil {
-		log.Info("tiktok reposter: fallback delete failed",
-			"chat_id", chatID, "message_id", msgID, "error", err)
+	}); delErr != nil {
+		log.Info("tiktok: decline note sent but original delete failed",
+			"chat_id", chatID, "message_id", msgID, "error", delErr)
 	}
-}
-
-// downloadTikTok fetches a TikTok video via yt-dlp to a temp file.
-// Returns the file path (caller must os.Remove when done).
-func downloadTikTok(ctx context.Context, tiktokURL, workDir string) (string, error) {
-	// yt-dlp needs a scheme; TikTok short links may arrive scheme-less
-	// from the regex scanner (e.g. "tiktok.com/ZSCqH...").
-	if !strings.HasPrefix(tiktokURL, "http://") && !strings.HasPrefix(tiktokURL, "https://") {
-		tiktokURL = "https://" + tiktokURL
-	}
-
-	// yt-dlp format selection: prefer mp4 video + m4a audio, fall back to best mp4.
-	outTmpl := filepath.Join(workDir, "%(id)s.%(ext)s")
-
-	cmd := exec.CommandContext(ctx,
-		"yt-dlp",
-		"-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
-		"--no-playlist",
-		"-o", outTmpl,
-		"--print", "filename",
-		tiktokURL,
-	)
-
-	stdout, err := cmd.Output()
-	if err != nil {
-		var stderr string
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr = string(exitErr.Stderr)
-		}
-		return "", fmt.Errorf("yt-dlp: %w (stderr: %s)", err, stderr)
-	}
-
-	filename := strings.TrimSpace(string(stdout))
-	if filename == "" {
-		return "", fmt.Errorf("yt-dlp: no output filename for %s", tiktokURL)
-	}
-	return filename, nil
-}
-
-// videoDurationSec returns the duration of a video file in seconds via ffprobe.
-func videoDurationSec(ctx context.Context, videoPath string) (float64, error) {
-	cmd := exec.CommandContext(ctx,
-		"ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		videoPath,
-	)
-	stdout, err := cmd.Output()
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe: %w", err)
-	}
-	dur, err := strconv.ParseFloat(strings.TrimSpace(string(stdout)), 64)
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe parse: %w", err)
-	}
-	return dur, nil
-}
-
-// trimVideoEnd crops the last trimSeconds from videoPath, writing to a new temp
-// file. Uses ffmpeg stream copy (no re-encode). Returns the cropped file path
-// (caller must os.Remove when done). If ffmpeg is unavailable or fails, returns
-// the original path unchanged.
-func trimVideoEnd(ctx context.Context, videoPath, workDir string, trimSeconds float64) (string, error) {
-	dur, err := videoDurationSec(ctx, videoPath)
-	if err != nil {
-		return videoPath, fmt.Errorf("ffprobe duration: %w", err)
-	}
-
-	// Don't trim very short videos.
-	if dur <= trimSeconds+1.0 {
-		return videoPath, nil
-	}
-
-	outPath := filepath.Join(workDir, "trimmed.mp4")
-	trimDur := dur - trimSeconds
-	cmd := exec.CommandContext(ctx,
-		"ffmpeg",
-		"-y",
-		"-i", videoPath,
-		"-t", strconv.FormatFloat(trimDur, 'f', 3, 64),
-		"-c", "copy",
-		"-avoid_negative_ts", "make_zero",
-		outPath,
-	)
-	if _, err := cmd.Output(); err != nil {
-		return videoPath, fmt.Errorf("ffmpeg trim: %w", err)
-	}
-	return outPath, nil
 }

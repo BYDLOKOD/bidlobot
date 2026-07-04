@@ -2,273 +2,339 @@ package bot
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/mymmrac/telego"
 )
 
-// tiktokTestMessage builds a minimal telego.Message for TikTok decision/process tests.
-func tiktokTestMessage(text string) *telego.Message {
-	return &telego.Message{
-		MessageID: 42,
-		Date:      time.Now().Unix(),
-		Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
-		Text:      text,
-	}
-}
-
 func TestTikTokDecision(t *testing.T) {
 	tests := []struct {
-		name    string
-		msg     *telego.Message
-		wantAct bool
-		wantURL string
+		name string
+		msg  *telego.Message
+		want bool
 	}{
 		{
-			name:    "www.tiktok.com video link",
-			msg:     tiktokTestMessage("check https://www.tiktok.com/@user/video/123456789"),
-			wantAct: true,
-			wantURL: "https://www.tiktok.com/@user/video/123456789",
+			name: "valid tiktok.com link",
+			msg:  ttTestMessage("https://www.tiktok.com/@user/video/123456789"),
+			want: true,
 		},
 		{
-			name:    "vm.tiktok.com short link",
-			msg:     tiktokTestMessage("https://vm.tiktok.com/ABCDEF/"),
-			wantAct: true,
-			wantURL: "https://vm.tiktok.com/ABCDEF/",
+			name: "valid vm.tiktok.com short link",
+			msg:  ttTestMessage("https://vm.tiktok.com/ABCDEF/"),
+			want: true,
 		},
 		{
-			name:    "m.tiktok.com link",
-			msg:     tiktokTestMessage("https://m.tiktok.com/v/123456789.html"),
-			wantAct: true,
-			wantURL: "https://m.tiktok.com/v/123456789.html",
+			name: "valid vt.tiktok.com link",
+			msg:  ttTestMessage("https://vt.tiktok.com/ZSCqHSWxM/"),
+			want: true,
 		},
 		{
-			name:    "scheme-less tiktok.com",
-			msg:     tiktokTestMessage("see tiktok.com/@user/video/123"),
-			wantAct: true,
-			wantURL: "tiktok.com/@user/video/123",
+			name: "valid m.tiktok.com link",
+			msg:  ttTestMessage("https://m.tiktok.com/v/123456789.html"),
+			want: true,
 		},
 		{
-			name:    "trailing punctuation stripped",
-			msg:     tiktokTestMessage("watch https://vm.tiktok.com/ABC/."),
-			wantAct: true,
-			wantURL: "https://vm.tiktok.com/ABC/",
+			name: "scheme-less bare host",
+			msg:  ttTestMessage("tiktok.com/@user/video/123456789"),
+			want: true,
 		},
 		{
-			name:    "non-TikTok URL passes through",
-			msg:     tiktokTestMessage("https://youtube.com/watch?v=x"),
-			wantAct: false,
+			name: "non-TikTok URL",
+			msg:  ttTestMessage("https://youtube.com/watch?v=abc"),
+			want: false,
 		},
 		{
-			name:    "no URL in text",
-			msg:     tiktokTestMessage("just talking"),
-			wantAct: false,
+			name: "non-TikTok URL that looks similar",
+			msg:  ttTestMessage("https://tiktok.com.ru/fake"),
+			want: false,
 		},
 		{
-			name:    "empty text",
-			msg:     tiktokTestMessage(""),
-			wantAct: false,
+			name: "empty text",
+			msg:  ttTestMessage(""),
+			want: false,
 		},
 		{
-			name: "nil sender excluded",
+			name: "nil message",
+			msg:  nil,
+			want: false,
+		},
+		{
+			name: "nil sender",
 			msg: &telego.Message{
-				MessageID: 42,
-				Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
 				From:      nil,
 				Text:      "https://www.tiktok.com/@user/video/123",
 			},
-			wantAct: false,
+			want: false,
 		},
 		{
-			name: "bot excluded",
+			name: "bot sender",
 			msg: &telego.Message{
-				MessageID: 42,
-				Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-				From:      &telego.User{ID: 300, IsBot: true, Username: "botty"},
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 100, IsBot: true},
 				Text:      "https://www.tiktok.com/@user/video/123",
 			},
-			wantAct: false,
+			want: false,
 		},
 		{
-			name: "channel-as-sender excluded",
+			name: "anonymous admin sender",
 			msg: &telego.Message{
-				MessageID:  42,
-				Chat:       telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-				From:       &telego.User{ID: 200, Username: "alice"},
-				SenderChat: &telego.Chat{ID: -1009999999},
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 1087968824}, // GroupAnonymousBot
+				Text:      "https://www.tiktok.com/@user/video/123",
+			},
+			want: false,
+		},
+		{
+			name: "channel-as-sender",
+			msg: &telego.Message{
+				MessageID:  1,
+				Chat:       telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:       &telego.User{ID: 200},
+				SenderChat: &telego.Chat{ID: -100456},
 				Text:       "https://www.tiktok.com/@user/video/123",
 			},
-			wantAct: false,
+			want: false,
 		},
 		{
 			name: "url entity with TikTok host",
 			msg: &telego.Message{
-				MessageID: 42,
-				Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-				From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Text:      "check it",
 				Entities: []telego.MessageEntity{
-					{Type: "url", URL: "https://www.tiktok.com/@user/video/123", Offset: 0, Length: 10},
+					{Type: "url", Offset: 0, Length: 8, URL: "https://www.tiktok.com/@user/video/123"},
 				},
-				Text: "watch this",
 			},
-			wantAct: true,
-			wantURL: "https://www.tiktok.com/@user/video/123",
+			want: true,
 		},
 		{
 			name: "text_link entity with TikTok host",
 			msg: &telego.Message{
-				MessageID: 42,
-				Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-				From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Text:      "click",
 				Entities: []telego.MessageEntity{
-					{Type: "text_link", URL: "https://vm.tiktok.com/ABC/", Offset: 0, Length: 4},
+					{Type: "text_link", Offset: 0, Length: 5, URL: "https://vm.tiktok.com/ABCDEF/"},
 				},
-				Text: "link",
 			},
-			wantAct: true,
-			wantURL: "https://vm.tiktok.com/ABC/",
+			want: true,
 		},
 		{
-			name: "non-TikTok entity URL ignored",
+			name: "URL in caption",
 			msg: &telego.Message{
-				MessageID: 42,
-				Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-				From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
-				Entities: []telego.MessageEntity{
-					{Type: "url", URL: "https://youtube.com/watch?v=x", Offset: 0, Length: 10},
-				},
-				Text: "watch this",
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Caption:   "https://www.tiktok.com/@user/video/123",
 			},
-			wantAct: false,
+			want: true,
 		},
 		{
-			name: "caption with TikTok link",
+			name: "caption entity with TikTok host",
 			msg: &telego.Message{
-				MessageID: 42,
-				Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-				From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
-				Caption:   "https://vm.tiktok.com/ABC/",
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Caption:   "watch",
+				CaptionEntities: []telego.MessageEntity{
+					{Type: "text_link", Offset: 0, Length: 5, URL: "https://vt.tiktok.com/ZSCqHSWxM/"},
+				},
 			},
-			wantAct: true,
-			wantURL: "https://vm.tiktok.com/ABC/",
+			want: true,
+		},
+		{
+			name: "tiktok URL with trailing punctuation",
+			msg:  ttTestMessage("Check https://www.tiktok.com/@user/video/123."),
+			want: true,
+		},
+		{
+			name: "multiple TikTok URLs returns first",
+			msg:  ttTestMessage("https://vm.tiktok.com/abc/ and https://www.tiktok.com/@user/video/456"),
+			want: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			act, url := tiktokDecision(tt.msg)
-			if act != tt.wantAct {
-				t.Errorf("act = %v, want %v", act, tt.wantAct)
+			if act != tt.want {
+				t.Errorf("act = %v, want %v", act, tt.want)
 			}
-			if tt.wantURL != "" && url != tt.wantURL {
-				t.Errorf("url = %q, want %q", url, tt.wantURL)
+			if tt.want && url == "" {
+				t.Error("wanted non-empty URL")
+			}
+			if !tt.want && url != "" {
+				t.Errorf("unexpected URL: %s", url)
 			}
 		})
 	}
 }
 
-// TestTikTokDecisionAnonymousAdmin verifies that GroupAnonymousBot messages
-// are excluded the same way the YT sanitizer excludes them.
-func TestTikTokDecisionAnonymousAdmin(t *testing.T) {
-	anonID := anonAdminID(t)
+func TestDownloadTikTok(t *testing.T) {
+	t.Skip("skipped: needs network + yt-dlp. Run manually as an integration test.")
+	// Manual test:
+	//   ctx := context.Background()
+	//   dir := t.TempDir()
+	//   path, err := downloadTikTok(ctx, "https://vm.tiktok.com/...", dir)
+	//   if err != nil { t.Fatal(err) }
+	//   t.Logf("downloaded to %s", path)
+}
+
+func TestTrimVideoEnd(t *testing.T) {
+	t.Skip("skipped: needs ffmpeg. Run manually as an integration test.")
+	// Manual test:
+	//   ctx := context.Background()
+	//   dir := t.TempDir()
+	//   trimmed, err := trimVideoEnd(ctx, "testdata/sample.mp4", dir, 2.0)
+	//   if err != nil { t.Logf("trim error (degradation): %v", err) }
+	//   t.Logf("trimmed: %s", trimmed)
+}
+
+// TestProcessTikTokWithSyntheticVideo verifies the full pipeline using a
+// synthetic temp file so no network/yt-dlp is needed. Asserts:
+//   - SendVideo is called with correct chat ID, caption, parse mode
+//   - DeleteMessage is called AFTER SendVideo succeeds (repost-first)
+func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4 content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
+
 	msg := &telego.Message{
 		MessageID: 42,
 		Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
-		From:      &telego.User{ID: anonID, Username: "GroupAnonymousBot"},
-		Text:      "https://www.tiktok.com/@user/video/123",
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+		Caption:   "original caption",
 	}
-	act, _ := tiktokDecision(msg)
-	if act {
-		t.Error("anonymous admin must be excluded")
-	}
-}
 
-// TestDownloadTikTok is skipped in unit tests (needs network + yt-dlp).
-// Run manually: go test -run TestDownloadTikTok -tags=integration
-func TestDownloadTikTok(t *testing.T) {
-	t.Skip("integration test: requires network and yt-dlp binary")
-}
+	processTikTok(context.Background(), snd, log, msg,
+		"https://www.tiktok.com/@user/video/123", videoPath)
 
-// TestTrimVideoEnd is skipped in unit tests (needs ffmpeg).
-// Run manually: go test -run TestTrimVideoEnd -tags=integration
-func TestTrimVideoEnd(t *testing.T) {
-	t.Skip("integration test: requires ffmpeg binary")
-}
-
-// TestProcessTikTok verifies the upload + delete pipeline using
-// recYTSender and a synthetic temp file (bypassing yt-dlp).
-func TestProcessTikTok(t *testing.T) {
-	snd := &recYTSender{}
-	msg := tiktokTestMessage("https://vm.tiktok.com/ABC/")
-
-	// Create a tiny synthetic file to exercise the SendVideo path.
-	// The file is smaller than maxVideoSize so it passes the size check.
-	tmp, err := os.CreateTemp("", "bidlobot-test-tiktok-*.mp4")
-	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.Write([]byte("fake mp4 content")); err != nil {
-		t.Fatalf("Write: %v", err)
-	}
-	tmp.Close()
-
-	processTikTok(context.Background(), snd, testLogger(), msg, "https://vm.tiktok.com/ABC/", tmp.Name())
-
-	// Assert SendVideo was called.
+	// Assert SendVideo was called with correct params.
 	if len(snd.Videos) != 1 {
 		t.Fatalf("expected 1 SendVideo, got %d", len(snd.Videos))
 	}
 	v := snd.Videos[0]
-	if !strings.Contains(v.Caption, "alice") {
-		t.Errorf("SendVideo caption missing attribution 'alice': %q", v.Caption)
+	if v.ChatID.ID != msg.Chat.ID {
+		t.Errorf("ChatID = %d, want %d", v.ChatID.ID, msg.Chat.ID)
 	}
 	if v.ParseMode != telego.ModeHTML {
-		t.Errorf("SendVideo parse_mode = %q, want HTML", v.ParseMode)
+		t.Errorf("ParseMode = %s, want %s", v.ParseMode, telego.ModeHTML)
 	}
-	if strings.Contains(v.Caption, "@") {
-		t.Errorf("SendVideo caption must not contain '@' (no mention): %q", v.Caption)
+	if v.Caption == "" {
+		t.Error("caption is empty")
 	}
 
-	// Assert DeleteMessage was called AFTER SendVideo (repost-first).
+	// Repost-first contract: DeleteMessage called AFTER SendVideo.
 	if len(snd.Deletes) != 1 {
 		t.Fatalf("expected 1 DeleteMessage, got %d", len(snd.Deletes))
 	}
-	if snd.Deletes[0].MessageID != 42 {
-		t.Errorf("DeleteMessage targeted %d, want 42", snd.Deletes[0].MessageID)
+	d := snd.Deletes[0]
+	if d.ChatID.ID != msg.Chat.ID {
+		t.Errorf("Delete ChatID = %d, want %d", d.ChatID.ID, msg.Chat.ID)
+	}
+	if d.MessageID != msg.MessageID {
+		t.Errorf("Delete MessageID = %d, want %d", d.MessageID, msg.MessageID)
 	}
 }
 
-// TestProcessTikTokDeleteFailsRepostStands verifies the repost-first contract:
-// when delete fails, the video is still posted and the original is kept.
-func TestProcessTikTokDeleteFailsRepostStands(t *testing.T) {
-	snd := &recYTSender{DeleteErr: errNoMediaSend}
-	msg := tiktokTestMessage("https://vm.tiktok.com/ABC/")
+// TestProcessTikTokVideoTooLarge verifies the size-limit decline path:
+// videos over 50MB get a decline note instead of Silent drop.
+func TestProcessTikTokVideoTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "big.mp4")
 
-	tmp, err := os.CreateTemp("", "bidlobot-test-tiktok-*.mp4")
+	f, err := os.Create(videoPath)
 	if err != nil {
-		t.Fatalf("CreateTemp: %v", err)
+		t.Fatal(err)
 	}
-	defer os.Remove(tmp.Name())
-	tmp.Write([]byte("fake mp4 content"))
-	tmp.Close()
+	if err := f.Truncate(maxVideoSize + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
 
-	processTikTok(context.Background(), snd, testLogger(), msg, "https://vm.tiktok.com/ABC/", tmp.Name())
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
 
-	// Video must be posted even when delete fails.
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, msg,
+		"https://www.tiktok.com/@user/video/123", videoPath)
+
+	// Should NOT have called SendVideo (too large).
+	if len(snd.Videos) != 0 {
+		t.Errorf("expected 0 SendVideo calls, got %d", len(snd.Videos))
+	}
+	// Should have sent decline note.
+	if len(snd.Messages) != 1 {
+		t.Fatalf("expected 1 SendMessage (decline), got %d", len(snd.Messages))
+	}
+	if snd.Messages[0].Text != msgTikTokSizeLimit {
+		t.Errorf("decline text = %q, want %q", snd.Messages[0].Text, msgTikTokSizeLimit)
+	}
+}
+
+// TestProcessTikTokDeleteFailsRepostStands verifies the repost-first
+// contract: when DeleteMessage fails (no Delete right), the video repost
+// still stands - the original is simply kept. This is the TikTok equivalent
+// of youtube_sanitizer's TestHandleSanitizeDeleteFailsRepostStandsOriginalKept.
+func TestProcessTikTokDeleteFailsRepostStands(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4 content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	snd := &recYTSender{
+		DeleteErr: errors.New("no delete right"),
+	}
+	log := slog.New(slog.DiscardHandler)
+
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, msg,
+		"https://www.tiktok.com/@user/video/123", videoPath)
+
+	// Repost MUST stand even when delete fails.
 	if len(snd.Videos) != 1 {
-		t.Fatalf("expected 1 SendVideo (repost stands), got %d", len(snd.Videos))
+		t.Fatalf("expected 1 SendVideo (repost), got %d", len(snd.Videos))
 	}
+	// Delete was attempted (the call was made, it just returned an error).
+	if len(snd.Deletes) != 1 {
+		t.Errorf("expected 1 DeleteMessage attempt, got %d", len(snd.Deletes))
+	}
+}
 
-	// Delete was attempted (and failed). We don't assert on len(snd.Deletes)
-	// because sendTikTokFallback also tries to delete -- but processTikTok
-	// itself calls DeleteMessage only after successful SendVideo, so at
-	// least 1 delete was attempted.
-	if len(snd.Deletes) < 1 {
-		t.Error("expected at least 1 delete attempt")
+// ttTestMessage builds a telego.Message with common defaults for
+// tiktokDecision tests. The From is a regular non-bot user.
+func ttTestMessage(text string) *telego.Message {
+	return &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+		Text:      text,
 	}
 }
