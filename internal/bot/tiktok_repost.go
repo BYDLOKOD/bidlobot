@@ -46,6 +46,7 @@ import (
 var tiktokHosts = map[string]struct{}{
 	"tiktok.com":    {},
 	"vm.tiktok.com": {},
+	"vt.tiktok.com": {},
 }
 
 // tiktokURLRe finds TikTok video URLs in text. Matches:
@@ -54,7 +55,7 @@ var tiktokHosts = map[string]struct{}{
 //	https://vm.tiktok.com/ABCDEF/
 //	https://m.tiktok.com/v/123456789.html
 //	tiktok.com/@user/video/123456789 (scheme-less, edge case)
-var tiktokURLRe = regexp.MustCompile(`(?i)\b((?:https?://)?(?:www\.|m\.)?(?:vm\.)?tiktok\.com[/\S]*[^\s<>"')\]]*)`)
+var tiktokURLRe = regexp.MustCompile(`(?i)\b((?:https?://)?(?:www\.|m\.)?(?:(?:vm|vt)\.)?tiktok\.com[/\S]*[^\s<>"')\]]*)`)
 
 // TikTok repost constants.
 const (
@@ -270,6 +271,12 @@ func sendTikTokFallback(
 // downloadTikTok fetches a TikTok video via yt-dlp to a temp file.
 // Returns the file path (caller must os.Remove when done).
 func downloadTikTok(ctx context.Context, tiktokURL, workDir string) (string, error) {
+	// yt-dlp needs a scheme; TikTok short links may arrive scheme-less
+	// from the regex scanner (e.g. "tiktok.com/ZSCqH...").
+	if !strings.HasPrefix(tiktokURL, "http://") && !strings.HasPrefix(tiktokURL, "https://") {
+		tiktokURL = "https://" + tiktokURL
+	}
+
 	// yt-dlp format selection: prefer mp4 video + m4a audio, fall back to best mp4.
 	outTmpl := filepath.Join(workDir, "%(id)s.%(ext)s")
 
