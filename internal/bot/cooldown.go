@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strconv"
 	"fmt"
 	"sync"
 	"time"
@@ -49,7 +50,7 @@ func (c *cooldown) gate(userID int64, key string, every time.Duration) (allowed,
 	defer c.mu.Unlock()
 	now := time.Now()
 	c.sweepLocked(now)
-	k := key + "|" + strconvI(userID)
+	k := key + "|" + strconv.FormatInt(userID, 10)
 	if t, ok := c.last[k]; ok && now.Sub(t) < every {
 		if n, seen := c.notified[k]; !seen || now.Sub(n) >= every {
 			c.notified[k] = now
@@ -82,28 +83,6 @@ func (c *cooldown) sweepLocked(now time.Time) {
 	}
 }
 
-func strconvI(v int64) string {
-	// Tiny inline itoa to avoid a strconv import churn here.
-	if v == 0 {
-		return "0"
-	}
-	neg := v < 0
-	if neg {
-		v = -v
-	}
-	var b [20]byte
-	i := len(b)
-	for v > 0 {
-		i--
-		b[i] = byte('0' + v%10)
-		v /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
-}
 
 // gateMsg wraps a message handler so a given user can only trigger it
 // once per `every`. Over-frequency calls are dropped silently (no

@@ -89,13 +89,3 @@ func TestCooldownGate(t *testing.T) {
 	}
 }
 
-func TestStrconvI(t *testing.T) {
-	for _, c := range []struct {
-		in   int64
-		want string
-	}{{0, "0"}, {7, "7"}, {100, "100"}, {-42, "-42"}, {9223372036854775807, "9223372036854775807"}} {
-		if got := strconvI(c.in); got != c.want {
-			t.Errorf("strconvI(%d)=%q want %q", c.in, got, c.want)
-		}
-	}
-}

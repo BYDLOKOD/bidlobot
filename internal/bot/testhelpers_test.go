@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"errors"
 	"log/slog"
 	"os"
 )
@@ -32,9 +31,3 @@ func stubAdminCache(allow bool) AdminChecker {
 	return &fixedAdminChecker{allow: allow}
 }
 
-// failingAdminCache returns the supplied error from every IsAdmin call.
-// Currently unused but kept for upcoming Phase 3d/3e tests where we
-// want to assert the dispatcher logs a warning and denies.
-var _ = func(err error) AdminChecker {
-	return &fixedAdminChecker{err: errors.New("not used yet")}
-}

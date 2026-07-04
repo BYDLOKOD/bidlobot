@@ -204,26 +204,6 @@ func (r *MonthStatsRepo) ApplyImport(_ context.Context, batch map[monthstats.Flu
 // ResetMonthly deletes all monthly data + state + summaries for a chat so
 // a clean full re-import can run (monthly is independent of membership /
 // lifetime stats, so this is safe). Backs the importer's --reset-monthly.
-func (r *MonthStatsRepo) ResetMonthly(_ context.Context, absChatID int64) error {
-	return r.db.Update(func(tx *bolt.Tx) error {
-		for _, b := range []struct {
-			bkt    []byte
-			prefix []byte
-		}{
-			{bktMonth, MonthStatsKey(absChatID, "", 0)[:len(MonthStatsKey(absChatID, "", 0))-len(":00000000000000000000")]},
-			{bktMonthIdx, MonthStatsChatIndexPrefix(absChatID)},
-			{bktMonthSummary, MonthStatsSummaryKey(absChatID, "")},
-		} {
-			c := tx.Bucket(b.bkt).Cursor()
-			for k, _ := c.Seek(b.prefix); k != nil && bytes.HasPrefix(k, b.prefix); k, _ = c.Next() {
-				if err := c.Delete(); err != nil {
-					return err
-				}
-			}
-		}
-		return tx.Bucket(bktMonthState).Delete(MonthStatsStateKey(absChatID))
-	})
-}
 
 func applyBatchTx(tx *bolt.Tx, batch map[monthstats.FlushKey]*monthstats.FlushDelta) error {
 	rows := tx.Bucket(bktMonth)

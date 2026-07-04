@@ -100,7 +100,7 @@ func StripShareTracking(rawURL string) (string, bool) {
 	// scheme) is preserved.
 	hadScheme := true
 	parseTarget := rawURL
-	if !hasScheme(rawURL) {
+	if !strings.Contains(rawURL, "://") {
 		hadScheme = false
 		parseTarget = "https://" + rawURL
 	}
@@ -136,19 +136,6 @@ func StripShareTracking(rawURL string) (string, bool) {
 // hasScheme reports whether s already starts with a URL scheme
 // ("scheme://"). We only special-case the missing-scheme path, so a
 // loose prefix check is enough; url.Parse does the real validation.
-func hasScheme(s string) bool {
-	i := strings.Index(s, "://")
-	if i <= 0 {
-		return false
-	}
-	for _, r := range s[:i] {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' ||
-			r >= '0' && r <= '9' || r == '+' || r == '-' || r == '.') {
-			return false
-		}
-	}
-	return true
-}
 
 // isYouTubeHost lower-cases host, drops any port, strips a single
 // leading "www." or "m." label, and checks the exact allowlist.
@@ -622,9 +609,3 @@ func sprintfHeader(display string) string {
 	return strings.Replace(msgYTRepostHeader, "%s", display, 1)
 }
 
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
-	}
-	return b
-}
