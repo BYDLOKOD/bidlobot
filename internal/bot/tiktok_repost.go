@@ -161,34 +161,38 @@ func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error)
 	dlCtx, cancel := context.WithTimeout(ctx, tiktokDownloadTimeout)
 	defer cancel()
 
-	// DO NOT use --print filename: on yt-dlp 2024.12.03 (Alpine package),
-	// this flag + non-TTY stderr causes yt-dlp to exit 0, print the filename,
-	// but NOT write the file. Instead we find the downloaded file by reading
-	// the workDir (created fresh per download, so it contains exactly one file).
-	cmd := exec.CommandContext(dlCtx,
-		"yt-dlp",
-		"-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
-		"--no-playlist",
-		"-o", workDir+"/video.%(ext)s",
-		dlURL,
-	)
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		cmd := exec.CommandContext(dlCtx,
+			"yt-dlp",
+			"-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+			"--no-playlist",
+			"-o", workDir+"/video.%(ext)s",
+			dlURL,
+		)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("yt-dlp failed: %w\n%s", err, string(output))
-	}
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			// Find the downloaded file in the workDir.
+			entries, rdErr := os.ReadDir(workDir)
+			if rdErr != nil {
+				return "", fmt.Errorf("reading work dir: %w", rdErr)
+			}
+			for _, e := range entries {
+				if !e.IsDir() {
+					return filepath.Join(workDir, e.Name()), nil
+				}
+			}
+			return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
+		}
 
-	// Find the downloaded file in the workDir.
-	entries, err := os.ReadDir(workDir)
-	if err != nil {
-		return "", fmt.Errorf("reading work dir: %w", err)
-	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			return filepath.Join(workDir, e.Name()), nil
+		lastErr = fmt.Errorf("yt-dlp attempt %d: %w\n%s", attempt, err, string(output))
+		if attempt < maxAttempts {
+			time.Sleep(2 * time.Second)
 		}
 	}
-	return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
+	return "", lastErr
 }
 
 // --- Middleware ----------------------------------------------------------
@@ -311,8 +315,8 @@ func processTikTok(
 	log.Info("tiktok: reposted", "chat_id", chatID, "message_id", msgID)
 }
 
-// sendDecline replies with a note and best-effort deletes the original.
-// Used when download/size-limit failures make a repost impossible.
+// sendDecline replies to the original message with a failure note.
+// The original message is NOT deleted - the user can resend the link.
 func sendDecline(
 	ctx context.Context,
 	snd youtubeMediaSender,
@@ -330,13 +334,5 @@ func sendDecline(
 	})
 	if err != nil {
 		log.Warn("tiktok: decline note send failed", "chat_id", chatID, "error", err)
-	}
-	// Best-effort delete of the original TikTok link (decline note is in reply).
-	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		MessageID: msgID,
-	}); delErr != nil {
-		log.Info("tiktok: decline note sent but original delete failed",
-			"chat_id", chatID, "message_id", msgID, "error", delErr)
 	}
 }
