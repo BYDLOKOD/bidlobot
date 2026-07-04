@@ -24,6 +24,8 @@ WORKDIR /src
 
 RUN apk add --no-cache git
 
+
+
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
@@ -45,10 +47,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -ldflags "-s -w" \
         -o /out/bidlobot-probe ./cmd/probe
 
-
 FROM alpine:${ALPINE_VERSION} AS runtime
 
-RUN apk add --no-cache ca-certificates tzdata wget tini && \
+RUN apk add --no-cache ca-certificates tzdata wget tini ffmpeg yt-dlp && \
     addgroup -S -g 65532 bidlobot && \
     adduser -S -u 65532 -G bidlobot -h /var/lib/bidlobot -s /sbin/nologin bidlobot && \
     install -d -o bidlobot -g bidlobot -m 0750 /var/lib/bidlobot && \

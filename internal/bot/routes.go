@@ -89,6 +89,10 @@ func registerRoutes(
 	// share-tracking param. nil-tolerant against a minimal test App.
 	sgGroup.Use(youtubeSanitizer(a))
 
+	// TikTok video repost: download, trim watermark end-screen, repost
+	// attributed. Same privacy gate as the YouTube sanitizer.
+	sgGroup.Use(tiktokReposter(a))
+
 	// Stats stays public: it is read-only, not chat management. Help
 	// stays public so members can discover the bot.
 	sgGroup.HandleMessage(a.gateMsg("stats", 5*time.Second, statsH.HandleStats), th.CommandEqual("stats"))
