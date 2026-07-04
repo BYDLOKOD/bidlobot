@@ -190,15 +190,6 @@ func TestDownloadTikTok(t *testing.T) {
 	//   t.Logf("downloaded to %s", path)
 }
 
-func TestTrimVideoEnd(t *testing.T) {
-	t.Skip("skipped: needs ffmpeg. Run manually as an integration test.")
-	// Manual test:
-	//   ctx := context.Background()
-	//   dir := t.TempDir()
-	//   trimmed, err := trimVideoEnd(ctx, "testdata/sample.mp4", dir, 2.0)
-	//   if err != nil { t.Logf("trim error (degradation): %v", err) }
-	//   t.Logf("trimmed: %s", trimmed)
-}
 
 // TestProcessTikTokWithSyntheticVideo verifies the full pipeline using a
 // synthetic temp file so no network/yt-dlp is needed. Asserts:

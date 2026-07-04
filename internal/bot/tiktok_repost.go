@@ -28,7 +28,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -53,8 +52,6 @@ const (
 )
 
 const (
-	// trimDefaultSec is how many seconds to crop from the video end.
-	trimDefaultSec = 2.0
 
 	// maxVideoSize is Telegram's bot upload limit for video (50 MB).
 	maxVideoSize = 50 * 1024 * 1024
@@ -194,59 +191,6 @@ func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error)
 	return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
 }
 
-// --- Video trimming ------------------------------------------------------
-
-// videoDurationSec returns the duration of a video file in seconds via ffprobe.
-func videoDurationSec(ctx context.Context, videoPath string) (float64, error) {
-	cmd := exec.CommandContext(ctx,
-		"ffprobe",
-		"-v", "error",
-		"-show_entries", "format=duration",
-		"-of", "default=noprint_wrappers=1:nokey=1",
-		videoPath,
-	)
-	out, err := cmd.Output()
-	if err != nil {
-		return 0, fmt.Errorf("ffprobe: %w", err)
-	}
-	dur, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
-	if err != nil {
-		return 0, fmt.Errorf("parsing duration %q: %w", string(out), err)
-	}
-	return dur, nil
-}
-
-// trimVideoEnd crops the last trimSeconds from videoPath, writing to a new
-// temp file. Uses ffmpeg stream copy (no re-encode). Returns the cropped
-// file path (caller must os.Remove when done). If the video is too short
-// or ffmpeg fails, returns the original path unchanged.
-func trimVideoEnd(ctx context.Context, videoPath, workDir string, trimSeconds float64) (string, error) {
-	dur, err := videoDurationSec(ctx, videoPath)
-	if err != nil {
-		return videoPath, fmt.Errorf("probing duration, keeping original: %w", err)
-	}
-	if dur <= trimSeconds+1.0 {
-		// Video too short to trim; return original.
-		return videoPath, nil
-	}
-
-	newDur := fmt.Sprintf("%.3f", dur-trimSeconds)
-	outPath := filepath.Join(workDir, "trimmed.mp4")
-
-	cmd := exec.CommandContext(ctx,
-		"ffmpeg",
-		"-y",
-		"-i", videoPath,
-		"-t", newDur,
-		"-c", "copy",
-		"-avoid_negative_ts", "make_zero",
-		outPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return videoPath, fmt.Errorf("ffmpeg trim failed, keeping original: %w\n%s", err, string(out))
-	}
-	return outPath, nil
-}
 
 // --- Middleware ----------------------------------------------------------
 
@@ -315,21 +259,11 @@ func processTikTok(
 		defer os.Remove(videoPath)
 	}
 
-	// Step 2: Trim watermark end-screen.
-	trimmedPath, trimErr := trimVideoEnd(ctx, videoPath, workDir, trimDefaultSec)
-	if trimErr != nil {
-		log.Warn("tiktok: trim failed, posting untrimmed", "chat_id", chatID, "error", trimErr)
-		// trimmedPath == videoPath on failure; continue with original.
-	}
-	if trimmedPath != videoPath {
-		defer os.Remove(trimmedPath)
-	}
-	finalPath := trimmedPath
 
-	// Step 3: Size check.
-	fi, err := os.Stat(finalPath)
+	// Step 2: Size check.
+	fi, err := os.Stat(videoPath)
 	if err != nil {
-		log.Error("tiktok: stat video", "chat_id", chatID, "path", finalPath, "error", err)
+		log.Error("tiktok: stat video", "chat_id", chatID, "path", videoPath, "error", err)
 		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
 		return
 	}
@@ -339,8 +273,8 @@ func processTikTok(
 		return
 	}
 
-	// Step 4: Open for upload.
-	file, err := os.Open(finalPath)
+	// Step 3: Open for upload.
+	file, err := os.Open(videoPath)
 	if err != nil {
 		log.Error("tiktok: opening video for upload", "chat_id", chatID, "error", err)
 		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
