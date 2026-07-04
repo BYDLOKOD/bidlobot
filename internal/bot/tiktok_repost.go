@@ -309,6 +309,8 @@ func processTikTok(
 		log.Info("tiktok: reposted but delete failed; original kept",
 			"chat_id", chatID, "message_id", msgID, "error", delErr)
 	}
+
+	log.Info("tiktok: reposted", "chat_id", chatID, "message_id", msgID)
 }
 
 // sendDecline replies with a note and best-effort deletes the original.
