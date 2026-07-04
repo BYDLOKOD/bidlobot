@@ -608,4 +608,3 @@ func sprintfHeader(display string) string {
 	// encoding.
 	return strings.Replace(msgYTRepostHeader, "%s", display, 1)
 }
-

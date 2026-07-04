@@ -191,7 +191,6 @@ func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error)
 	return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
 }
 
-
 // --- Middleware ----------------------------------------------------------
 
 // tiktokReposter is the supergroup middleware. It mirrors youtubeSanitizer
@@ -258,7 +257,6 @@ func processTikTok(
 	} else {
 		defer os.Remove(videoPath)
 	}
-
 
 	// Step 2: Size check.
 	fi, err := os.Stat(videoPath)

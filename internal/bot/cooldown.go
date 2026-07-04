@@ -1,8 +1,8 @@
 package bot
 
 import (
-	"strconv"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -82,7 +82,6 @@ func (c *cooldown) sweepLocked(now time.Time) {
 		}
 	}
 }
-
 
 // gateMsg wraps a message handler so a given user can only trigger it
 // once per `every`. Over-frequency calls are dropped silently (no

@@ -88,4 +88,3 @@ func TestCooldownGate(t *testing.T) {
 		t.Fatalf("after the interval the call must pass again, got allowed=%v notify=%v", a, n)
 	}
 }
-

@@ -30,4 +30,3 @@ func (c *fixedAdminChecker) IsAdmin(_, _ int64) (bool, error) {
 func stubAdminCache(allow bool) AdminChecker {
 	return &fixedAdminChecker{allow: allow}
 }
-

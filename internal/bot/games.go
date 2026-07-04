@@ -12,7 +12,6 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-
 // GamesRegistry bundles the per-game handlers and the inline router.
 // Any field can be nil - registration code checks before wiring.
 //
