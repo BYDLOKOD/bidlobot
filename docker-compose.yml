@@ -33,6 +33,8 @@ services:
       # Compose passes them directly to the unprivileged bot process; no
       # host credential directory is mounted into the image.
       - ./env
+    environment:
+      - DEEPSEEK_API_KEY
     volumes:
       - bidlobot-data:/var/lib/bidlobot
     # 30s = App.ShutdownTimeout (10s for handler) + 10s for in-flight
