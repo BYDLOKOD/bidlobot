@@ -10,23 +10,18 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-
-	"github.com/veschin/bidlobot/internal/domain/pending"
 )
 
-// InlineService backs HandleInlineQuery. The read-only queries (stats /
-// warns view / help) are fully pure; destructive queries (warn / mute /
-// unmute / ban / unban / cleanup) write a pending Action so that the
-// callback can later validate and execute.
+// InlineService backs HandleInlineQuery. All inline queries are read-only:
+// stats variants and help are matched explicitly; everything else falls
+// back to a prefix filter over the catalog.
 type InlineService struct {
-	pending pending.Store
-	log     *slog.Logger
-
-	// gameRouter is consulted before the moderation/cleanup branches so
-	// that mini-game commands (dice/battle/quiz) can register without
+	log *slog.Logger
+	// gameRouter is consulted before the default catalog filter so
+	// mini-game commands (dice/battle/quiz) can register without
 	// the inline package importing the games packages. Returns
 	// (results, true) when the command was handled; (nil, false) when
-	// the inline service should continue with the default switch.
+	// the inline service should continue with the default filter.
 	gameRouter InlineGameRouter
 }
 
@@ -38,8 +33,8 @@ type InlineGameRouter interface {
 	Route(cmd string, args []string, actor telego.User) (results []telego.InlineQueryResult, handled bool)
 }
 
-func NewInlineService(pendingStore pending.Store, log *slog.Logger) *InlineService {
-	return &InlineService{pending: pendingStore, log: log}
+func NewInlineService(log *slog.Logger) *InlineService {
+	return &InlineService{log: log}
 }
 
 // SetGameRouter wires a router that handles dice/battle/quiz inline
@@ -47,17 +42,13 @@ func NewInlineService(pendingStore pending.Store, log *slog.Logger) *InlineServi
 func (s *InlineService) SetGameRouter(r InlineGameRouter) { s.gameRouter = r }
 
 // inlineCommand describes one offer the bot suggests when the user types
-// "@bidlobot ..." in any chat. For read-only entries the result fires
-// a regular slash-command message in the destination chat. For
-// destructive entries the result is a preview text with two callback
-// buttons; tapping Apply confirms via the dispatcher.
+// "@bidlobot ..." in any chat. All entries are read-only and fire a
+// regular slash-command message in the destination chat.
 type inlineCommand struct {
-	id          string                       // stable identifier inside an inline-query response, <= 64 chars
-	title       string                       // shown in the inline carousel
-	description string                       // shown one line below the title
-	send        string                       // the slash-command text Telegram will insert into the chat (read-only entries only)
-	preview     string                       // the message body for destructive previews (with reply_markup)
-	keyboard    *telego.InlineKeyboardMarkup // attached to the destructive preview
+	id          string // stable identifier inside an inline-query response, <= 64 chars
+	title       string // shown in the inline carousel
+	description string // shown one line below the title
+	send        string // the slash-command text Telegram will insert into the chat
 }
 
 func catalog() []inlineCommand {
@@ -80,11 +71,6 @@ func catalog() []inlineCommand {
 			description: "Отправить /stats today",
 			send:        "/stats today",
 		},
-		// Moderation is intentionally ABSENT from the inline catalog.
-		// Inline results post publicly into the chat, so moderation can
-		// never run here - advertising warn/mute/ban/cleanup in the
-		// browsable list shows functions that cannot be done where the
-		// user is looking. Moderation lives only in the DM console.
 		{
 			id:          "dice",
 			title:       "🎲 Бросить кубик",
@@ -167,8 +153,7 @@ func catalog() []inlineCommand {
 }
 
 // BuildResults dispatches a parsed query into the inline result list.
-// Destructive commands write a pending action via s.pending; read-only
-// branches stay pure.
+// All results are read-only (stats variants, help, or catalog filter).
 func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQuery) []telego.InlineQueryResult {
 	q := strings.TrimSpace(query.Query)
 	if q == "" {
@@ -191,27 +176,9 @@ func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQue
 		return toResults(statsCommands(args))
 	case "help":
 		return toResults(helpCommands())
-	case "warn", "warns", "mute", "unmute", "ban", "unban", "cleanup":
-		// Moderation is DM-only. Inline results are posted publicly
-		// into the chat, so they can never be a private control
-		// surface - this is the architectural reason the old inline
-		// previews were removed. Point the admin to the DM console.
-		return dmRedirectInline()
 	default:
 		return toResults(filterByPrefix(catalog(), q))
 	}
-}
-
-// dmRedirectInline is the single result shown when an admin tries any
-// moderation verb via inline. Selecting it posts a short, harmless note
-// (no target, no action) and tells them to use the private console.
-func dmRedirectInline() []telego.InlineQueryResult {
-	return toResults([]inlineCommand{{
-		id:          "mod_dm_only",
-		title:       "Модерация - только в личке",
-		description: "Откройте чат со мной и отправьте /start",
-		send:        "Модерация бота доступна только в личке (так участники её не видят). Откройте личный чат со мной и отправьте /start.",
-	}})
 }
 
 // statsCommands handles only read-only /stats variants. Pure.
@@ -268,22 +235,15 @@ func filterByPrefix(items []inlineCommand, query string) []inlineCommand {
 func toResults(cmds []inlineCommand) []telego.InlineQueryResult {
 	results := make([]telego.InlineQueryResult, 0, len(cmds))
 	for _, c := range cmds {
-		text := c.send
-		if c.preview != "" {
-			text = c.preview
-		}
 		article := &telego.InlineQueryResultArticle{
 			Type:        telego.ResultTypeArticle,
 			ID:          c.id,
 			Title:       c.title,
 			Description: c.description,
 			InputMessageContent: &telego.InputTextMessageContent{
-				MessageText: text,
+				MessageText: c.send,
 				ParseMode:   telego.ModeHTML,
 			},
-		}
-		if c.keyboard != nil {
-			article.ReplyMarkup = c.keyboard
 		}
 		results = append(results, article)
 	}
@@ -314,9 +274,8 @@ func (s *InlineService) Handler() th.InlineQueryHandler {
 	}
 }
 
-// htmlEscape and formatDuration are shared rendering helpers used by the
-// callback executors (kept here after the inline destructive previews
-// were removed; they are not inline-specific).
+// htmlEscape and formatDuration are shared rendering helpers. They are
+// placed here after the destructive-inline code was removed.
 func htmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
 	return r.Replace(s)

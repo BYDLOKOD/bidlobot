@@ -160,12 +160,12 @@ func (h *DuelHandler) rollOne(ctx context.Context, msg telego.Message) (int, boo
 	})
 	if err != nil {
 		h.log.Warn("duel SendDice failed", "error", err, "chat_id", msg.Chat.ID)
-		_ = h.reply(msg, "Не удалось бросить кубик для дуэли. Повторите позже.")
+		_ = h.reply(msg, publicPureFailure())
 		return 0, false
 	}
 	if rolled == nil || rolled.Dice == nil {
 		h.log.Warn("duel SendDice returned no dice", "chat_id", msg.Chat.ID)
-		_ = h.reply(msg, "Кубик не выпал. Повторите позже.")
+		_ = h.reply(msg, publicPureFailure())
 		return 0, false
 	}
 	return rolled.Dice.Value, true

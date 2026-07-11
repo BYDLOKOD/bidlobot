@@ -100,7 +100,7 @@ func (d *CallbackDispatcher) Handle(ctx *th.Context, query telego.CallbackQuery)
 func (d *CallbackDispatcher) dispatch(ctx context.Context, query telego.CallbackQuery) callbackResponse {
 	verb, id, ok := parseCallbackData(query.Data)
 	if !ok {
-		return callbackResponse{AnswerText: "Кнопка устарела."}
+		return callbackResponse{AnswerText: publicPureFailure()}
 	}
 
 	action, err := d.pending.Get(ctx, id)

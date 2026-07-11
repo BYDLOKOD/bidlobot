@@ -154,7 +154,7 @@ func (h *TriviaHandler) handleStart(msg telego.Message) error {
 	labels, correctIdx, err := quiz.BuildTriviaOptions(idx, r)
 	if err != nil {
 		h.log.Warn("trivia BuildTriviaOptions failed", "error", err, "trivia_idx", idx)
-		return h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось подготовить вопрос. Попробуйте позже.")
+		return h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 	}
 	tr, _ := quiz.GetTrivia(idx)
 
@@ -169,7 +169,7 @@ func (h *TriviaHandler) handleStart(msg telego.Message) error {
 	})
 	if err != nil {
 		h.log.Warn("trivia send failed", "error", err, "chat_id", msg.Chat.ID)
-		_ = h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось запустить викторину. Попробуйте позже.")
+		_ = h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 		return nil
 	}
 

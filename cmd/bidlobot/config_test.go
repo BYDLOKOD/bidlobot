@@ -17,7 +17,9 @@ func TestConfig_ValidatePassesOnFullValid(t *testing.T) {
 		DBPath:     dir,
 		HealthPort: 8080,
 		LogLevel:   "info",
+		BotOwnerID: 123456789,
 	}
+
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected valid: %v", err)
 	}
@@ -30,6 +32,7 @@ func TestConfig_ValidatePassesOnDefaultPortAndLevel(t *testing.T) {
 		DBPath:     dir,
 		HealthPort: -1, // unset
 		LogLevel:   "info",
+		BotOwnerID: 123456789,
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected valid: %v", err)
@@ -43,6 +46,7 @@ func TestConfig_ValidatePassesWithDisabledHealth(t *testing.T) {
 		DBPath:     dir,
 		HealthPort: 0,
 		LogLevel:   "warn",
+		BotOwnerID: 123456789,
 	}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected valid (port=0): %v", err)
@@ -88,7 +92,7 @@ func TestConfig_RejectsBadLogLevel(t *testing.T) {
 func TestConfig_LogLevelCaseInsensitive(t *testing.T) {
 	dir := t.TempDir()
 	for _, lvl := range []string{"DEBUG", "Info", "warn", "ERROR"} {
-		c := Config{Token: validToken, DBPath: dir, HealthPort: 8080, LogLevel: lvl}
+		c := Config{Token: validToken, DBPath: dir, HealthPort: 8080, LogLevel: lvl, BotOwnerID: 123456789}
 		if err := c.Validate(); err != nil {
 			t.Errorf("level %q: %v", lvl, err)
 		}
@@ -129,7 +133,7 @@ func TestConfig_DBPathExistingFileNotDir(t *testing.T) {
 func TestConfig_DBPathDoesNotExistButParentDoes(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "newchild")
-	c := Config{Token: validToken, DBPath: target, HealthPort: 8080, LogLevel: "info"}
+	c := Config{Token: validToken, DBPath: target, HealthPort: 8080, LogLevel: "info", BotOwnerID: 123456789}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("expected validate to pass when parent is writable: %v", err)
 	}

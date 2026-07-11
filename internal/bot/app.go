@@ -37,12 +37,10 @@ type App struct {
 	pendingGC   PendingGC
 	inlineSvc   *InlineService
 	games       *GamesRegistry
-	dmConsole   *DMConsole
 	cooldown    *cooldown
 
-	// summarize is the optional GLM chat-summarization feature. nil when
-	// GLMAPIKey is unset: the bot then runs without it, the recorder
-	// is not wired, and /summarize replies "not configured" to admins.
+	// summarize is the always-on Pi/OMP summarization feature.
+	// nil only in tests that do not wire it.
 	// summarizeSender is the narrow Telegram surface the feature needs
 	// (SendMessage + EditMessageText); shared.TelegramAPI now covers both,
 	// but the narrow interface is kept so tests inject a fake without
@@ -56,6 +54,7 @@ type App struct {
 	// raw *telego.Bot because telego's long-poll + handler machinery
 	// needs the concrete type. Required NewApp parameter.
 	sender shared.TelegramAPI
+	leaver ChatLeaver
 
 	// inFlight tracks handler goroutines AND background workers (e.g.
 	// cleanup kick worker) so that Stop can wait for them within
@@ -73,7 +72,10 @@ type App struct {
 	// fires.
 	dailyCleanup  *gracekick.Service
 	dailyAtMinUTC int
-
+	// botOwnerID is the required Telegram user ID of the bot owner.
+	// Only this user may add the bot to a supergroup; non-owner adds
+	// trigger an immediate LeaveChat.
+	botOwnerID int64
 	// captchaSvc is the opt-in new-member captcha. nil (default) means
 	// the feature is off: no join messages, no buttons, no sweep.
 	captchaSvc *captcha.Service
@@ -94,6 +96,10 @@ type PendingGC interface {
 	GarbageCollect(ctx context.Context, now time.Time) (int, error)
 }
 
+type ChatLeaver interface {
+	LeaveChat(ctx context.Context, params *telego.LeaveChatParams) error
+}
+
 // NewApp wires the App. `sender` MUST be the rate-limited tgclient
 // wrapper, not the raw *telego.Bot: it carries every public-surface
 // send (help, onboarding, the moderation-redirect notice) so a busy
@@ -103,6 +109,7 @@ type PendingGC interface {
 func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, monthBuffer *monthstats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
 	return &App{
 		bot:         bot,
+		leaver:      bot,
 		sender:      sender,
 		log:         log,
 		adminCache:  adminCache,
@@ -114,6 +121,12 @@ func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminC
 		inlineSvc:   inlineSvc,
 		cooldown:    newCooldown(),
 	}
+}
+
+// SetBotOwnerID sets the Telegram user ID of the bot owner for
+// owner-only admission control. Must be called before Run.
+func (a *App) SetBotOwnerID(ownerID int64) {
+	a.botOwnerID = ownerID
 }
 
 // AttachHealth wires the /health and /version listener and the in-memory
@@ -154,14 +167,7 @@ func (a *App) AttachGames(g *GamesRegistry) {
 	}
 }
 
-// AttachDMConsole installs the private-chat moderation console. Call
-// before Run so registerRoutes wires it. Passing nil is a no-op (the
-// bot then has no private control surface).
-func (a *App) AttachDMConsole(d *DMConsole) {
-	a.dmConsole = d
-}
-
-// AttachSummarize installs the optional GLM chat-summarization feature.
+// AttachSummarize wires the Pi/OMP summarization feature.
 // Call before Run so registerRoutes wires the passive recorder and the
 // /summarize command. A nil service or sender is a no-op (feature off).
 func (a *App) AttachSummarize(svc *summarize.Service, sender summarizeSender) {
@@ -483,13 +489,29 @@ func (a *App) handleHelpSupergroup(_ *th.Context, msg telego.Message) error {
 	return err
 }
 
-const helpDM = `BidloBot - управление IT-сообществом.
+// replySummarize sends text as a reply to msg. Uses context.Background so
+// this must succeed even after the handler ctx is cancelled (the result
+// edits a placeholder). Errors are logged, never returned: the handler has
+// already committed to its reply path.
+func (a *App) replySummarize(msg *telego.Message, reply string) error {
+	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
+		ChatID:          telego.ChatID{ID: msg.Chat.ID},
+		Text:            reply,
+		ReplyParameters: &telego.ReplyParameters{MessageID: msg.MessageID},
+	})
+	if err != nil {
+		a.log.Warn("replySummarize failed", "chat_id", msg.Chat.ID, "error", err)
+	}
+	return nil
+}
 
-Добавьте меня в группу администратором (минимум: право ограничивать участников), затем отправьте /start, чтобы управлять чатом приватно.`
+const helpDM = `BidloBot - бот для IT-сообщества.
 
-const helpSupergroup = `BidloBot - статистика, мини-игры и приватная модерация.
+Добавьте меня в группу администратором, чтобы я мог
+собирать статистику, модерировать и играть.`
 
-Здесь, в чате:
+const helpSupergroup = `BidloBot - статистика, мини-игры и модерация.
+
   /stats         - обзор чата
   /stats top     - топ участников
   /stats today   - активность за день
@@ -497,6 +519,4 @@ const helpSupergroup = `BidloBot - статистика, мини-игры и п
   /battle X Y    - голосование реакциями за 60с
   /quiz          - угадай язык по сниппету
 
-Модерация и чистка неактивных - только в личке со мной
-(участники чата ничего не видят). Откройте личный чат
-со мной и отправьте /start.`
+Админы: /summarize [N] - итог последних сообщений через AI.`

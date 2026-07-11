@@ -99,7 +99,7 @@ func (h *PollHandler) HandlePoll(_ *th.Context, msg telego.Message) error {
 
 	if _, err := h.bot.SendPoll(context.Background(), params); err != nil {
 		h.log.Warn("sendPoll failed", "error", err, "chat_id", msg.Chat.ID, "quiz", parsed.isQuiz)
-		return h.reply(msg, "Не удалось создать опрос. Попробуйте позже.")
+		return h.reply(msg, publicPureFailure())
 	}
 	return nil
 }

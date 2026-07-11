@@ -254,7 +254,7 @@ func TestDiceHandlerSendDiceErrorReplies(t *testing.T) {
 	if len(bot.MessageCalls) != 1 {
 		t.Fatalf("expected fallback reply, got %d", len(bot.MessageCalls))
 	}
-	if !strings.Contains(bot.MessageCalls[0].Text, "Не удалось") {
+	if !failureCatalogContains(bot.MessageCalls[0].Text) {
 		t.Errorf("expected error reply, got %q", bot.MessageCalls[0].Text)
 	}
 }

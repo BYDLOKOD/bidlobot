@@ -6,8 +6,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/veschin/bidlobot/internal/shared/glm"
 )
 
 // ErrNoMessages means the live window is empty (fresh process / nothing
@@ -18,32 +16,24 @@ var ErrNoMessages = errors.New("summarize: no messages in window")
 // LLM call is expensive; one in-flight per chat is enough.
 var ErrBusy = errors.New("summarize: already running for this chat")
 
-// Completer is the GLM surface the service needs; satisfied by
-// *glm.Client and trivially fakeable in tests.
-type Completer interface {
-	Complete(ctx context.Context, messages []glm.Message, maxTokens int) (string, glm.Usage, error)
-}
-
-// Config tunes the orchestrator. Zero fields fall back to defaults.
 type Config struct {
 	InputBudgetTokens int           // transcript token ceiling (default below)
 	MaxOutputTokens   int           // completion cap (default below)
-	CallTimeout       time.Duration // hard ceiling per GLM call (default below)
+	CallTimeout       time.Duration // hard ceiling per provider call (default below)
 	GlobalMaxCalls    int           // process-wide cap per GlobalWindow (default below)
 	GlobalWindow      time.Duration // rolling window for GlobalMaxCalls (default below)
 	CacheTTL          time.Duration // how long a summary stays cached (default 10m)
 }
 
 const (
-	// Default kept well under GLM-5's 200K window: room for the
-	// completion plus a margin for the estimator under-counting
-	// code-dense windows (see EstimateTokens). The admin's N and the
-	// buffer cap bind long before this does.
+	// Default leaves room for the completion plus a margin for estimator
+	// under-counting of code-dense windows (see EstimateTokens). The
+	// admin's N and the buffer cap bind long before this does.
 	defaultInputBudget = 120_000
 	defaultMaxOutput   = 2048
 	defaultCallTimeout = 180 * time.Second
 
-	// Process-wide GLM-call ceiling across ALL chats and admins. The
+	// Process-wide provider-call ceiling across ALL chats and admins. The
 	// single-flight is per-chat only, so without this an admin present
 	// in many chats (or a compromised admin account) is an unbounded
 	// financial DoS on a paid API.
@@ -56,7 +46,7 @@ const (
 // placeholder/edit and maps typed errors to Russian text.
 type Service struct {
 	buf *Buffer
-	llm Completer
+	llm *PiRunner
 	log *slog.Logger
 
 	inputBudget int
@@ -64,7 +54,7 @@ type Service struct {
 	callTimeout time.Duration
 
 	// appCtx is the process lifetime context; background work derives
-	// from it so SIGTERM cancels an in-flight GLM call cleanly. wg is
+	// from it so SIGTERM cancels an in-flight call cleanly. wg is
 	// App.InFlight() so Stop() waits for that goroutine.
 	appCtx context.Context
 	wg     *sync.WaitGroup
@@ -80,8 +70,7 @@ type Service struct {
 	cache *cache
 }
 
-// NewService wires the orchestrator. buf and llm are required.
-func NewService(buf *Buffer, llm Completer, cfg Config, log *slog.Logger) *Service {
+func NewService(buf *Buffer, llm *PiRunner, cfg Config, log *slog.Logger) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -121,7 +110,7 @@ func NewService(buf *Buffer, llm Completer, cfg Config, log *slog.Logger) *Servi
 func (s *Service) SetAppContext(ctx context.Context) { s.appCtx = ctx }
 
 // AttachWaitGroup registers App.InFlight() so Stop() waits for an
-// in-flight GLM call within the shutdown budget.
+// in-flight provider call within the shutdown budget.
 func (s *Service) AttachWaitGroup(wg *sync.WaitGroup) { s.wg = wg }
 
 // OpContext derives a bounded context from the app lifetime context, so
@@ -132,7 +121,7 @@ func (s *Service) OpContext(timeout time.Duration) (context.Context, context.Can
 	return context.WithTimeout(s.appCtx, timeout)
 }
 
-// GlobalAllow enforces a process-wide ceiling on GLM calls across ALL
+// GlobalAllow enforces a process-wide ceiling on provider calls across ALL
 // chats and admins (the single-flight is per-chat only). It prunes the
 // rolling window and records the attempt when allowed; false means the
 // window is full (terminal for this invocation - the admin is told to
@@ -202,8 +191,8 @@ type Meta struct {
 
 // TryCache returns a previously cached summary for this chat/N/questions
 // combination if the underlying message window has not changed and the
-// TTL has not expired. A hit avoids the single-flight lock, the global
-// budget, and the GLM call entirely.
+// TTL has not expired. A hit avoids the single-flight lock, global budget,
+// and provider call entirely.
 func (s *Service) TryCache(absChatID int64, requested int, questions string) (string, Meta, bool) {
 	entries, _ := s.buf.Window(absChatID, requested)
 	if len(entries) == 0 {
@@ -223,12 +212,12 @@ func (s *Service) TryCache(absChatID int64, requested int, questions string) (st
 	return body, meta, ok
 }
 
-// Summarize builds the prompt from the chat's window and calls GLM. It
-// derives its own deadline from the app context so a hung provider
-// cannot outlive shutdown. Returns ErrNoMessages when the window is
-// empty, ErrBusy is enforced by the caller via TryAcquire, and the
-// glm.Err* sentinels (wrapped) on provider failures. A successful
-// result is cached for future TryCache hits.
+// Summarize builds the prompt from the chat's window and calls the Pi
+// runner. It derives its own deadline from the app context so a hung
+// process cannot outlive shutdown. Returns ErrNoMessages when the window
+// is empty, ErrBusy is enforced by the caller via TryAcquire, and
+// summarize.Err* errors on provider failures. A successful result is
+// cached for future TryCache hits.
 func (s *Service) Summarize(absChatID int64, requested int, questions string) (string, Meta, error) {
 	entries, available := s.buf.Window(absChatID, requested)
 	if len(entries) == 0 {
@@ -243,7 +232,7 @@ func (s *Service) Summarize(absChatID int64, requested int, questions string) (s
 	defer cancel()
 
 	start := time.Now()
-	text, usage, err := s.llm.Complete(ctx, built.Messages, s.maxOutput)
+	text, err := s.llm.Complete(ctx, built.SystemPrompt, built.Transcript)
 	meta := Meta{
 		Included:  built.Included,
 		Requested: built.Requested,
@@ -269,14 +258,13 @@ func (s *Service) Summarize(absChatID int64, requested int, questions string) (s
 	s.log.Info("summarize ok",
 		"abs_chat_id", absChatID, "included", built.Included,
 		"est_tokens", built.EstTokens,
-		"prompt_tokens", usage.PromptTokens, "completion_tokens", usage.CompletionTokens,
 		"elapsed_ms", time.Since(start).Milliseconds())
 	return text, meta, nil
 }
 
 // Go runs fn as a tracked background goroutine: registered in
 // App.InFlight() (so Stop waits for it) and recovered (a panic in the
-// GLM path must not take the process down). It mirrors how the cleanup
+// provider path must not take the process down). It mirrors how the cleanup
 // executor spawns its workers.
 func (s *Service) Go(fn func()) {
 	if s.wg != nil {

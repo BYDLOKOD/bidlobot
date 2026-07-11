@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"fmt"
 	"strconv"
 	"sync"
 	"time"
@@ -102,13 +101,9 @@ func (a *App) gateMsg(key string, every time.Duration, h func(*th.Context, teleg
 		// silence). Sent through the rate-limited wrapper; nil-guarded
 		// for minimal/test apps.
 		if notify && a.sender != nil {
-			secs := int(every.Seconds())
-			if secs < 1 {
-				secs = 1
-			}
 			_, _ = a.sender.SendMessage(ctx.Context(), &telego.SendMessageParams{
 				ChatID:          telego.ChatID{ID: msg.Chat.ID},
-				Text:            fmt.Sprintf("⏳ Не части - /%s доступна раз в %d c.", key, secs),
+				Text:            publicPureFailure(),
 				ReplyParameters: &telego.ReplyParameters{MessageID: msg.GetMessageID()},
 			})
 		}

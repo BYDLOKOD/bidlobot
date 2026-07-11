@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -57,8 +58,44 @@ func membershipChatMemberHandler(svc *membership.Service, adminCache *shared.Adm
 	}
 }
 
+// msgOnboardingAdmin is the public message posted when the bot is
+// promoted to administrator. It tells members what commands are available.
+const msgOnboardingAdmin = "<b>BidloBot</b> подключён.\n\n" +
+	"Статистика и игры: /stats, /dice, /quiz.\n" +
+	"Администраторам: /summarize - итог чата через AI."
+
 func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.Logger) th.ChatMemberUpdatedHandler {
 	return func(ctx *th.Context, cmu telego.ChatMemberUpdated) error {
+		// Owner-only admission check: must happen before any
+		// RecordMyChatMember, onboarding, or public send.
+		switch EvaluateMyChatMemberAdmission(cmu, app.botOwnerID) {
+		case AdmissionReject:
+			bgCtx := context.Background()
+			leaveErr := app.leaver.LeaveChat(bgCtx, &telego.LeaveChatParams{
+				ChatID: telego.ChatID{ID: cmu.Chat.ID},
+			})
+			log.Warn("non-owner add rejected",
+				"chat_id", cmu.Chat.ID,
+				"actor_id", cmu.From.ID,
+				"leave_error", leaveErr,
+			)
+			if leaveErr == nil {
+				_, err := app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
+					ChatID: telego.ChatID{ID: app.botOwnerID},
+					Text:   fmt.Sprintf("Unauthorized bot admission rejected for chat %d.", cmu.Chat.ID),
+				})
+				if err != nil {
+					log.Warn("owner admission notice failed", "error", err)
+				}
+			}
+			return nil
+		case AdmissionIgnore:
+			// Not an add transition or not a supergroup;
+			// proceed with normal membership tracking.
+		case AdmissionAdmit:
+			// Owner add: proceed with onboarding below.
+		}
+
 		if err := svc.RecordMyChatMember(ctx.Context(), cmu); err != nil {
 			log.Error("membership.RecordMyChatMember", "error", err, "chat_id", cmu.Chat.ID)
 		}
@@ -78,11 +115,7 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 		switch newStatus {
 		case "administrator":
 			app.adminCache.Invalidate(storage.AbsChatID(cmu.Chat.ID))
-			// One-time discoverability cue. Without this the bot joins
-			// a 200-person chat silently and nobody knows it exists or
-			// that management happens privately. Single concise public
-			// message - not moderation, so it does not break the
-			// "no public management" principle.
+			// One-time discoverability cue.
 			oldStatus := cmu.OldChatMember.MemberStatus()
 			if oldStatus != "administrator" {
 				_, _ = app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
@@ -99,4 +132,48 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 		}
 		return nil
 	}
+}
+
+// AdmissionDecision classifies a my_chat_member update for owner-only admission.
+type AdmissionDecision int
+
+const (
+	// AdmissionIgnore means the update is not a supergroup add transition;
+	// the handler should process it normally (promotion, demotion, etc.).
+	AdmissionIgnore AdmissionDecision = iota
+
+	// AdmissionAdmit means the owner added the bot; proceed to onboarding.
+	AdmissionAdmit
+
+	// AdmissionReject means a non-owner added the bot; leave silently.
+	AdmissionReject
+)
+
+// EvaluateMyChatMemberAdmission determines whether a my_chat_member update
+// should be admitted (owner added the bot), rejected (non-owner added it,
+// should leave silently), or ignored (not an add transition or not a
+// supergroup). This is a pure, wireable decision - the caller is
+// responsible for executing LeaveChat, RecordMyChatMember, onboarding
+// sends, and the owner DM notification.
+func EvaluateMyChatMemberAdmission(cmu telego.ChatMemberUpdated, ownerID int64) AdmissionDecision {
+	if cmu.Chat.Type != telego.ChatTypeSupergroup {
+		return AdmissionIgnore
+	}
+
+	oldStatus := cmu.OldChatMember.MemberStatus()
+	newStatus := cmu.NewChatMember.MemberStatus()
+
+	// An add transition: the bot went from left/kicked to member/administrator.
+	isAdd := (oldStatus == telego.MemberStatusLeft || oldStatus == telego.MemberStatusBanned) &&
+		(newStatus == telego.MemberStatusMember || newStatus == telego.MemberStatusAdministrator)
+
+	if !isAdd {
+		return AdmissionIgnore
+	}
+
+	if cmu.From.ID == ownerID {
+		return AdmissionAdmit
+	}
+
+	return AdmissionReject
 }

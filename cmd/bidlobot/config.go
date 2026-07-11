@@ -34,13 +34,19 @@ type Config struct {
 	CleanupGrace      time.Duration
 	CleanupDailyBatch int // max members tagged per chat per daily run
 
-	// Optional GLM (Zhipu bigmodel.cn) summarization. Empty GLMAPIKey
-	// disables the feature entirely; the bot still starts. BaseURL/Model
-	// are overrides - empty means the glm package default
-	// (open.bigmodel.cn / glm-5).
-	GLMAPIKey  string
-	GLMBaseURL string
-	GLMModel   string
+	// Chat summarization via Pi/OMP with DeepSeek V4 Flash. The Pi
+	// binary must be on $PATH and the model selector is fully qualified.
+	// PIBinary defaults to "omp"; PIModel defaults to
+	// "deepseek/deepseek-v4-flash". The bot always starts with summarization
+	// enabled (the Pi binary is validated at startup); no API keys are
+	// accepted from BidloBot config - the Pi CLI carries its own credential.
+	PIBinary string
+	PIModel  string
+
+	// Required: the Telegram user id of the bot owner. Only this user may
+	// add the bot to a supergroup; any non-owner add triggers an immediate
+	// LeaveChat. Must be a positive int64. Zero rejects all admission.
+	BotOwnerID int64
 
 	// Captcha for new chat members (opt-in). When CaptchaEnabled is false
 	// (the default) the bot runs exactly as before - no join messages, no
@@ -75,14 +81,25 @@ func loadConfig() Config {
 		CleanupGrace:      grace,
 		CleanupDailyBatch: envInt("CLEANUP_DAILY_BATCH", 15),
 
-		GLMAPIKey:  strings.TrimSpace(os.Getenv("GLM_API_KEY")),
-		GLMBaseURL: strings.TrimSpace(os.Getenv("GLM_BASE_URL")),
-		GLMModel:   strings.TrimSpace(os.Getenv("GLM_MODEL")),
+		PIBinary: envOr("PI_BINARY", "omp"),
+		PIModel:  envOr("PI_MODEL", "deepseek/deepseek-v4-flash"),
+
+		BotOwnerID: parseOwnerID(os.Getenv("BOT_OWNER_ID")),
 
 		CaptchaEnabled:    envBool("CAPTCHA_ENABLED", false),
 		CaptchaTimeoutRaw: captchaTimeoutRaw,
 		CaptchaTimeout:    captchaTimeout,
 	}
+}
+
+// parseOwnerID parses BOT_OWNER_ID as an int64. A non-positive or
+// unparseable value returns 0 so Validate can flag it uniformly.
+func parseOwnerID(raw string) int64 {
+	v, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || v <= 0 {
+		return 0
+	}
+	return v
 }
 
 // parseHHMM turns "HH:MM" (24h, UTC) into minutes past midnight, or -1
@@ -207,6 +224,10 @@ func (c Config) Validate() error {
 		case c.CaptchaTimeout < time.Minute || c.CaptchaTimeout > 30*time.Minute:
 			errs = append(errs, fmt.Errorf("CAPTCHA_TIMEOUT: must be 1m..30m, got %q", c.CaptchaTimeoutRaw))
 		}
+	}
+
+	if c.BotOwnerID <= 0 {
+		errs = append(errs, errors.New("BOT_OWNER_ID is required: positive int64 Telegram user ID"))
 	}
 
 	if len(errs) == 0 {

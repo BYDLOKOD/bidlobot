@@ -31,4 +31,7 @@ type Store interface {
 	Get(ctx context.Context, userID, absChatID int64) (*Stats, error)
 	ListByChat(ctx context.Context, absChatID int64) ([]Stats, error)
 	Flush(ctx context.Context, batch map[FlushKey]*FlushDelta) error
+	FlushAtomic(ctx context.Context, lifetime map[FlushKey]*FlushDelta, daily map[string]map[FlushKey]*FlushDelta) error
+	GetDaily(ctx context.Context, absChatID int64, day string) (map[int64]*Stats, error)
+	FlushDaily(ctx context.Context, batch map[FlushKey]*FlushDelta, day string) error
 }

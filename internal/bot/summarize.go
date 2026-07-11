@@ -12,19 +12,18 @@ import (
 
 	"github.com/veschin/bidlobot/internal/domain/summarize"
 	"github.com/veschin/bidlobot/internal/shared"
-	"github.com/veschin/bidlobot/internal/shared/glm"
 	"github.com/veschin/bidlobot/internal/storage"
 	"github.com/veschin/bidlobot/internal/text"
 )
 
 const (
 	// summarizeCooldown gates a single admin from re-firing an expensive
-	// GLM call; over-frequency calls are dropped silently by gateMsg (a
+	// Pi call; over-frequency calls are dropped silently by gateMsg (a
 	// "wait" reply would itself be public spam).
-	summarizeCooldown  = 90 * time.Second
 	summarizeDefaultN  = 200
 	summarizeMaxN      = 4000 // also bounded by the buffer's per-chat cap
 	summarizeBodyLimit = 3500 // runes; leaves headroom under Telegram's 4096
+	summarizeCooldown  = 30 * time.Second
 
 	// Placeholder send / result edit run on a context derived from the
 	// app lifetime (not context.Background), so shutdown cancels them
@@ -76,7 +75,7 @@ func summarizeRecorder(svc *summarize.Service) th.Handler {
 // handleSummarize is the public in-chat /summarize [N] entry point.
 // Authorization is the project standard (AdminCache: getChatAdministrators
 // + 60s TTL, re-checked every call). It returns fast: the multi-minute
-// GLM call runs in a tracked background goroutine that edits a
+// Pi call runs in a tracked background goroutine that edits a
 // placeholder message in place, so the chat carries one artifact, never
 // two, and the handler never holds a telego worker for minutes.
 func (a *App) handleSummarize(_ *th.Context, msg telego.Message) error {
@@ -173,17 +172,11 @@ func composeSummaryMessage(body string, meta summarize.Meta, requester string, s
 		switch {
 		case errors.Is(serr, summarize.ErrNoMessages):
 			return text.MsgSummarizeEmpty
-		case errors.Is(serr, glm.ErrAuth):
-			return text.ErrSummarizeAuth
-		case errors.Is(serr, glm.ErrQuota):
-			return text.ErrSummarizeQuota
-		case errors.Is(serr, glm.ErrRateLimited):
-			return text.ErrSummarizeRateLimited
-		case errors.Is(serr, glm.ErrContextTooLong):
-			return text.ErrSummarizeTooLong
-		case errors.Is(serr, glm.ErrTimeout):
+		case errors.Is(serr, summarize.ErrProviderFailure):
+			return text.ErrSummarizeProvider
+		case errors.Is(serr, summarize.ErrTimeout):
 			return text.ErrSummarizeTimeout
-		default: // glm.ErrProvider, glm.ErrEmpty, anything unexpected
+		default:
 			return text.ErrSummarizeProvider
 		}
 	}
@@ -216,19 +209,11 @@ func defuseMentions(s string) string {
 // external-AI provenance explicitly: chat members must be able to see
 // that recent messages were sent to an external model.
 func summarizeFooter(meta summarize.Meta, requester string) string {
-	from := meta.From.Format("15:04")
-	to := meta.To.Format("15:04")
+	loc := time.FixedZone("MSK", 3*60*60)
+	from := meta.From.In(loc).Format("15:04")
+	to := meta.To.In(loc).Format("15:04")
 	return "итог " + strconv.Itoa(meta.Included) + " сообщений (" + from + "-" + to +
-		" UTC), сгенерировано внешним AI (GLM) по запросу @" + requester
-}
-
-func (a *App) replySummarize(msg *telego.Message, body string) error {
-	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID:          telego.ChatID{ID: msg.Chat.ID},
-		Text:            body,
-		ReplyParameters: &telego.ReplyParameters{MessageID: msg.MessageID},
-	})
-	return err
+		" МСК), сгенерировано DeepSeek V4 Flash via Pi по запросу @" + requester
 }
 
 type summarizeArgs struct {

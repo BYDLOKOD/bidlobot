@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	bktMonth        = []byte("stats_month")
-	bktMonthIdx     = []byte("stats_month_idx")
-	bktMonthState   = []byte("stats_month_state")
-	bktMonthSummary = []byte("stats_month_summary")
+	bktMonth            = []byte("stats_month")
+	bktMonthIdx         = []byte("stats_month_idx")
+	bktMonthState       = []byte("stats_month_state")
+	bktMonthSummary     = []byte("stats_month_summary")
+	bktMonthImportedIDs = []byte("stats_month_imported_ids")
 )
 
 // MonthStatsRepo is the bbolt implementation of monthstats.Store. It
@@ -116,10 +117,11 @@ func (r *MonthStatsRepo) PutState(_ context.Context, st *monthstats.MonthState) 
 	})
 }
 
-// SetLiveTrackStart sets LiveTrackStart only when currently zero, inside
-// one txn that preserves all other fields - so it composes correctly
-// with ApplyImport (each writer touches a disjoint subset under its own
-// transaction; neither clobbers the other).
+// SetLiveTrackStart sets LiveTrackStart to the MINIMUM observed timestamp
+// so far - a re-import (crash + retry) with an earlier start never misses
+// messages. Inside one txn that preserves all other fields, so it composes
+// correctly with ApplyImport (each writer touches a disjoint subset under
+// its own transaction; neither clobbers the other).
 func (r *MonthStatsRepo) SetLiveTrackStart(_ context.Context, absChatID int64, ts time.Time) error {
 	return r.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bktMonthState)
@@ -130,11 +132,12 @@ func (r *MonthStatsRepo) SetLiveTrackStart(_ context.Context, absChatID int64, t
 				return err
 			}
 		}
-		if !st.LiveTrackStart.IsZero() {
-			return nil // already set; never overwrite
+		if !st.LiveTrackStart.IsZero() && !ts.Before(st.LiveTrackStart) {
+			// Existing is earlier or same - no update needed
+			return nil
 		}
 		st.AbsChatID = absChatID
-		st.LiveTrackStart = ts
+		st.LiveTrackStart = ts // either sets first time or updates to an earlier timestamp
 		st.UpdatedAt = time.Now().UTC()
 		data, err := json.Marshal(&st)
 		if err != nil {
@@ -169,6 +172,33 @@ func (r *MonthStatsRepo) PutSummary(_ context.Context, s *monthstats.MonthSummar
 	})
 }
 
+// durably recorded in the imported-ID index for this chat.
+func (r *MonthStatsRepo) GetImportedIDs(_ context.Context, absChatID int64) (map[int64]struct{}, error) {
+	ids := make(map[int64]struct{})
+	err := r.db.View(func(tx *bolt.Tx) error {
+		bkt := tx.Bucket(bktMonthImportedIDs)
+		if bkt == nil {
+			return nil
+		}
+		prefix := MonthStatsImportedIDPrefix(absChatID)
+		c := bkt.Cursor()
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			// key shape: mii:absChatID:messageID
+			parts := bytes.SplitN(k, []byte(":"), 3)
+			if len(parts) < 3 {
+				continue
+			}
+			id := parseID(parts[2])
+			ids[id] = struct{}{}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
 // Flush applies the batch additively in one transaction. Counters are
 // summed; the MonthMeta longest message is a max-reduction (additive-safe
 // across flushes); the month index key is ensured for every touched
@@ -185,15 +215,49 @@ func (r *MonthStatsRepo) Flush(_ context.Context, batch map[monthstats.FlushKey]
 // ApplyImport applies the additive batch AND writes the advanced
 // MonthState in ONE transaction. This atomic pairing is what makes the
 // additive monthly counters idempotent: a crash leaves NEITHER applied,
-// so a retry re-skips correctly by the unchanged watermark. An empty
-// batch still writes the state (a fully-deduped re-import must still
-// advance the watermark / UpdatedAt).
-func (r *MonthStatsRepo) ApplyImport(_ context.Context, batch map[monthstats.FlushKey]*monthstats.FlushDelta, state *monthstats.MonthState) error {
+// so a retry re-skips correctly by the unchanged watermark.
+//
+// acceptedIDs is the set of Telegram message IDs the importer accepted
+// (already HWM-deduped). These are stored in a per-chat index to provide
+// store-level dedup: if ALL IDs are already in the index, the batch is
+// skipped (the importer is retrying an already-applied import). New IDs
+// are inserted into the index before the batch is applied.
+func (r *MonthStatsRepo) ApplyImport(_ context.Context, batch map[monthstats.FlushKey]*monthstats.FlushDelta, state *monthstats.MonthState, acceptedIDs []int64) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
 	return r.db.Update(func(tx *bolt.Tx) error {
+		idBkt, err := tx.CreateBucketIfNotExists(bktMonthImportedIDs)
+		if err != nil {
+			return err
+		}
+
+		if len(acceptedIDs) > 0 {
+			// Check if ALL IDs are already imported (fully idempotent retry)
+			allDupes := true
+			for _, id := range acceptedIDs {
+				if idBkt.Get(MonthStatsImportedIDKey(state.AbsChatID, id)) == nil {
+					allDupes = false
+					break
+				}
+			}
+			if allDupes {
+				// All IDs already imported - skip batch, still write state if updated
+				return tx.Bucket(bktMonthState).Put(MonthStatsStateKey(state.AbsChatID), data)
+			}
+
+			// Some or all IDs are new: insert all accepted IDs into the index
+			// and apply the batch (importer guarantees batch matches IDs)
+			for _, id := range acceptedIDs {
+				if idBkt.Get(MonthStatsImportedIDKey(state.AbsChatID, id)) == nil {
+					if err := idBkt.Put(MonthStatsImportedIDKey(state.AbsChatID, id), nil); err != nil {
+						return err
+					}
+				}
+			}
+		}
+
 		if err := applyBatchTx(tx, batch); err != nil {
 			return err
 		}

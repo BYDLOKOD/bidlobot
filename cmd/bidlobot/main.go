@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,6 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/domain/summarize"
 	"github.com/veschin/bidlobot/internal/shared"
-	"github.com/veschin/bidlobot/internal/shared/glm"
 	"github.com/veschin/bidlobot/internal/shared/ratelimit"
 	"github.com/veschin/bidlobot/internal/shared/retry"
 	"github.com/veschin/bidlobot/internal/shared/tgclient"
@@ -140,7 +140,7 @@ func main() {
 	modSvc := moderation.NewService(warnRepo, tgClient, adminCache, log)
 
 	dispatcher := bot.NewCallbackDispatcher(pendingRepo, adminCache, tgBot, log)
-	inlineSvc := bot.NewInlineService(pendingRepo, log)
+	inlineSvc := bot.NewInlineService(log)
 
 	modExecutor := bot.NewModerationExecutor(modSvc, memberRepo, adminCache, log)
 	modExecutor.RegisterAll(dispatcher)
@@ -154,38 +154,28 @@ func main() {
 	// public callback - the old immediate-kick CleanupExecutor was
 	// removed (the owner's model is the daily public grace lifecycle).
 	cleanupSvc := cleanup.NewService(memberRepo, tgClient, log)
-
-	// Optional chat summarization via GLM (Zhipu bigmodel.cn). Disabled
-	// when GLM_API_KEY is unset: the bot starts normally without it. The
-	// key lives only in the process env (.env is gitignored); it is
-	// never logged here or by the glm package.
-	var summarizeSvc *summarize.Service
-	if cfg.GLMAPIKey != "" {
-		glmClient, gerr := glm.New(glm.Config{
-			APIKey:  cfg.GLMAPIKey,
-			BaseURL: cfg.GLMBaseURL,
-			Model:   cfg.GLMModel,
-			Logger:  log,
-		})
-		if gerr != nil {
-			log.Error("init glm client", "error", gerr)
-			os.Exit(1)
-		}
-		summarizeSvc = summarize.NewService(
-			summarize.NewBuffer(summarize.BufferConfig{}),
-			glmClient,
-			summarize.Config{},
-			log,
-		)
-		log.Info("chat summarization enabled", "model", glmClient.Model())
-	} else {
-		log.Info("chat summarization disabled (GLM_API_KEY unset)")
+	// Chat summarization via Pi/OMP (always on). Validates the binary at
+	// startup; a missing or non-executable binary fails fast.
+	piBinary := cfg.PIBinary
+	piModel := cfg.PIModel
+	pi := summarize.NewPiRunner(piBinary, piModel)
+	summarizeSvc := summarize.NewService(
+		summarize.NewBuffer(summarize.BufferConfig{}),
+		pi,
+		summarize.Config{},
+		log,
+	)
+	// Validate Pi binary is executable before wiring into the bot.
+	if _, err := exec.LookPath(piBinary); err != nil {
+		log.Error("Pi binary unavailable")
+		os.Exit(1)
 	}
-
+	log.Info("chat summarization enabled")
 	// tgClient (rate-limited + retried) is the public-surface sender:
-	// help, onboarding, the moderation-redirect notice - same budget as
-	// games/stats so a busy chat stays inside Telegram's 20 msg/min/chat.
+	// help, onboarding - same budget as games/stats so a busy chat stays
+	// inside Telegram's 20 msg/min/chat.
 	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, monthBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
+	app.SetBotOwnerID(cfg.BotOwnerID)
 	if err := app.AttachHealth(
 		// dbOpen probes bbolt with a no-op view txn. Path() returning a
 		// non-empty string is a tautology (it's set at open time and
@@ -214,28 +204,13 @@ func main() {
 	// inline router and slash handlers; AttachGames installs them on App.
 	app.AttachGames(buildGames(db, tgClient, botInfo.Username, log))
 
-	// DM moderation console - the only private control surface. Uses
-	// the same domain services as the (now removed) public moderation
-	// handlers; only the surface changes.
-	dmSessionRepo := storage.NewDMSessionRepo(db)
-	dmImportStateRepo := storage.NewImportStateRepo(db)
-	dmConsole := bot.NewDMConsole(
-		tgBot, dmSessionRepo, memberRepo, adminCache,
-		modSvc, cleanupSvc, statsSvc, monthSvc, pendingRepo,
-		dmImportStateRepo, bot.NewImportRuns(), tgBot, memberRepo, monthRepo,
-		log,
-	)
-	app.AttachDMConsole(dmConsole)
-	if summarizeSvc != nil {
-		app.AttachSummarize(summarizeSvc, tgClient)
-	}
+	// Summarization via Pi/OMP. Always-on; validated binary at startup.
+	app.AttachSummarize(summarizeSvc, tgClient)
 
-	// Inactive-cleanup campaign. Started per-chat by the DM `/cleanup`
-	// command (which seeds it with the proven-stale, evidence-graded
-	// list - never the no-evidence bucket); the daily scheduler then
-	// drives the public tag -> grace -> kick lifecycle until the seeded
-	// list is exhausted. Always wired: it does nothing until an admin
-	// runs `/cleanup`. cleanupSvc is the ban+unban kicker.
+	// Inactive-cleanup campaign. Command-driven: nothing happens until
+	// an admin runs `/cleanup`. The daily scheduler then drives the
+	// public tag -> grace -> kick lifecycle. cleanupSvc is the ban+unban
+	// kicker.
 	gkRepo := storage.NewGraceKickRepo(db)
 	gkSvc := gracekick.NewService(
 		gkRepo, cleanupSvc, memberRepo, tgClient,
@@ -245,7 +220,6 @@ func main() {
 		},
 		log,
 	)
-	dmConsole.SetGraceKick(gkSvc)
 	app.AttachDailyCleanup(gkSvc, cfg.CleanupDailyAtMin)
 	log.Info("inactive-cleanup campaign wired (command-driven)",
 		"daily_at_utc", cfg.CleanupDailyAtRaw,
@@ -265,13 +239,8 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// DM console workers must abort with the app, not orphan after Stop().
-	dmConsole.SetAppContext(ctx)
-	dmConsole.AttachWaitGroup(app.InFlight())
-	if summarizeSvc != nil {
-		summarizeSvc.SetAppContext(ctx)
-		summarizeSvc.AttachWaitGroup(app.InFlight())
-	}
+	summarizeSvc.SetAppContext(ctx)
+	summarizeSvc.AttachWaitGroup(app.InFlight())
 
 	go func() {
 		if err := app.Run(ctx, statsHandler); err != nil {

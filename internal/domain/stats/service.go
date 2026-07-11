@@ -9,7 +9,6 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
-
 type Service struct {
 	buffer  *Buffer
 	store   Store
@@ -137,7 +136,7 @@ func (s *Service) Today(ctx context.Context, absChatID int64) (string, error) {
 	totalMsgs, activeUsers := s.buffer.GetTodayByChat(ctx, absChatID)
 
 	output := fmt.Sprintf(
-		"<b>Статистика за сегодня</b>\n"+
+		"<b>Статистика за сегодня (МСК)</b>\n"+
 			"Сообщений: %s\n"+
 			"Активных участников: %s",
 		shared.FormatNumber(totalMsgs),

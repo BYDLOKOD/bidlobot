@@ -226,7 +226,7 @@ func TestDuelHandlerSendDiceErrorAborts(t *testing.T) {
 	if sender.msgCount() != 1 {
 		t.Fatalf("expected exactly 1 failure notice, got %d", sender.msgCount())
 	}
-	if !strings.Contains(sender.lastMsg(), "Не удалось бросить") {
+	if !failureCatalogContains(sender.lastMsg()) {
 		t.Errorf("expected dice-failure notice, got %q", sender.lastMsg())
 	}
 }

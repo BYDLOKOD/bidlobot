@@ -48,12 +48,12 @@ func TestBuildPrompt_AllFitChronological(t *testing.T) {
 	if !res.From.Equal(entries[0].TS) || !res.To.Equal(entries[4].TS) {
 		t.Fatalf("From/To = %v/%v, want %v/%v", res.From, res.To, entries[0].TS, entries[4].TS)
 	}
-	if len(res.Messages) != 2 || res.Messages[0].Role != "system" || res.Messages[1].Role != "user" {
-		t.Fatalf("messages shape wrong: %+v", res.Messages)
+	if res.SystemPrompt == "" {
+		t.Fatalf("system prompt empty")
 	}
-	// Oldest line first.
-	if !strings.HasPrefix(res.Messages[1].Content, "user [") {
-		t.Fatalf("transcript should start with the oldest line: %q", res.Messages[1].Content[:20])
+	// Transcript: oldest line first.
+	if !strings.HasPrefix(res.Transcript, "user [") {
+		t.Fatalf("transcript should start with the oldest line: %q", res.Transcript[:20])
 	}
 }
 
@@ -79,7 +79,7 @@ func TestBuildPrompt_SingleOversizedMessageKept(t *testing.T) {
 	if !ok || res.Included != 1 {
 		t.Fatalf("included = %d ok=%v, want exactly the newest 1", res.Included, ok)
 	}
-	if res.Messages[1].Content == "" {
+	if res.Transcript == "" {
 		t.Fatalf("transcript empty for oversized single message")
 	}
 }
@@ -90,7 +90,7 @@ func TestBuildPrompt_QuestionsAppended(t *testing.T) {
 	if !ok {
 		t.Fatalf("ok=false with questions")
 	}
-	body := res.Messages[1].Content
+	body := res.Transcript
 	if !strings.Contains(body, "---") {
 		t.Fatalf("questions separator not found in transcript")
 	}
@@ -105,7 +105,7 @@ func TestBuildPrompt_EmptyQuestionsNoSeparator(t *testing.T) {
 	if !ok {
 		t.Fatalf("ok=false")
 	}
-	if strings.Contains(res.Messages[1].Content, "---") {
+	if strings.Contains(res.Transcript, "---") {
 		t.Fatalf("empty questions must not add separator")
 	}
 }
@@ -116,7 +116,7 @@ func TestBuildPrompt_TopicAttributionInSystemPrompt(t *testing.T) {
 	if !ok {
 		t.Fatalf("ok=false")
 	}
-	sys := res.Messages[0].Content
+	sys := res.SystemPrompt
 	if !strings.Contains(sys, "key participants") {
 		t.Fatalf("system prompt must instruct topic attribution with participants")
 	}

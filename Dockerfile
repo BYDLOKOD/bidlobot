@@ -16,7 +16,7 @@
 # is enough to rotate snapshots without a sidecar.
 
 ARG GO_VERSION=1.26-alpine
-ARG ALPINE_VERSION=3.20
+ARG RUNTIME_VERSION=bookworm-slim
 
 FROM golang:${GO_VERSION} AS build
 
@@ -47,17 +47,20 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -ldflags "-s -w" \
         -o /out/bidlobot-probe ./cmd/probe
 
-FROM alpine:${ALPINE_VERSION} AS runtime
+FROM debian:${RUNTIME_VERSION} AS runtime
 
-RUN apk add --no-cache ca-certificates tzdata wget tini ffmpeg yt-dlp && \
-    addgroup -S -g 65532 bidlobot && \
-    adduser -S -u 65532 -G bidlobot -h /var/lib/bidlobot -s /sbin/nologin bidlobot && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends bash ca-certificates curl ffmpeg tini tzdata unzip wget yt-dlp && \
+    rm -rf /var/lib/apt/lists/* && \
+    export BUN_INSTALL=/opt/bun && \
+    export PATH="$BUN_INSTALL/bin:$PATH" && \
+    curl -fsSL https://bun.sh/install | bash -s -- bun-v1.3.14 && \
+    bun install -g @oh-my-pi/pi-coding-agent@16.3.6 && \
+    omp --version && \
+    groupadd --system --gid 65532 bidlobot && \
+    useradd --system --uid 65532 --gid bidlobot --home-dir /var/lib/bidlobot --shell /usr/sbin/nologin bidlobot && \
     install -d -o bidlobot -g bidlobot -m 0750 /var/lib/bidlobot && \
     install -d -o bidlobot -g bidlobot -m 0750 /var/lib/bidlobot/backups && \
-    # Marker file forces Docker to copy the image-baked ownership of
-    # /var/lib/bidlobot into a fresh named volume on first start.
-    # Without this, an empty named volume defaults to root:root 0755
-    # and the unprivileged bidlobot user fails on first bbolt.Open.
     install -o bidlobot -g bidlobot -m 0640 /dev/null /var/lib/bidlobot/.keep
 
 COPY --from=build /out/bidlobot         /usr/local/bin/bidlobot
@@ -67,7 +70,9 @@ COPY --from=build /out/bidlobot-probe   /usr/local/bin/bidlobot-probe
 USER bidlobot:bidlobot
 WORKDIR /var/lib/bidlobot
 
-ENV DB_PATH=/var/lib/bidlobot \
+ENV BUN_INSTALL=/opt/bun \
+    PATH=/opt/bun/bin:${PATH} \
+    DB_PATH=/var/lib/bidlobot \
     HEALTH_PORT=8080 \
     LOG_LEVEL=info
 

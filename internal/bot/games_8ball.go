@@ -174,3 +174,70 @@ func (h *EightBallHandler) reply(msg telego.Message, body string) error {
 	}
 	return err
 }
+
+// ClassifyQuestion returns "closed" for non-empty questions containing a
+// standalone Russian word "ли", the phrase "да или нет", or any known
+// closed-question cue word. All other non-empty questions return "open".
+// Does not implement person_judgment; that is the role of
+// ClassifyQuestionWithVocabulary.
+func ClassifyQuestion(question string) string {
+	return classifyQuestion(question)
+}
+
+// classifyQuestion is the shared core that ClassifyQuestion and
+// ClassifyQuestionWithVocabulary both use.
+func classifyQuestion(q string) string {
+	q = strings.ToLower(strings.TrimSpace(q))
+	if q == "" {
+		return "open"
+	}
+
+	// Standalone word "ли" - the defining Russian closed-question particle.
+	for _, word := range strings.Fields(q) {
+		word = strings.Trim(word, ".,!?;:\"'()[]{}<>-")
+		if word == "ли" {
+			return "closed"
+		}
+	}
+
+	// The exact phrase "да или нет".
+	if strings.Contains(q, "да или нет") {
+		return "closed"
+	}
+
+	// Closed-question cue words.
+	cues := []string{"можно", "нужно", "надо", "стоит", "будет",
+		"получится", "смогу", "сможет", "успею", "успеет", "есть", "правда"}
+	for _, word := range strings.Fields(q) {
+		word = strings.Trim(word, ".,!?;:\"'()[]{}<>-")
+		for _, cue := range cues {
+			if word == cue {
+				return "closed"
+			}
+		}
+	}
+
+	return "open"
+}
+
+// ClassifyQuestionWithVocabulary extends ClassifyQuestion with an injected
+// derogatory-label vocabulary for person_judgment. When the question contains
+// any supplied label, it returns "person_judgment" before checking closed/open
+// cues. The vocabulary is caller-supplied; no approved Russian labels exist
+// in this function.
+func ClassifyQuestionWithVocabulary(question string, labels []string) string {
+	q := strings.ToLower(strings.TrimSpace(question))
+	for _, label := range labels {
+		if strings.Contains(q, strings.ToLower(label)) {
+			return "person_judgment"
+		}
+	}
+	return classifyQuestion(q)
+}
+
+// RenderClosedAnswer composes a closed verdict line and a caller-supplied
+// tail into the exact two-line format. It owns no public literal pool and
+// does not validate or select the verdict - that is the caller's responsibility.
+func RenderClosedAnswer(verdict, tail string) string {
+	return "\U0001F3B1 " + verdict + "\n" + tail
+}

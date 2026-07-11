@@ -82,7 +82,7 @@ func (h *QuizHandler) handleStart(msg telego.Message) error {
 	options, correctIdx, err := quiz.BuildOptions(snippetIdx, r)
 	if err != nil {
 		h.log.Warn("quiz BuildOptions failed", "error", err, "snippet_idx", snippetIdx)
-		return h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось подготовить квиз. Попробуйте позже.")
+		return h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 	}
 	snippet, _ := quiz.GetSnippet(snippetIdx)
 
@@ -97,7 +97,7 @@ func (h *QuizHandler) handleStart(msg telego.Message) error {
 	})
 	if err != nil {
 		h.log.Warn("quiz send failed", "error", err, "chat_id", msg.Chat.ID)
-		_ = h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось запустить квиз. Попробуйте позже.")
+		_ = h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 		return nil
 	}
 

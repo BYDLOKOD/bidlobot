@@ -316,7 +316,7 @@ func TestPollSendPollErrorReplies(t *testing.T) {
 	if err := h.HandlePoll(nil, newPollMsg("/poll Q? | A | B")); err != nil {
 		t.Fatalf("handler should swallow send error after replying: %v", err)
 	}
-	if len(bot.Sent) != 1 || !strings.Contains(bot.Sent[0].Text, "Не удалось") {
+	if len(bot.Sent) != 1 || !failureCatalogContains(bot.Sent[0].Text) {
 		t.Errorf("expected failure reply, got %v", sentTexts(bot))
 	}
 }

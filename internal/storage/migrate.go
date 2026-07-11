@@ -10,6 +10,7 @@ import (
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 )
 
@@ -17,15 +18,20 @@ import (
 // are best-effort: a partial migration still updates the report so the
 // caller can decide whether to retry the operation.
 type MigrationReport struct {
-	OldAbsChatID int64
-	NewAbsChatID int64
-	StatsRekeyed int
-	StatsIndexes int
-	Members      int
-	MemberIndex  int
-	Chats        int
-	Warnings     int
-	WarnIndexes  int
+	OldAbsChatID      int64
+	NewAbsChatID      int64
+	StatsRekeyed      int
+	StatsIndexes      int
+	Members           int
+	MemberIndex       int
+	Chats             int
+	Warnings          int
+	WarnIndexes       int
+	MonthStatsRekeyed int
+	MonthStateMoved   int
+	MonthSummaryMoved int
+	MonthImportedIDs  int
+	DailyStatsRekeyed int
 }
 
 // MigrateChatID rewrites every record keyed by oldAbs to be keyed by
@@ -58,6 +64,21 @@ func MigrateChatID(_ context.Context, db *bolt.DB, oldAbs, newAbs int64) (*Migra
 		}
 		if err := migrateWarnings(tx, oldAbs, newAbs, report); err != nil {
 			return fmt.Errorf("warnings: %w", err)
+		}
+		if err := migrateMonthStats(tx, oldAbs, newAbs, report); err != nil {
+			return fmt.Errorf("monthstats: %w", err)
+		}
+		if err := migrateMonthState(tx, oldAbs, newAbs); err != nil {
+			return fmt.Errorf("monthstate: %w", err)
+		}
+		if err := migrateMonthSummary(tx, oldAbs, newAbs); err != nil {
+			return fmt.Errorf("monthsummary: %w", err)
+		}
+		if err := migrateMonthImportedIDs(tx, oldAbs, newAbs); err != nil {
+			return fmt.Errorf("monthimportedids: %w", err)
+		}
+		if err := migrateDailyStats(tx, oldAbs, newAbs); err != nil {
+			return fmt.Errorf("dailystats: %w", err)
 		}
 		return nil
 	})
@@ -277,6 +298,229 @@ func migrateWarnings(tx *bolt.Tx, oldAbs, newAbs int64, report *MigrationReport)
 		}
 		report.Warnings++
 		report.WarnIndexes++
+	}
+	return nil
+}
+
+// migrateMonthStats rewrites the stats_month bucket. Months are discovered
+// via the month index (stats_month_idx). Each row's AbsChatID in the JSON
+// value is updated. No index update needed since the index key also
+// embeds the old chat id - the old index keys remain as stale orphans
+// (they are value-less tombstones, harmless).
+func migrateMonthStats(tx *bolt.Tx, oldAbs, newAbs int64, report *MigrationReport) error {
+	monthBkt := tx.Bucket(bktMonth)
+	idxBkt := tx.Bucket(bktMonthIdx)
+	if monthBkt == nil || idxBkt == nil {
+		return nil // nothing to migrate
+	}
+
+	// Walk the month index to discover which months this chat has data for.
+	prefix := MonthStatsChatIndexPrefix(oldAbs)
+	var months []string
+	{
+		c := idxBkt.Cursor()
+		for k, _ := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, _ = c.Next() {
+			// key shape: msi:absChatID:YYYY-MM
+			parts := bytes.SplitN(k, []byte(":"), 3)
+			if len(parts) < 3 {
+				continue
+			}
+			months = append(months, string(parts[2]))
+		}
+	}
+
+	for _, month := range months {
+		monthPrefix := MonthStatsMonthPrefix(oldAbs, month)
+		c := monthBkt.Cursor()
+		for k, v := c.Seek(monthPrefix); k != nil && bytes.HasPrefix(k, monthPrefix); k, v = c.Next() {
+			// key shape: ms:absChatID:YYYY-MM:userID
+			// Replace oldAbs with newAbs in the key.
+			parts := bytes.SplitN(k, []byte(":"), 4)
+			if len(parts) < 4 {
+				continue
+			}
+			newKey := []byte(fmt.Sprintf("ms:%020d:%s:%s", newAbs, parts[2], parts[3]))
+
+			// Classify by key: userID == MetaUserID (zero) is MonthMeta,
+			// any other value is MonthUserStat.
+			userID := parseID(parts[3])
+			if userID == monthstats.MetaUserID {
+				var meta monthstats.MonthMeta
+				if err := json.Unmarshal(v, &meta); err != nil {
+					return fmt.Errorf("decode monthmeta row %s: %w", k, err)
+				}
+				meta.AbsChatID = newAbs
+				updated, err := json.Marshal(&meta)
+				if err != nil {
+					return fmt.Errorf("encode monthmeta row %s: %w", k, err)
+				}
+				if err := monthBkt.Put(newKey, updated); err != nil {
+					return err
+				}
+			} else {
+				var us monthstats.MonthUserStat
+				if err := json.Unmarshal(v, &us); err != nil {
+					return fmt.Errorf("decode monthuserstat row %s: %w", k, err)
+				}
+				us.AbsChatID = newAbs
+				updated, err := json.Marshal(&us)
+				if err != nil {
+					return fmt.Errorf("encode monthuserstat row %s: %w", k, err)
+				}
+				if err := monthBkt.Put(newKey, updated); err != nil {
+					return err
+				}
+			}
+			if err := monthBkt.Delete(k); err != nil {
+				return err
+			}
+			report.MonthStatsRekeyed++
+		}
+
+		// Rewrite the index key too.
+		oldIdxKey := MonthStatsChatIndex(oldAbs, month)
+		newIdxKey := MonthStatsChatIndex(newAbs, month)
+		if idxBkt.Get(oldIdxKey) != nil {
+			if err := idxBkt.Put(newIdxKey, nil); err != nil {
+				return err
+			}
+			if err := idxBkt.Delete(oldIdxKey); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// migrateMonthState rewrites the stats_month_state singleton.
+func migrateMonthState(tx *bolt.Tx, oldAbs, newAbs int64) error {
+	bkt := tx.Bucket(bktMonthState)
+	if bkt == nil {
+		return nil
+	}
+
+	oldKey := MonthStatsStateKey(oldAbs)
+	data := bkt.Get(oldKey)
+	if data == nil {
+		return nil
+	}
+
+	var st monthstats.MonthState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return fmt.Errorf("decode monthstate: %w", err)
+	}
+	st.AbsChatID = newAbs
+	updated, err := json.Marshal(&st)
+	if err != nil {
+		return fmt.Errorf("encode monthstate: %w", err)
+	}
+	if err := bkt.Put(MonthStatsStateKey(newAbs), updated); err != nil {
+		return err
+	}
+	if err := bkt.Delete(oldKey); err != nil {
+		return err
+	}
+	return nil
+}
+
+// migrateMonthSummary rewrites the stats_month_summary bucket.
+// The key format is msum:absChatID:YYYY-MM.
+func migrateMonthSummary(tx *bolt.Tx, oldAbs, newAbs int64) error {
+	bkt := tx.Bucket(bktMonthSummary)
+	if bkt == nil {
+		return nil
+	}
+
+	oldPrefix := []byte(fmt.Sprintf("msum:%020d:", oldAbs))
+	c := bkt.Cursor()
+	for k, v := c.Seek(oldPrefix); k != nil && bytes.HasPrefix(k, oldPrefix); k, v = c.Next() {
+		// key shape: msum:absChatID:YYYY-MM
+		parts := bytes.SplitN(k, []byte(":"), 3)
+		if len(parts) < 3 {
+			continue
+		}
+		newKey := []byte(fmt.Sprintf("msum:%020d:%s", newAbs, parts[2]))
+
+		var s monthstats.MonthSummary
+		if err := json.Unmarshal(v, &s); err != nil {
+			return fmt.Errorf("decode monthsummary %s: %w", k, err)
+		}
+		s.AbsChatID = newAbs
+		updated, err := json.Marshal(&s)
+		if err != nil {
+			return fmt.Errorf("encode monthsummary %s: %w", k, err)
+		}
+		if err := bkt.Put(newKey, updated); err != nil {
+			return err
+		}
+		if err := bkt.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateMonthImportedIDs rewrites the stats_month_imported_ids bucket.
+// The key format is mii:absChatID:messageID (value-less).
+func migrateMonthImportedIDs(tx *bolt.Tx, oldAbs, newAbs int64) error {
+	bkt := tx.Bucket(bktMonthImportedIDs)
+	if bkt == nil {
+		return nil
+	}
+
+	oldPrefix := MonthStatsImportedIDPrefix(oldAbs)
+	c := bkt.Cursor()
+	for k, _ := c.Seek(oldPrefix); k != nil && bytes.HasPrefix(k, oldPrefix); k, _ = c.Next() {
+		// key shape: mii:absChatID:messageID
+		parts := bytes.SplitN(k, []byte(":"), 3)
+		if len(parts) < 3 {
+			continue
+		}
+		newKey := []byte(fmt.Sprintf("mii:%020d:%s", newAbs, parts[2]))
+		if err := bkt.Put(newKey, nil); err != nil {
+			return err
+		}
+		if err := bkt.Delete(k); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// migrateDailyStats rewrites the stats_daily bucket.
+// The key format is sd:absChatID:YYYY-MM-DD:userID.
+func migrateDailyStats(tx *bolt.Tx, oldAbs, newAbs int64) error {
+	bkt := tx.Bucket(bktStatsDaily)
+	if bkt == nil {
+		return nil
+	}
+
+	oldPrefix := StatsDailyChatPrefix(oldAbs)
+	c := bkt.Cursor()
+	for k, v := c.Seek(oldPrefix); k != nil && bytes.HasPrefix(k, oldPrefix); k, v = c.Next() {
+		// key shape: sd:absChatID:YYYY-MM-DD:userID
+		parts := bytes.SplitN(k, []byte(":"), 4)
+		if len(parts) < 4 {
+			continue
+		}
+		newKey := []byte(fmt.Sprintf("sd:%020d:%s:%s", newAbs, parts[2], parts[3]))
+
+		// Update the ChatID field in the value.
+		var s stats.Stats
+		if err := json.Unmarshal(v, &s); err != nil {
+			return fmt.Errorf("decode dailystats row %s: %w", k, err)
+		}
+		s.ChatID = newAbs
+		updated, err := json.Marshal(&s)
+		if err != nil {
+			return fmt.Errorf("encode dailystats row %s: %w", k, err)
+		}
+		if err := bkt.Put(newKey, updated); err != nil {
+			return err
+		}
+		if err := bkt.Delete(k); err != nil {
+			return err
+		}
 	}
 	return nil
 }

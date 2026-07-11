@@ -36,22 +36,6 @@ func privatePredicate() th.Predicate {
 	}
 }
 
-// dmCallbackPredicate matches callback queries from a private chat
-// whose data is in the DM-console namespace. Keeps DM callbacks off the
-// public dispatcher and vice versa.
-func dmCallbackPredicate() th.Predicate {
-	return func(_ context.Context, update telego.Update) bool {
-		cb := update.CallbackQuery
-		if cb == nil || cb.Message == nil {
-			return false
-		}
-		if cb.Message.GetChat().Type != telego.ChatTypePrivate {
-			return false
-		}
-		return strings.HasPrefix(cb.Data, dmCBNamespace)
-	}
-}
-
 // captchaCallbackPredicate matches a supergroup callback whose data is in
 // the captcha namespace ("cap:"). Registered BEFORE the catch-all "v1:"
 // dispatcher so a new member's answer button is never swallowed by the

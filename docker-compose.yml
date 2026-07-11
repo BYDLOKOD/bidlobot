@@ -29,9 +29,9 @@ services:
     container_name: bidlobot
     restart: unless-stopped
     env_file:
-      # On the deployment host this file lives at /etc/bidlobot/env
-      # mode 0640, owned root:bidlobot. Compose bind-mounts it via the
-      # path resolved relative to docker-compose.yml.
+      # The deployment env file carries Telegram and Pi provider variables.
+      # Compose passes them directly to the unprivileged bot process; no
+      # host credential directory is mounted into the image.
       - ./env
     volumes:
       - bidlobot-data:/var/lib/bidlobot

@@ -70,7 +70,7 @@ func (h *DiceHandler) HandleDice(_ *th.Context, msg telego.Message) error {
 	})
 	if err != nil {
 		h.log.Warn("sendDice failed", "error", err, "chat_id", msg.Chat.ID)
-		return h.replyText(msg, "Не удалось бросить кубик. Повторите позже.")
+		return h.replyText(msg, publicPureFailure())
 	}
 	if rolled == nil || rolled.Dice == nil {
 		h.log.Warn("sendDice returned no dice", "chat_id", msg.Chat.ID)

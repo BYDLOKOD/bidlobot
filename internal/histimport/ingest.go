@@ -27,7 +27,8 @@ type MembershipStore interface {
 // membership-only import.
 type MonthlyStore interface {
 	GetState(ctx context.Context, absChatID int64) (*monthstats.MonthState, error)
-	ApplyImport(ctx context.Context, batch map[monthstats.FlushKey]*monthstats.FlushDelta, state *monthstats.MonthState) error
+	GetImportedIDs(ctx context.Context, absChatID int64) (map[int64]struct{}, error)
+	ApplyImport(ctx context.Context, batch map[monthstats.FlushKey]*monthstats.FlushDelta, state *monthstats.MonthState, acceptedIDs []int64) error
 }
 
 // Result is the ingest outcome, used by both report renderers.
@@ -47,18 +48,21 @@ type Result struct {
 // live produce identical aggregates.
 type monthlySink struct {
 	absChatID   int64
-	hwm         int64
+	importedIDs map[int64]struct{}
 	liveStart   time.Time
 	batch       map[monthstats.FlushKey]*monthstats.FlushDelta
 	accepted    int64
+	acceptedIDs []int64
 	deduped     int64
 	skippedLive int64
 }
 
 func (s *monthlySink) OnMessage(ev MessageEvent) error {
-	if ev.MessageID > 0 && ev.MessageID <= s.hwm {
-		s.deduped++
-		return nil
+	if ev.MessageID > 0 {
+		if _, ok := s.importedIDs[ev.MessageID]; ok {
+			s.deduped++
+			return nil
+		}
 	}
 	// LiveTrackStart skip applies ONLY when set: a chat with no live
 	// tracking yet (e.g. the bot not added) must import everything, else
@@ -101,6 +105,9 @@ func (s *monthlySink) OnMessage(ev MessageEvent) error {
 		me.LongestFull = sm.ExcerptFull
 	}
 	s.accepted++
+	if ev.MessageID > 0 {
+		s.acceptedIDs = append(s.acceptedIDs, ev.MessageID)
+	}
 	return nil
 }
 
@@ -122,11 +129,18 @@ func Ingest(ctx context.Context, r io.Reader, absChatID int64, mem MembershipSto
 			st = &monthstats.MonthState{AbsChatID: absChatID}
 		}
 		state = st
+		ids, err := mon.GetImportedIDs(ctx, absChatID)
+		if err != nil {
+			return nil, fmt.Errorf("load imported ids: %w", err)
+		}
+		if ids == nil {
+			ids = make(map[int64]struct{})
+		}
 		sink = &monthlySink{
-			absChatID: absChatID,
-			hwm:       st.ImportHWM,
-			liveStart: st.LiveTrackStart,
-			batch:     make(map[monthstats.FlushKey]*monthstats.FlushDelta),
+			absChatID:   absChatID,
+			importedIDs: ids,
+			liveStart:   st.LiveTrackStart,
+			batch:       make(map[monthstats.FlushKey]*monthstats.FlushDelta),
 		}
 	}
 
@@ -209,7 +223,7 @@ func Ingest(ctx context.Context, r io.Reader, absChatID int64, mem MembershipSto
 		ns.UpdatedAt = time.Now().UTC()
 		res.NewWatermark = ns.ImportHWM
 
-		if err := mon.ApplyImport(ctx, sink.batch, &ns); err != nil {
+		if err := mon.ApplyImport(ctx, sink.batch, &ns, sink.acceptedIDs); err != nil {
 			return nil, fmt.Errorf("apply monthly import: %w", err)
 		}
 	}

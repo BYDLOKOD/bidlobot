@@ -28,13 +28,13 @@ const (
 	// posted publicly and the model is untrusted, so no message on this
 	// path ever carries a ParseMode.
 	ErrSummarizeAnon          = "Суммаризация недоступна в анонимном режиме. Отключите 'Remain Anonymous' и повторите."
-	MsgSummarizeNotConfigured = "Суммаризация не настроена: у бота нет ключа GLM."
+	MsgSummarizeNotConfigured = "Суммаризация не настроена: бот не смог запустить Pi."
 	MsgSummarizeBusy          = "Уже собираю итог для этого чата - дождитесь результата."
 	MsgSummarizeEmpty         = "Пока нечего суммировать: бот слушает чат только с момента запуска, накопленных сообщений нет."
-	MsgSummarizeWorking       = "Собираю последние сообщения и суммирую через GLM - это может занять до ~2 минут..."
-	ErrSummarizeAuth          = "Суммаризация недоступна: ключ GLM отклонён провайдером."
-	ErrSummarizeQuota         = "Суммаризация недоступна: на аккаунте GLM нет средств. Пополните баланс у провайдера."
-	ErrSummarizeRateLimited   = "GLM сейчас перегружен. Попробуйте позже."
+	MsgSummarizeWorking       = "Собираю последние сообщения и суммирую - это может занять до ~2 минут..."
+	ErrSummarizeAuth          = "Суммаризация недоступна: ключ провайдера отклонён."
+	ErrSummarizeQuota         = "Суммаризация недоступна: на аккаунте провайдера нет средств."
+	ErrSummarizeRateLimited   = "Провайдер сейчас перегружен. Попробуйте позже."
 	ErrSummarizeTooLong       = "Слишком много текста для одной суммаризации. Укажите меньшее N."
 	ErrSummarizeTimeout       = "Не успел суммировать за отведённое время. Попробуйте меньшее N."
 	ErrSummarizeProvider      = "Временная ошибка суммаризации. Попробуйте позже."

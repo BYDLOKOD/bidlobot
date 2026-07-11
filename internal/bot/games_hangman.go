@@ -68,7 +68,7 @@ func (h *HangmanHandler) HandleHangman(_ *th.Context, msg telego.Message) error 
 		return h.reply(msg, fmt.Sprintf("Букву «%s» уже называли. Попробуйте другую.", strings.ToUpper(letter)))
 	default:
 		h.log.Warn("hangman Guess failed", "error", err, "chat_id", absChatID)
-		return h.reply(msg, "Не удалось обработать букву. Попробуйте ещё раз.")
+		return h.reply(msg, publicPureFailure())
 	}
 
 	display := shared.UserDisplay(msg.From.Username, msg.From.FirstName)
@@ -93,7 +93,7 @@ func (h *HangmanHandler) startOrStatus(ctx context.Context, msg telego.Message, 
 	out, err := h.svc.Start(ctx, absChatID, now)
 	if err != nil {
 		h.log.Warn("hangman Start failed", "error", err, "chat_id", absChatID)
-		return h.reply(msg, "Не удалось запустить игру. Попробуйте позже.")
+		return h.reply(msg, publicPureFailure())
 	}
 	if !out.Started {
 		// Round already running: show the current board.

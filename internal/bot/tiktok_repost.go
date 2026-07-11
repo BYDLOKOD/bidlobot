@@ -254,7 +254,7 @@ func processTikTok(
 		videoPath, dlErr = downloadTikTok(ctx, tiktokURL, workDir)
 		if dlErr != nil {
 			log.Warn("tiktok: download failed", "chat_id", chatID, "url", tiktokURL, "error", dlErr)
-			sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
+			sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure())
 			return
 		}
 		defer os.Remove(videoPath)
@@ -266,12 +266,12 @@ func processTikTok(
 	fi, err := os.Stat(videoPath)
 	if err != nil {
 		log.Error("tiktok: stat video", "chat_id", chatID, "path", videoPath, "error", err)
-		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
+		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure())
 		return
 	}
 	if fi.Size() > maxVideoSize {
 		log.Info("tiktok: video too large", "chat_id", chatID, "size", fi.Size())
-		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokSizeLimit)
+		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure())
 		return
 	}
 
@@ -279,7 +279,7 @@ func processTikTok(
 	file, err := os.Open(videoPath)
 	if err != nil {
 		log.Error("tiktok: opening video for upload", "chat_id", chatID, "error", err)
-		sendDecline(ctx, snd, log, chatID, msgID, msgTikTokDownloadFail)
+		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure())
 		return
 	}
 	defer file.Close()
@@ -300,6 +300,7 @@ func processTikTok(
 	})
 	if sendErr != nil {
 		log.Warn("tiktok: repost failed; leaving original intact", "chat_id", chatID, "error", sendErr)
+		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure())
 		return
 	}
 

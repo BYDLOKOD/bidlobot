@@ -4,15 +4,12 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/veschin/bidlobot/internal/shared/glm"
 )
 
-// EstimateTokens is a rough rune-based estimate of the GLM token count
+// EstimateTokens is a rough rune-based estimate of provider token count
 // for s: ~1 token per 2 runes.
 //
-// GLM's tokenizer has no maintained Go port. The load-bearing point is
-// that this counts RUNES, not bytes: an English byte-length chars/4
+// The important point is that this counts RUNES, not bytes: an English
 // heuristic would wildly mis-budget Russian (Cyrillic is 2 bytes/rune
 // and tokenizes denser than English). rune/2 is in the ballpark for
 // Russian prose but is NOT a guaranteed upper bound - code blocks, long
@@ -56,16 +53,17 @@ Summarize only what is actually in the transcript. Do not invent participants, f
 
 // BuildResult is what the prompt builder hands the orchestrator.
 type BuildResult struct {
-	Messages  []glm.Message
-	Included  int       // messages that fit the input budget
-	Requested int       // messages the admin asked for (after clamp)
-	Available int       // messages currently in the live window
-	From      time.Time // ts of the oldest included message
-	To        time.Time // ts of the newest included message
-	EstTokens int       // estimated input tokens of the transcript
+	SystemPrompt string    // the system instruction
+	Transcript   string    // the assembled transcript text
+	Included     int       // messages that fit the input budget
+	Requested    int       // messages the admin asked for (after clamp)
+	Available    int       // messages currently in the live window
+	From         time.Time // ts of the oldest included message
+	To           time.Time // ts of the newest included message
+	EstTokens    int       // estimated input tokens of the transcript
 }
 
-// BuildPrompt assembles the GLM messages from a chat window.
+// BuildPrompt assembles a system instruction and transcript from a chat window.
 //
 // It walks newest -> oldest, accumulating an estimated token budget, and
 // stops before the first message that would exceed budgetTokens. The
@@ -113,16 +111,14 @@ func BuildPrompt(entries []Entry, requested, available, budgetTokens int, questi
 	}
 
 	return BuildResult{
-		Messages: []glm.Message{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: sb.String()},
-		},
-		Included:  len(kept),
-		Requested: requested,
-		Available: available,
-		From:      kept[0].TS,
-		To:        kept[len(kept)-1].TS,
-		EstTokens: used,
+		SystemPrompt: systemPrompt,
+		Transcript:   sb.String(),
+		Included:     len(kept),
+		Requested:    requested,
+		Available:    available,
+		From:         kept[0].TS,
+		To:           kept[len(kept)-1].TS,
+		EstTokens:    used,
 	}, true
 }
 

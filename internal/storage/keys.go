@@ -42,14 +42,6 @@ func ChatKey(absChatID int64) []byte {
 	return []byte(fmt.Sprintf("c:%020d", absChatID))
 }
 
-// DMSessionKey maps an admin's private-chat user id to their selected
-// target chat. One session per admin: managing two chats means
-// re-selecting, which keeps "which chat am I about to act in"
-// unambiguous.
-func DMSessionKey(adminUserID int64) []byte {
-	return []byte(fmt.Sprintf("dm:%020d", adminUserID))
-}
-
 // --- Monthly statistics (Workstream A) ---
 //
 // Month is a fixed 7-char "YYYY-MM" which is already lexicographically
@@ -93,12 +85,15 @@ func MonthStatsSummaryKey(absChatID int64, month string) []byte {
 	return []byte(fmt.Sprintf("msum:%020d:%s", absChatID, month))
 }
 
-// ImportStateKey maps an admin's private-chat user id to a short-lived
-// "awaiting an export file" state (Workstream B). Separate from
-// DMSessionKey: the chat-selection session and the import-awaiting state
-// have unrelated lifecycles and TTLs.
-func ImportStateKey(adminUserID int64) []byte {
-	return []byte(fmt.Sprintf("imp:%020d", adminUserID))
+// MonthStatsImportedIDKey is a value-less key recording that a specific
+// (chat, messageID) was already imported, for per-message-ID dedup.
+func MonthStatsImportedIDKey(absChatID int64, messageID int64) []byte {
+	return []byte(fmt.Sprintf("mii:%020d:%020d", absChatID, messageID))
+}
+
+// MonthStatsImportedIDPrefix scans all imported IDs for a given chat.
+func MonthStatsImportedIDPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("mii:%020d:", absChatID))
 }
 
 // GraceKickKey is one open grace ticket for (chat, user). The chat id
@@ -139,4 +134,19 @@ func parseID(b []byte) int64 {
 		}
 	}
 	return n
+}
+
+// StatsDailyKey is the per-(chat, day, user) daily aggregate. Day is "YYYY-MM-DD" in Moscow time.
+func StatsDailyKey(absChatID int64, day string, userID int64) []byte {
+	return []byte(fmt.Sprintf("sd:%020d:%s:%020d", absChatID, day, userID))
+}
+
+// StatsDailyPrefix scans one (chat, day) for all users.
+func StatsDailyPrefix(absChatID int64, day string) []byte {
+	return []byte(fmt.Sprintf("sd:%020d:%s:", absChatID, day))
+}
+
+// StatsDailyChatPrefix scans all days of one chat in stats_daily.
+func StatsDailyChatPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("sd:%020d:", absChatID))
 }

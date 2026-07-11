@@ -90,7 +90,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 	id, err := h.nextID()
 	if err != nil {
 		h.log.Warn("battle id generation failed", "error", err)
-		return h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось запустить баттл. Попробуйте ещё раз.")
+		return h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 	}
 
 	absChatID := storage.AbsChatID(msg.Chat.ID)
@@ -113,7 +113,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 	}); sendErr != nil {
 		h.registry.Remove(id)
 		h.log.Warn("battle header send failed", "error", sendErr, "chat_id", msg.Chat.ID)
-		_ = h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось запустить баттл. Попробуйте ещё раз.")
+		_ = h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 		return nil
 	}
 
@@ -125,7 +125,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 	if err != nil {
 		h.registry.Remove(id)
 		h.log.Warn("battle left side send failed", "error", err, "chat_id", msg.Chat.ID)
-		_ = h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось запустить баттл. Попробуйте ещё раз.")
+		_ = h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 		return nil
 	}
 
@@ -137,7 +137,7 @@ func (h *BattleHandler) HandleBattle(_ *th.Context, msg telego.Message) error {
 	if err != nil {
 		h.registry.Remove(id)
 		h.log.Warn("battle right side send failed", "error", err, "chat_id", msg.Chat.ID)
-		_ = h.replyText(msg.Chat.ID, msg.MessageID, "Не удалось запустить баттл. Попробуйте ещё раз.")
+		_ = h.replyText(msg.Chat.ID, msg.MessageID, publicPureFailure())
 		return nil
 	}
 

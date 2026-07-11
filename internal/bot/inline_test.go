@@ -9,7 +9,7 @@ import (
 )
 
 func newSvcForTest() *InlineService {
-	return NewInlineService(newFakePending(), testLogger())
+	return NewInlineService(testLogger())
 }
 
 func sendTexts(results []telego.InlineQueryResult) []string {
@@ -109,22 +109,6 @@ func TestInlineStatsByUsername(t *testing.T) {
 	}
 }
 
-func TestInlineWarnsRedirectsToDM(t *testing.T) {
-	svc := newSvcForTest()
-	results := runQuery(svc, "warns @bob")
-	if len(results) != 1 {
-		t.Fatalf("expected single redirect result, got %d", len(results))
-	}
-	article, _ := results[0].(*telego.InlineQueryResultArticle)
-	if article.ReplyMarkup != nil {
-		t.Fatal("redirect result must not carry any action keyboard")
-	}
-	body := strings.ToLower(article.InputMessageContent.(*telego.InputTextMessageContent).MessageText)
-	if !strings.Contains(body, "личк") {
-		t.Fatalf("redirect must point to DM, got %q", body)
-	}
-}
-
 func TestInlineHelpReturnsHelp(t *testing.T) {
 	svc := newSvcForTest()
 	sends := sendTexts(runQuery(svc, "help"))
@@ -158,7 +142,7 @@ func TestInlineUnknownQueryFallsBackToFullCatalog(t *testing.T) {
 
 func TestInlineResultsHaveStableIDs(t *testing.T) {
 	svc := newSvcForTest()
-	for _, q := range []string{"", "stats", "stats top", "warns @bob", "help"} {
+	for _, q := range []string{"", "stats", "stats top", "help"} {
 		for _, r := range runQuery(svc, q) {
 			article, _ := r.(*telego.InlineQueryResultArticle)
 			if article.ID == "" {
@@ -173,7 +157,7 @@ func TestInlineResultsHaveStableIDs(t *testing.T) {
 
 func TestInlineResultsAreArticleType(t *testing.T) {
 	svc := newSvcForTest()
-	for _, q := range []string{"", "stats", "stats top", "warns @bob", "help"} {
+	for _, q := range []string{"", "stats", "stats top", "help"} {
 		for _, r := range runQuery(svc, q) {
 			article, ok := r.(*telego.InlineQueryResultArticle)
 			if !ok {
@@ -182,36 +166,6 @@ func TestInlineResultsAreArticleType(t *testing.T) {
 			if article.Type != telego.ResultTypeArticle {
 				t.Fatalf("query %q: expected Type=article", q)
 			}
-		}
-	}
-}
-
-// Moderation verbs are DM-only now. Every one must return a single
-// redirect result, carry no action keyboard, and create NO pending
-// action - inline can never be a private control surface.
-func TestInlineModerationVerbsRedirectToDMAndCreateNoPending(t *testing.T) {
-	for _, q := range []string{
-		"warn @bob spam", "warns @bob", "mute @bob 30m",
-		"unmute @bob", "ban @bob trolling", "unban @bob",
-		"cleanup 6mo", "cleanup",
-	} {
-		store := newFakePending()
-		svc := NewInlineService(store, testLogger())
-		results := svc.BuildResults(context.Background(), telego.InlineQuery{
-			Query: q, From: telego.User{ID: 100},
-		})
-		if len(results) != 1 {
-			t.Fatalf("%q: expected 1 redirect result, got %d", q, len(results))
-		}
-		article, _ := results[0].(*telego.InlineQueryResultArticle)
-		if article.ReplyMarkup != nil {
-			t.Fatalf("%q: redirect must not carry a confirm keyboard", q)
-		}
-		store.mu.Lock()
-		n := len(store.data)
-		store.mu.Unlock()
-		if n != 0 {
-			t.Fatalf("%q: no pending action may be created from inline, got %d", q, n)
 		}
 	}
 }

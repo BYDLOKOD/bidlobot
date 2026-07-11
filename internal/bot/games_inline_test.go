@@ -107,8 +107,7 @@ func TestGamesRouterUnknownCommandFallsThrough(t *testing.T) {
 }
 
 func TestInlineServiceConsultsGameRouter(t *testing.T) {
-	store := newFakePending()
-	svc := NewInlineService(store, testLogger())
+	svc := NewInlineService(testLogger())
 	svc.SetGameRouter(NewGamesInlineRouter())
 
 	results := runQuery(svc, "dice")

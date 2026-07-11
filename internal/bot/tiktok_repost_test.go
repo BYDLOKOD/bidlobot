@@ -278,8 +278,8 @@ func TestProcessTikTokVideoTooLarge(t *testing.T) {
 	if len(snd.Messages) != 1 {
 		t.Fatalf("expected 1 SendMessage (decline), got %d", len(snd.Messages))
 	}
-	if snd.Messages[0].Text != msgTikTokSizeLimit {
-		t.Errorf("decline text = %q, want %q", snd.Messages[0].Text, msgTikTokSizeLimit)
+	if !failureCatalogContains(snd.Messages[0].Text) {
+		t.Errorf("decline text must be from FailureCatalog; got %q", snd.Messages[0].Text)
 	}
 }
 

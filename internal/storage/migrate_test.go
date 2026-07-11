@@ -10,6 +10,7 @@ import (
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
+	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -291,5 +292,82 @@ func TestMigrateChatID_PreservesChatInstalledAt(t *testing.T) {
 	}
 	if !got.InstalledAt.Equal(installedAt) {
 		t.Errorf("InstalledAt not preserved: want %v, got %v", installedAt, got.InstalledAt)
+	}
+}
+
+// TestMigrateChatID_PreservesMonthStats verifies that monthly statistics
+// (MonthMeta + per-user MonthUserStat) survive a chat-ID migration with
+// their counters and types intact.
+func TestMigrateChatID_PreservesMonthStats(t *testing.T) {
+	store := newMigrationStore(t)
+	ctx := context.Background()
+	const oldAbs int64 = 1234567890
+	const newAbs int64 = 9876543210
+	month := "2026-06"
+	now := time.Now().UTC()
+
+	mon := storage.NewMonthStatsRepo(store.DB())
+
+	// Seed one month: a meta row (userID 0) and a per-user row.
+	if err := mon.Flush(ctx, map[monthstats.FlushKey]*monthstats.FlushDelta{
+		{AbsChatID: oldAbs, Month: month, UserID: monthstats.MetaUserID}: {
+			MsgDelta: 5, RuneDelta: 200,
+			LongestRunes: 60, LongestUserID: 100,
+		},
+		{AbsChatID: oldAbs, Month: month, UserID: 100}: {
+			MsgDelta: 5, RuneDelta: 200, Code: 2, Mention: 1,
+			FirstSeen: now,
+		},
+	}); err != nil {
+		t.Fatalf("seed monthstats: %v", err)
+	}
+
+	// Migrate.
+	if _, err := storage.MigrateChatID(ctx, store.DB(), oldAbs, newAbs); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// Verify data survived at the new ID.
+	meta, users, err := mon.GetMonth(ctx, newAbs, month)
+	if err != nil {
+		t.Fatalf("GetMonth at newAbs: %v", err)
+	}
+	if meta == nil {
+		t.Fatal("MonthMeta is nil after migration")
+	}
+	if meta.TotalMsgs != 5 || meta.TotalRunes != 200 {
+		t.Fatalf("MonthMeta counters: msgs=%d runes=%d, want 5/200",
+			meta.TotalMsgs, meta.TotalRunes)
+	}
+	if meta.LongestRunes != 60 || meta.LongestUserID != 100 {
+		t.Fatalf("MonthMeta longest: runes=%d user=%d, want 60/100",
+			meta.LongestRunes, meta.LongestUserID)
+	}
+	if meta.AbsChatID != newAbs {
+		t.Fatalf("MonthMeta.AbsChatID = %d, want %d", meta.AbsChatID, newAbs)
+	}
+
+	if len(users) != 1 {
+		t.Fatalf("expected 1 user row, got %d", len(users))
+	}
+	u := users[0]
+	if u.UserID != 100 || u.MsgCount != 5 || u.RuneCount != 200 {
+		t.Fatalf("user stat: id=%d msgs=%d runes=%d, want 100/5/200",
+			u.UserID, u.MsgCount, u.RuneCount)
+	}
+	if u.Code != 2 || u.Mention != 1 {
+		t.Fatalf("user stat entities: code=%d mention=%d, want 2/1",
+			u.Code, u.Mention)
+	}
+	if u.AbsChatID != newAbs {
+		t.Fatalf("user stat AbsChatID = %d, want %d", u.AbsChatID, newAbs)
+	}
+
+	// Old ID must have no monthstats.
+	if oldMeta, _, _ := mon.GetMonth(ctx, oldAbs, month); oldMeta != nil {
+		t.Fatal("MonthMeta still present at oldAbs after migration")
+	}
+	if months, _ := mon.ListMonths(ctx, oldAbs); len(months) != 0 {
+		t.Fatalf("oldAbs months = %v, want empty", months)
 	}
 }

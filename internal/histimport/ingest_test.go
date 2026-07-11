@@ -382,3 +382,60 @@ func TestIngestNoMonthlyMode(t *testing.T) {
 			oleg.MessageCount, oleg.KnownVia)
 	}
 }
+
+// newerExport has message IDs 10 and 11, strictly higher than the
+// base realExport (IDs 1-8). Importing it first advances ImportHWM to 11.
+const newerExport = `{
+  "name": "тестовая",
+  "type": "public_supergroup",
+  "id": 3920475340,
+  "messages": [
+    {"id":10,"type":"message","date":"2025-08-10T12:00:00","date_unixtime":"1754784000","from":"Олег","from_id":"user100","text":"newer batch first"}
+  ]
+}`
+
+// olderUnseenExport has message ID 5, which is below the HWM of 11 but
+// was never seen in the previous import batch. The HWM-based dedup
+// incorrectly rejects it.
+const olderUnseenExport = `{
+  "name": "тестовая",
+  "type": "public_supergroup",
+  "id": 3920475340,
+  "messages": [
+    {"id":5,"type":"message","date":"2025-08-05T12:00:00","date_unixtime":"1754352000","from":"Олег","from_id":"user100","text":"older unseen message"}
+  ]
+}`
+
+func TestIngestAcceptsOlderIDsAfterNewerBatch(t *testing.T) {
+	mem, mon := newStores(t)
+	ctx := context.Background()
+
+	// Import newer IDs first. This advances ImportHWM to 11.
+	res1, err := histimport.Ingest(ctx, strings.NewReader(newerExport), absChat, mem, mon, nil, false)
+	if err != nil {
+		t.Fatalf("newer ingest: %v", err)
+	}
+	if res1.MonthlyAccepted != 1 {
+		t.Fatalf("expected 1 message accepted in newer batch, got %d", res1.MonthlyAccepted)
+	}
+	if res1.NewWatermark != 10 {
+		t.Fatalf("expected HWM=10 after newer batch, got %d", res1.NewWatermark)
+	}
+
+	// Import an unseen OLDER message (ID 5). This should be accepted
+	// because it was never seen before, even though its ID is below the HWM.
+	res2, err := histimport.Ingest(ctx, strings.NewReader(olderUnseenExport), absChat, mem, mon, nil, false)
+	if err != nil {
+		t.Fatalf("older ingest: %v", err)
+	}
+
+	// The older unseen message SHOULD be accepted (1 accepted, 0 deduped).
+	// Currently it is rejected because 5 <= HWM(10).
+	if res2.MonthlyAccepted != 1 {
+		t.Fatalf("expected 1 older unseen message accepted, got %d (HWM=%d rejects unseen older IDs)",
+			res2.MonthlyAccepted, res2.NewWatermark)
+	}
+	if res2.MonthlyDeduped != 0 {
+		t.Fatalf("expected 0 deduped for unseen ID, got %d", res2.MonthlyDeduped)
+	}
+}

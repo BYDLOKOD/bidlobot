@@ -5,8 +5,6 @@ import (
 	"log/slog"
 	"sync"
 	"time"
-
-	"github.com/veschin/bidlobot/internal/shared"
 )
 
 type bufferEntry struct {
@@ -15,41 +13,74 @@ type bufferEntry struct {
 	lastSeen   time.Time
 }
 
+type dailyEntry struct {
+	countDelta int64
+	lastSeen   time.Time
+}
+
+// moscowDay returns the Europe/Moscow calendar day for ts, as "YYYY-MM-DD".
+func moscowDay(ts time.Time) string {
+	moscow, _ := time.LoadLocation("Europe/Moscow")
+	return ts.In(moscow).Format("2006-01-02")
+}
+
+// Buffer accumulates lifetime and daily (Moscow-calendar) deltas, flushing
+// both atomically to the Store. The daily layer makes GetTodayByChat
+// durable across flushes and restarts.
 type Buffer struct {
-	mu      sync.Mutex
-	pending map[FlushKey]*bufferEntry
-	store   Store
-	log     *slog.Logger
-	ticker  *time.Ticker
-	stopCh  chan struct{}
+	mu           sync.Mutex
+	pending      map[FlushKey]*bufferEntry
+	dailyPending map[string]map[FlushKey]*dailyEntry
+	store        Store
+	log          *slog.Logger
+	ticker       *time.Ticker
+	stopCh       chan struct{}
 }
 
 // NewBuffer создаёт новый буфер со слоём накопления дельт для последующей записи.
 func NewBuffer(store Store, log *slog.Logger) *Buffer {
 	return &Buffer{
-		pending: make(map[FlushKey]*bufferEntry),
-		store:   store,
-		log:     log,
-		stopCh:  make(chan struct{}),
+		pending:      make(map[FlushKey]*bufferEntry),
+		dailyPending: make(map[string]map[FlushKey]*dailyEntry),
+		store:        store,
+		log:          log,
+		stopCh:       make(chan struct{}),
 	}
 }
 
-// Increment добавляет единицу к счётчику сообщений для пары (userID, absChatID).
-// Время первого и последнего события обновляется при необходимости.
+// Increment добавляет единицу к счётчику сообщений для пары (userID, absChatID)
+// как в lifetime, так и в Moscow-day статистику.
 func (b *Buffer) Increment(userID, absChatID int64, ts time.Time) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// Lifetime delta
 	key := FlushKey{UserID: userID, AbsChatID: absChatID}
 	entry, exists := b.pending[key]
 	if !exists {
 		entry = &bufferEntry{firstSeen: ts}
 		b.pending[key] = entry
 	}
-
 	entry.countDelta++
 	if ts.After(entry.lastSeen) {
 		entry.lastSeen = ts
+	}
+
+	// Daily delta (Moscow calendar day)
+	day := moscowDay(ts)
+	dayMap, ok := b.dailyPending[day]
+	if !ok {
+		dayMap = make(map[FlushKey]*dailyEntry)
+		b.dailyPending[day] = dayMap
+	}
+	de, deExists := dayMap[key]
+	if !deExists {
+		de = &dailyEntry{}
+		dayMap[key] = de
+	}
+	de.countDelta++
+	if de.lastSeen.IsZero() || ts.After(de.lastSeen) {
+		de.lastSeen = ts
 	}
 }
 
@@ -75,15 +106,16 @@ func (b *Buffer) Run(ctx context.Context, interval time.Duration) {
 	}()
 }
 
-// flush выполняет атомарный обмен: lock -> swap pending -> unlock -> store.Flush.
-// При ошибке записи дельты переносятся обратно в буфер аддитивно.
+// flush performs an atomic swap: lock -> swap pending -> unlock -> store.FlushAtomic.
+// On error, deltas are re-queued into the buffer additively.
 func (b *Buffer) flush(ctx context.Context) {
 	b.mu.Lock()
 	toFlush := b.pending
 	b.pending = make(map[FlushKey]*bufferEntry)
+	toFlushDaily := b.dailyPending
+	b.dailyPending = make(map[string]map[FlushKey]*dailyEntry)
 	b.mu.Unlock()
-
-	if len(toFlush) == 0 {
+	if len(toFlush) == 0 && len(toFlushDaily) == 0 {
 		return
 	}
 
@@ -95,9 +127,20 @@ func (b *Buffer) flush(ctx context.Context) {
 			LastSeen:   entry.lastSeen,
 		}
 	}
-
-	if err := b.store.Flush(ctx, batch); err != nil {
-		// Восстановление дельт при ошибке.
+	dailyBatch := make(map[string]map[FlushKey]*FlushDelta)
+	for day, dayMap := range toFlushDaily {
+		db := make(map[FlushKey]*FlushDelta, len(dayMap))
+		for key, de := range dayMap {
+			db[key] = &FlushDelta{
+				CountDelta: de.countDelta,
+				LastSeen:   de.lastSeen,
+			}
+		}
+		dailyBatch[day] = db
+	}
+	if err := b.store.FlushAtomic(ctx, batch, dailyBatch); err != nil {
+		// Restore deltas on failure - both lifetime and daily,
+		// since nothing was committed atomically.
 		b.mu.Lock()
 		for key, entry := range toFlush {
 			if existing, ok := b.pending[key]; ok {
@@ -110,6 +153,23 @@ func (b *Buffer) flush(ctx context.Context) {
 				}
 			} else {
 				b.pending[key] = entry
+			}
+		}
+		for day, dayMap := range toFlushDaily {
+			dailyMap, ok := b.dailyPending[day]
+			if !ok {
+				dailyMap = make(map[FlushKey]*dailyEntry)
+				b.dailyPending[day] = dailyMap
+			}
+			for key, de := range dayMap {
+				if existing, ok := dailyMap[key]; ok {
+					existing.countDelta += de.countDelta
+					if de.lastSeen.After(existing.lastSeen) {
+						existing.lastSeen = de.lastSeen
+					}
+				} else {
+					dailyMap[key] = de
+				}
 			}
 		}
 		b.mu.Unlock()
@@ -213,25 +273,36 @@ func (b *Buffer) ListMergedByChat(ctx context.Context, absChatID int64) ([]Stats
 	return results, nil
 }
 
-// GetTodayByChat подсчитывает сообщения и уникальных пользователей за текущий день (UTC).
-// Считает только записи из in-memory буфера с lastSeen >= todayUTC.
-// После flush буферные записи обнуляются - "today" показывает активность с последнего flush'а,
-// что допустимо по спеке (потеря точности до 60 секунд).
-func (b *Buffer) GetTodayByChat(_ context.Context, absChatID int64) (totalMsgs, activeUsers int64) {
-	today := shared.TodayUTC()
+// GetTodayByChat возвращает число сообщений и уникальных пользователей
+// за текущий день по Europe/Moscow, читая durable daily данные из БД
+// и объединяя с незаписанными daily дельтами из буфера.
+func (b *Buffer) GetTodayByChat(ctx context.Context, absChatID int64) (totalMsgs, activeUsers int64) {
+	moscow, _ := time.LoadLocation("Europe/Moscow")
+	todayStr := time.Now().In(moscow).Format("2006-01-02")
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	seen := make(map[int64]bool)
 
-	for key, entry := range b.pending {
-		if key.AbsChatID != absChatID {
-			continue
+	// Durable daily данные из БД.
+	durable, err := b.store.GetDaily(ctx, absChatID, todayStr)
+	if err == nil {
+		for _, s := range durable {
+			totalMsgs += s.MessageCount
+			seen[s.UserID] = true
 		}
-		if entry.lastSeen.Before(today) {
-			continue
-		}
-		totalMsgs += entry.countDelta
-		activeUsers++
 	}
+
+	// Незаписанные daily дельты из буфера.
+	b.mu.Lock()
+	if dayMap, ok := b.dailyPending[todayStr]; ok {
+		for key, de := range dayMap {
+			if key.AbsChatID == absChatID {
+				totalMsgs += de.countDelta
+				seen[key.UserID] = true
+			}
+		}
+	}
+	b.mu.Unlock()
+
+	activeUsers = int64(len(seen))
 	return
 }

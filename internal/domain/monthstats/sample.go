@@ -1,6 +1,7 @@
 package monthstats
 
 import (
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -77,7 +78,10 @@ func Excerpt(s string) (text string, full bool) {
 // the live exclusion predicate has a single definition shared with the
 // importer.
 func HasContent(msg *telego.Message) bool {
-	return msg.Text != "" || msg.Photo != nil || msg.Video != nil ||
+	if strings.HasPrefix(msg.Text, "/") {
+		return false
+	}
+	return msg.Text != "" || msg.Dice != nil || msg.Photo != nil || msg.Video != nil ||
 		msg.Document != nil || msg.Sticker != nil || msg.Voice != nil ||
 		msg.VideoNote != nil || msg.Audio != nil || msg.Animation != nil ||
 		msg.Poll != nil || msg.Location != nil || msg.Contact != nil
