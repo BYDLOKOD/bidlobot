@@ -37,8 +37,10 @@ if ! $SKIP_PUSH; then
 fi
 
 # --- Deploy ---
-info "deploying to $HOST"
-ssh "$HOST" "bash -s" << 'ENDSSH'
+info "checking DeepSeek credential"
+pass show token/deepseek >/dev/null 2>&1 || fail "cannot read pass entry token/deepseek"
+
+REMOTE_SCRIPT=$(base64 -w0 <<'ENDSSH'
 set -euo pipefail
 cd ~/bidlobot
 
@@ -68,5 +70,10 @@ fi
 echo "-> recent logs"
 docker compose logs --since 30s bot 2>&1 | grep -E "captcha|starting|bot started|ERROR|WARN" | tail -10 || true
 ENDSSH
+)
+
+info "deploying to $HOST"
+pass show token/deepseek | ssh "$HOST" "read -r DEEPSEEK_API_KEY; export DEEPSEEK_API_KEY; echo '$REMOTE_SCRIPT' | base64 -d | bash" \
+  || fail "remote deployment failed"
 
 info "deploy complete - verify with: scripts/status.sh"
