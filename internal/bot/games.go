@@ -37,13 +37,13 @@ type GamesRegistry struct {
 	InlineRouter InlineGameRouter
 
 	// Phase 5 mini-games. Any field may be nil/zero to disable it.
-	Poll      *PollHandler      // "/poll Q | a | b" (+ "/poll quiz ...")
-	EightBall *EightBallHandler // "/8ball <question>"
-	Quip      *QuipHandler      // "/roast [@user]" / "/praise [@user]"
-	Guess     th.MessageHandler // "/guess", "/guess N", "/guess top"
-	Hangman   th.MessageHandler // "/hangman", "/hangman X"
-	Duel      th.MessageHandler // "/duel @user"
-	Trivia    TriviaRoutes      // "/trivia" / "/trivia top" + its callback
+	Poll       *PollHandler       // "/poll Q | a | b" (+ "/poll quiz ...")
+	EightBall  *EightBallHandler  // "/8ball <question>"
+	Reputation *ReputationHandler // "/praise @user", "/roast @user", "/rep", "/reptop"
+	Guess      th.MessageHandler  // "/guess", "/guess N", "/guess top"
+	Hangman    th.MessageHandler  // "/hangman", "/hangman X"
+	Duel       th.MessageHandler  // "/duel @user"
+	Trivia     TriviaRoutes       // "/trivia" / "/trivia top" + its callback
 }
 
 // TriviaRoutes mirrors QuizRoutes: slash + a prefix-scoped callback that
@@ -104,9 +104,11 @@ func registerGameRoutes(bh *th.BotHandler, sgGroup *th.HandlerGroup, a *App) {
 	if g.EightBall != nil {
 		sgGroup.HandleMessage(a.gateMsg("8ball", 5*time.Second, g.EightBall.HandleEightBall), th.CommandEqual("8ball"))
 	}
-	if g.Quip != nil {
-		sgGroup.HandleMessage(a.gateMsg("roast", 8*time.Second, g.Quip.HandleRoast), th.CommandEqual("roast"))
-		sgGroup.HandleMessage(a.gateMsg("praise", 8*time.Second, g.Quip.HandlePraise), th.CommandEqual("praise"))
+	if g.Reputation != nil {
+		sgGroup.HandleMessage(a.gateMsg("roast", 8*time.Second, g.Reputation.HandleRoast), th.CommandEqual("roast"))
+		sgGroup.HandleMessage(a.gateMsg("praise", 8*time.Second, g.Reputation.HandlePraise), th.CommandEqual("praise"))
+		sgGroup.HandleMessage(a.gateMsg("rep", 5*time.Second, g.Reputation.HandleRep), th.CommandEqual("rep"))
+		sgGroup.HandleMessage(a.gateMsg("reptop", 5*time.Second, g.Reputation.HandleRepTop), th.CommandEqual("reptop"))
 	}
 	if g.Guess != nil {
 		sgGroup.HandleMessage(a.gateMsg("guess", 5*time.Second, g.Guess), th.CommandEqual("guess"))

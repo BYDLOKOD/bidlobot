@@ -202,7 +202,7 @@ func main() {
 
 	// Phase 4 mini-games: dice / battle / quiz. Constructor wires the
 	// inline router and slash handlers; AttachGames installs them on App.
-	app.AttachGames(buildGames(db, tgClient, botInfo.Username, log))
+	app.AttachGames(buildGames(db, tgClient, botInfo.Username, adminCache, log))
 
 	// Summarization via Pi/OMP. Always-on; validated binary at startup.
 	app.AttachSummarize(summarizeSvc, tgClient)

@@ -21,6 +21,8 @@ func setCommands(ctx context.Context, bot *telego.Bot) error {
 		{Command: "8ball", Description: "Спросить шар предсказаний"},
 		{Command: "roast", Description: "Поджарить участника"},
 		{Command: "praise", Description: "Похвалить участника"},
+		{Command: "rep", Description: "Reputation balance"},
+		{Command: "reptop", Description: "Reputation top"},
 		{Command: "guess", Description: "Угадай число 1-100"},
 		{Command: "hangman", Description: "Виселица (IT-слова)"},
 		{Command: "duel", Description: "Дуэль: /duel @user"},

@@ -13,6 +13,7 @@ import (
 	"github.com/veschin/bidlobot/internal/games/guess"
 	"github.com/veschin/bidlobot/internal/games/hangman"
 	"github.com/veschin/bidlobot/internal/games/quiz"
+	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/shared/tgclient"
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -24,7 +25,7 @@ import (
 // handler constructor takes its own narrow sender interface, all of which
 // *tgclient.Client satisfies. botUsername (from GetMe) lets /duel reject
 // a duel against the bot itself; "" disables that guard.
-func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, log *slog.Logger) *bot.GamesRegistry {
+func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, adminCache *shared.AdminCache, log *slog.Logger) *bot.GamesRegistry {
 	diceRepo := storage.NewDiceRepo(db)
 	diceSvc := dice.NewService(diceRepo, log)
 	diceHandler := bot.NewDiceHandler(diceSvc, sender, log)
@@ -39,8 +40,7 @@ func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, log *
 	// Phase 5 mini-games.
 	pollHandler := bot.NewPollHandler(sender, log)
 	eightBallHandler := bot.NewEightBallHandler(sender, log)
-	quipHandler := bot.NewQuipHandler(sender, log)
-
+	reputationHandler := bot.NewReputationHandler(sender, storage.NewReputationRepo(db), storage.NewMembershipRepo(db), log, adminCache)
 	guessRepo := storage.NewGuessRepo(db)
 	guessSvc := guess.NewService(guessRepo, rand.New(rand.NewSource(time.Now().UnixNano())), log)
 	guessHandler := bot.NewGuessHandler(guessSvc, sender, log)
@@ -71,12 +71,12 @@ func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, log *
 		},
 		InlineRouter: bot.NewGamesInlineRouter(),
 
-		Poll:      pollHandler,
-		EightBall: eightBallHandler,
-		Quip:      quipHandler,
-		Guess:     guessHandler.HandleGuess,
-		Hangman:   hangmanHandler.HandleHangman,
-		Duel:      duelHandler.HandleDuel,
+		Poll:       pollHandler,
+		EightBall:  eightBallHandler,
+		Reputation: reputationHandler,
+		Guess:      guessHandler.HandleGuess,
+		Hangman:    hangmanHandler.HandleHangman,
+		Duel:       duelHandler.HandleDuel,
 		Trivia: bot.TriviaRoutes{
 			Slash:             triviaHandler.HandleTrivia,
 			Callback:          triviaHandler.HandleCallback,
