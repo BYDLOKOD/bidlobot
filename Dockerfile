@@ -48,15 +48,23 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/bidlobot-probe ./cmd/probe
 
 FROM debian:${RUNTIME_VERSION} AS runtime
+ARG YT_DLP_VERSION=2026.07.04
+
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends bash ca-certificates curl ffmpeg tini tzdata unzip wget yt-dlp && \
+    apt-get install -y --no-install-recommends bash ca-certificates curl ffmpeg tini tzdata unzip wget && \
     rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp_linux" \
+        -o /tmp/yt-dlp && \
+    echo "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae  /tmp/yt-dlp" | sha256sum -c - && \
+    install -m 0755 /tmp/yt-dlp /usr/local/bin/yt-dlp && \
+    rm /tmp/yt-dlp && \
     export BUN_INSTALL=/opt/bun && \
     export PATH="$BUN_INSTALL/bin:$PATH" && \
     curl -fsSL https://bun.sh/install | bash -s -- bun-v1.3.14 && \
     bun install -g @oh-my-pi/pi-coding-agent@16.3.6 && \
     omp --version && \
+    yt-dlp --version && \
     groupadd --system --gid 65532 bidlobot && \
     useradd --system --uid 65532 --gid bidlobot --home-dir /var/lib/bidlobot --shell /usr/sbin/nologin bidlobot && \
     install -d -o bidlobot -g bidlobot -m 0750 /var/lib/bidlobot && \
