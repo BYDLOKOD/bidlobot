@@ -88,6 +88,9 @@ func registerRoutes(
 	// attributed. Same privacy gate as the YouTube sanitizer.
 	sgGroup.Use(tiktokReposter(a))
 
+	// X post render and media downloads run asynchronously behind one slot.
+	sgGroup.Use(xpostReposter(a))
+
 	// Stats stays public: it is read-only, not chat management. Help
 	// stays public so members can discover the bot.
 	sgGroup.HandleMessage(a.gateMsg("stats", 5*time.Second, statsH.HandleStats), th.CommandEqual("stats"))
