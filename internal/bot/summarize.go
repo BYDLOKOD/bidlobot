@@ -188,7 +188,7 @@ func composeSummaryMessage(body string, meta summarize.Meta, requester string, s
 	if r := []rune(body); len(r) > summarizeBodyLimit {
 		body = strings.TrimSpace(string(r[:summarizeBodyLimit])) + "..."
 	}
-	footer := "\n\n- " + summarizeFooter(meta, requester)
+	footer := "\n\n—\n" + summarizeFooter(meta, requester)
 	// Untrusted model output and the @requester go into a public,
 	// no-ParseMode message; defuse so nothing renders as a real,
 	// notifying Telegram mention (a member could otherwise steer the
@@ -205,15 +205,17 @@ func defuseMentions(s string) string {
 	return strings.ReplaceAll(s, "@", "@\u2060")
 }
 
-// summarizeFooter is the attribution/disclosure line. It states the
-// external-AI provenance explicitly: chat members must be able to see
-// that recent messages were sent to an external model.
+// summarizeFooter attributes the external model and reports the generation
+// cost calculated from the provider's token usage. Cached summaries retain
+// the original generation cost rather than claiming a free cache lookup cost.
 func summarizeFooter(meta summarize.Meta, requester string) string {
 	loc := time.FixedZone("MSK", 3*60*60)
 	from := meta.From.In(loc).Format("15:04")
 	to := meta.To.In(loc).Format("15:04")
+	price := strconv.FormatFloat(meta.GenerationCostUSD, 'f', 4, 64)
 	return "итог " + strconv.Itoa(meta.Included) + " сообщений (" + from + "-" + to +
-		" МСК), сгенерировано DeepSeek V4 Flash via Pi по запросу @" + requester
+		" МСК), сгенерировано DeepSeek V4 Flash via Pi по запросу @" + requester +
+		"\nрасчетная стоимость: $" + price
 }
 
 type summarizeArgs struct {

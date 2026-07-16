@@ -1,6 +1,12 @@
 package bot
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/veschin/bidlobot/internal/domain/summarize"
+)
 
 func TestParseSummarizeArgs(t *testing.T) {
 	tests := []struct {
@@ -27,5 +33,21 @@ func TestParseSummarizeArgs(t *testing.T) {
 		if got.questions != tc.wantQ {
 			t.Errorf("parseSummarizeArgs(%q).questions = %q, want %q", tc.input, got.questions, tc.wantQ)
 		}
+	}
+}
+
+func TestComposeSummaryMessageAppendsGenerationCost(t *testing.T) {
+	meta := summarize.Meta{
+		Included:          300,
+		From:              time.Date(2026, 7, 15, 17, 24, 0, 0, time.UTC),
+		To:                time.Date(2026, 7, 16, 6, 2, 0, 0, time.UTC),
+		GenerationCostUSD: 0.001784,
+	}
+	got := composeSummaryMessage("Основной разговор был о защите данных.", meta, "veschin", nil)
+	if !strings.Contains(got, "итог 300 сообщений") {
+		t.Fatalf("footer missing included count: %q", got)
+	}
+	if !strings.HasSuffix(got, "расчетная стоимость: $0.0018") {
+		t.Fatalf("footer must end with rounded generation cost: %q", got)
 	}
 }

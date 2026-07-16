@@ -51,9 +51,9 @@ func TestBuildPrompt_AllFitChronological(t *testing.T) {
 	if res.SystemPrompt == "" {
 		t.Fatalf("system prompt empty")
 	}
-	// Transcript: oldest line first.
-	if !strings.HasPrefix(res.Transcript, "user [") {
-		t.Fatalf("transcript should start with the oldest line: %q", res.Transcript[:20])
+	// Transcript declares the retained count, then presents oldest first.
+	if !strings.HasPrefix(res.Transcript, "Transcript message count: 5\nuser [") {
+		t.Fatalf("transcript header or chronological first line missing: %q", res.Transcript[:50])
 	}
 }
 
@@ -110,14 +110,25 @@ func TestBuildPrompt_EmptyQuestionsNoSeparator(t *testing.T) {
 	}
 }
 
-func TestBuildPrompt_TopicAttributionInSystemPrompt(t *testing.T) {
+func TestBuildPrompt_RelevanceWeightedInstructions(t *testing.T) {
 	entries := mkEntries(1, "hello")
 	res, ok := BuildPrompt(entries, 1, 1, 1_000_000, "")
 	if !ok {
 		t.Fatalf("ok=false")
 	}
-	sys := res.SystemPrompt
-	if !strings.Contains(sys, "key participants") {
-		t.Fatalf("system prompt must instruct topic attribution with participants")
+	for _, want := range []string{
+		"Deliberate omission is required",
+		"roughly in proportion",
+		"below roughly 5%",
+		"Never mention a discarded thread",
+		"A topic label is not a summary",
+		"Never produce a link catalog",
+	} {
+		if !strings.Contains(res.SystemPrompt, want) {
+			t.Fatalf("system prompt missing relevance rule %q", want)
+		}
+	}
+	if !strings.HasPrefix(res.Transcript, "Transcript message count: 1\n") {
+		t.Fatalf("transcript must declare retained message count: %q", res.Transcript)
 	}
 }

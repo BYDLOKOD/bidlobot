@@ -8,7 +8,7 @@ import (
 func TestCache_HitAndMiss(t *testing.T) {
 	c := newCache(time.Minute)
 	key := cacheKey{chatID: 1, lastMsgID: 42, n: 200, qHash: ""}
-	meta := Meta{Included: 10, From: time.Now(), To: time.Now()}
+	meta := Meta{Included: 10, From: time.Now(), To: time.Now(), GenerationCostUSD: 0.0012}
 
 	if _, _, ok := c.get(key); ok {
 		t.Fatal("empty cache must miss")
@@ -25,6 +25,9 @@ func TestCache_HitAndMiss(t *testing.T) {
 	}
 	if got.Included != 10 {
 		t.Fatalf("meta.Included = %d, want 10", got.Included)
+	}
+	if got.GenerationCostUSD != 0.0012 {
+		t.Fatalf("meta.GenerationCostUSD = %f, want 0.0012", got.GenerationCostUSD)
 	}
 }
 

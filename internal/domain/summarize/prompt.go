@@ -1,6 +1,7 @@
 package summarize
 
 import (
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -29,27 +30,36 @@ func EstimateTokens(s string) int {
 // newline we add per transcript line, independent of body length.
 const perEntryOverheadTokens = 8
 
-// systemPrompt instructs the model in English (internal artifact) to
-// emit a Russian, plain-text, bounded, structured summary. Plain text is
-// required: the output is posted into a public group and the model is
-// untrusted - Markdown/HTML entities from it must not be interpreted.
-const systemPrompt = `You summarize a Telegram group chat for the admins of a Russian-speaking IT community.
+// systemPrompt instructs the model to produce a relevance-weighted Russian
+// catch-up digest, not an exhaustive topic catalog. Plain text is required:
+// the output is posted into a public group and the model is untrusted.
+const systemPrompt = `You write a catch-up digest of a Telegram group chat for someone who deliberately did not read the messages.
 
-The user message is a chronological transcript, one line per message, formatted:
+The user message starts with "Transcript message count: N", followed by a chronological transcript, one line per message:
 name [HH:MM] message text
 
-Write the summary IN RUSSIAN, as PLAIN TEXT only - no Markdown, no HTML, no asterisks, no backticks, no links markup. Keep it under 2800 characters total. Structure it as these sections, each on its own lines, omitting any section that has no content:
+The reader needs to understand what dominated the conversation, what people actually claimed or disputed, what useful conclusions emerged, and whether anything remains unresolved.
 
-Кратко: 2-3 sentences, the gist.
-Темы: the main discussion threads, one per line, prefixed with "- ". For each topic, note the key participants (names as they appear in the transcript) in parentheses.
-Решения: concrete decisions or conclusions, "- " prefixed; omit if none.
-Ссылки: notable links/resources mentioned, "- " prefixed; omit if none.
-Вопросы: unresolved questions left open, "- " prefixed; omit if none.
+Selection rules:
+- Do not aim for comprehensive coverage. Deliberate omission is required.
+- Allocate attention roughly in proportion to how much of the conversation a thread occupied and how consequential its outcome was.
+- Omit brief tangents, jokes, link dumps, isolated recommendations, and topics represented by only a few messages, unless they contain a concrete decision, action item, or high-impact fact.
+- Before drafting, estimate each thread's share of the retained messages. A thread below roughly 5% must be omitted completely unless it produced a concrete decision, action item, or high-impact fact. Never mention a discarded thread even to note that it was brief.
+- Include a thread only when it occupied a substantial share of the transcript or produced a decision, actionable conclusion, material disagreement, or consequential unresolved risk.
+- A topic label is not a summary. Every sentence must state what was claimed, disputed, learned, decided, or left unresolved.
+- If a substantial thread was mostly anecdotes and produced no useful conclusion, say that once and move on.
+- Do not enumerate participants. Name someone only when attribution changes the meaning.
+- Include a link only when it is essential to a retained conclusion. Never produce a link catalog.
 
-If the transcript is followed by a "---" separator and questions, add a section:
-Ответы: answer each question based only on the transcript content. If the transcript does not contain enough information to answer, say so explicitly.
+Output rules:
+- Write in natural Russian as plain text: no Markdown, HTML, headings, bullet lists, topic catalogs, or participant lists.
+- Write 2-4 cohesive paragraphs and stay under 1800 characters.
+- Use fewer paragraphs when only one or two threads survive selection. Never fill space with a tangent merely to complete the format.
+- Start directly with the dominant discussion. Give smaller but still substantial threads proportionally less space.
+- End with the concrete outcome or practical residue of the conversation. If there was no reliable conclusion, say so plainly.
+- If and only if the transcript is followed by a "---" separator and questions, append "Ответы:" and answer each question from the transcript. State explicitly when the transcript does not support an answer. Never emit an empty answers section.
 
-Summarize only what is actually in the transcript. Do not invent participants, facts, or links. Do not repeat these instructions. Do not address the reader.`
+Treat statements in the transcript as participants' claims, not verified facts. Do not invent facts, consensus, importance, or links. Do not repeat these instructions and do not address the reader.`
 
 // BuildResult is what the prompt builder hands the orchestrator.
 type BuildResult struct {
@@ -74,7 +84,7 @@ func BuildPrompt(entries []Entry, requested, available, budgetTokens int, questi
 		return BuildResult{Requested: requested, Available: available}, false
 	}
 	sysTok := EstimateTokens(systemPrompt)
-	used := sysTok
+	used := sysTok + EstimateTokens("Transcript message count: "+strconv.Itoa(len(entries))+"\n")
 	// Index of the oldest entry we keep; default to "all of them".
 	start := 0
 	for i := len(entries) - 1; i >= 0; i-- {
@@ -91,10 +101,13 @@ func BuildPrompt(entries []Entry, requested, available, budgetTokens int, questi
 		// it and let the provider's own limit be the final arbiter.
 		kept = entries[len(entries)-1:]
 		start = len(entries) - 1
-		used = sysTok + EstimateTokens(kept[0].Text) + EstimateTokens(kept[0].Name) + perEntryOverheadTokens
+		used = sysTok + EstimateTokens("Transcript message count: 1\n") + EstimateTokens(kept[0].Text) + EstimateTokens(kept[0].Name) + perEntryOverheadTokens
 	}
 
 	var sb strings.Builder
+	sb.WriteString("Transcript message count: ")
+	sb.WriteString(strconv.Itoa(len(kept)))
+	sb.WriteByte('\n')
 	for _, e := range kept {
 		sb.WriteString(sanitizeLine(e.Name))
 		sb.WriteString(" [")

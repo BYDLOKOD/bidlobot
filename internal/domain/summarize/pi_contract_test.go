@@ -3,6 +3,7 @@ package summarize
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestBuildPromptReturnsSystemAndTranscript(t *testing.T) {
 	if result.SystemPrompt == "" {
 		t.Fatal("BuildPrompt must return a non-empty SystemPrompt")
 	}
-	if !strings.Contains(result.SystemPrompt, "summarize") {
+	if !strings.Contains(result.SystemPrompt, "catch-up digest") {
 		t.Fatal("SystemPrompt must be an English-language instruction")
 	}
 
@@ -56,20 +57,58 @@ func (f *fakeRecorderRunner) Run(_ context.Context, _ string, args []string, std
 	return f.output, f.err
 }
 
-// TestPiRunnerStdInModelFlags verifies that the Pi runner passes the exact
-// model selector, the correct disabled-options flags, and puts the
-// transcript on stdin.
-func TestPiRunnerStdInModelFlags(t *testing.T) {
-	fake := &fakeRecorderRunner{output: "ok"}
-	r := NewPiRunner("omp", "deepseek/deepseek-v4-flash")
-	r.runner = fake
+const fakeOMPJSON = `{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"transcript"}]}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"thinking","thinking":"private reasoning"},{"type":"text","text":"ok"}],"usage":{"cost":{"total":0.001234}}}}`
 
-	out, err := r.Complete(context.Background(), "system prompt", "transcript")
+// TestExecRunnerPromptTransport verifies that the real process runner gives
+// OMP a seekable @file without persisting the private transcript to disk.
+func TestExecRunnerPromptTransport(t *testing.T) {
+	if os.Getenv("BIDLOBOT_EXEC_RUNNER_HELPER") == "1" {
+		ref := os.Args[len(os.Args)-1]
+		if !strings.HasPrefix(ref, "@/proc/self/fd/") {
+			t.Fatalf("prompt reference = %q, want anonymous file descriptor", ref)
+		}
+		body, err := os.ReadFile(strings.TrimPrefix(ref, "@"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = os.Stdout.Write(body)
+		return
+	}
+
+	t.Setenv("BIDLOBOT_EXEC_RUNNER_HELPER", "1")
+	const prompt = "private transcript"
+	out, err := (execRunner{}).Run(
+		context.Background(),
+		os.Args[0],
+		[]string{"-test.run=TestExecRunnerPromptTransport"},
+		prompt,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out != "ok" {
-		t.Fatalf("output = %q, want %q", out, "ok")
+	if !strings.Contains(out, prompt) {
+		t.Fatalf("runner output = %q, want prompt content", out)
+	}
+}
+
+// TestPiRunnerPromptModelFlags verifies that the Pi runner passes the exact
+// model selector, the correct disabled-options flags, and the transcript to
+// the process runner.
+func TestPiRunnerPromptModelFlags(t *testing.T) {
+	fake := &fakeRecorderRunner{output: fakeOMPJSON}
+	r := NewPiRunner("omp", "deepseek/deepseek-v4-flash")
+	r.runner = fake
+
+	completion, err := r.Complete(context.Background(), "system prompt", "transcript")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completion.Text != "ok" {
+		t.Fatalf("output = %q, want %q", completion.Text, "ok")
+	}
+	if completion.CostUSD != 0.001234 {
+		t.Fatalf("cost = %f, want 0.001234", completion.CostUSD)
 	}
 
 	// Verify the args the fake runner recorded.
@@ -98,16 +137,27 @@ func TestPiRunnerStdInModelFlags(t *testing.T) {
 	assertFlag("-p")
 	assertFlag("--system-prompt")
 
-	// Model selector via -m.
+	modeFound := false
+	for i, a := range args {
+		if a == "--mode" && i+1 < len(args) && args[i+1] == "json" {
+			modeFound = true
+			break
+		}
+	}
+	if !modeFound {
+		t.Fatalf("JSON output mode not found in args: %v", args)
+	}
+
+	// Model selector via the current OMP long flag.
 	modelFound := false
 	for i, a := range args {
-		if a == "-m" && i+1 < len(args) && args[i+1] == "deepseek/deepseek-v4-flash" {
+		if a == "--model" && i+1 < len(args) && args[i+1] == "deepseek/deepseek-v4-flash" {
 			modelFound = true
 			break
 		}
 	}
 	if !modelFound {
-		t.Fatalf("model selector -m deepseek/deepseek-v4-flash not found in args: %v", args)
+		t.Fatalf("model selector --model deepseek/deepseek-v4-flash not found in args: %v", args)
 	}
 
 	// System prompt should be the second arg after --system-prompt.
@@ -162,19 +212,39 @@ func TestPiRunnerDeadlineMapsToTimeoutError(t *testing.T) {
 // TestPiRunnerCredentialSafety verifies that the Pi runner returns the
 // model output without leaking credentials or arguments.
 func TestPiRunnerCredentialSafety(t *testing.T) {
-	fake := &fakeRecorderRunner{output: "summary result"}
+	fake := &fakeRecorderRunner{output: fakeOMPJSON}
 	r := NewPiRunner("omp", "deepseek/deepseek-v4-flash")
 	r.runner = fake
 
-	out, err := r.Complete(context.Background(), "system prompt", "transcript")
+	completion, err := r.Complete(context.Background(), "system prompt", "transcript")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out == "" {
-		t.Fatal("expected non-empty output from Pi runner")
+	if completion.Text != "ok" {
+		t.Fatalf("output = %q, want %q", completion.Text, "ok")
 	}
-	if out != "summary result" {
-		t.Fatalf("output = %q, want %q", out, "summary result")
+	if completion.CostUSD <= 0 {
+		t.Fatalf("expected positive provider cost, got %f", completion.CostUSD)
+	}
+}
+
+func TestPiRunnerMissingUsageMapsToProviderError(t *testing.T) {
+	fake := &fakeRecorderRunner{output: `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"summary"}]}}`}
+	r := NewPiRunner("omp", "deepseek/deepseek-v4-flash")
+	r.runner = fake
+
+	if _, err := r.Complete(context.Background(), "system prompt", "transcript"); !errors.Is(err, ErrProviderFailure) {
+		t.Fatalf("missing usage error = %v, want ErrProviderFailure", err)
+	}
+}
+
+func TestPiRunnerMalformedJSONMapsToProviderError(t *testing.T) {
+	fake := &fakeRecorderRunner{output: "not-json"}
+	r := NewPiRunner("omp", "deepseek/deepseek-v4-flash")
+	r.runner = fake
+
+	if _, err := r.Complete(context.Background(), "system prompt", "transcript"); !errors.Is(err, ErrProviderFailure) {
+		t.Fatalf("malformed JSON error = %v, want ErrProviderFailure", err)
 	}
 }
 

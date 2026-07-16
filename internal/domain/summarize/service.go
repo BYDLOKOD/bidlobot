@@ -182,11 +182,12 @@ func (s *Service) Release(absChatID int64) {
 // Meta describes what actually went into a completed summary so the bot
 // can attribute it ("итог M сообщений HH:MM-HH:MM").
 type Meta struct {
-	Included  int
-	Requested int
-	Available int
-	From      time.Time
-	To        time.Time
+	Included          int
+	Requested         int
+	Available         int
+	From              time.Time
+	To                time.Time
+	GenerationCostUSD float64
 }
 
 // TryCache returns a previously cached summary for this chat/N/questions
@@ -232,13 +233,14 @@ func (s *Service) Summarize(absChatID int64, requested int, questions string) (s
 	defer cancel()
 
 	start := time.Now()
-	text, err := s.llm.Complete(ctx, built.SystemPrompt, built.Transcript)
+	completion, err := s.llm.Complete(ctx, built.SystemPrompt, built.Transcript)
 	meta := Meta{
-		Included:  built.Included,
-		Requested: built.Requested,
-		Available: built.Available,
-		From:      built.From,
-		To:        built.To,
+		Included:          built.Included,
+		Requested:         built.Requested,
+		Available:         built.Available,
+		From:              built.From,
+		To:                built.To,
+		GenerationCostUSD: completion.CostUSD,
 	}
 	if err != nil {
 		s.log.Warn("summarize call failed",
@@ -253,13 +255,13 @@ func (s *Service) Summarize(absChatID int64, requested int, questions string) (s
 		lastMsgID: entries[len(entries)-1].MsgID,
 		n:         requested,
 		qHash:     questionsHash(questions),
-	}, text, meta)
+	}, completion.Text, meta)
 
 	s.log.Info("summarize ok",
 		"abs_chat_id", absChatID, "included", built.Included,
 		"est_tokens", built.EstTokens,
 		"elapsed_ms", time.Since(start).Milliseconds())
-	return text, meta, nil
+	return completion.Text, meta, nil
 }
 
 // Go runs fn as a tracked background goroutine: registered in
