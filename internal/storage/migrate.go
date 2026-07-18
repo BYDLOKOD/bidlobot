@@ -11,6 +11,7 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
+	"github.com/veschin/bidlobot/internal/domain/referral"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 )
 
@@ -32,6 +33,8 @@ type MigrationReport struct {
 	MonthSummaryMoved int
 	MonthImportedIDs  int
 	DailyStatsRekeyed int
+	ReferralServices  int
+	Referrals         int
 }
 
 // MigrateChatID rewrites every record keyed by oldAbs to be keyed by
@@ -79,6 +82,9 @@ func MigrateChatID(_ context.Context, db *bolt.DB, oldAbs, newAbs int64) (*Migra
 		}
 		if err := migrateDailyStats(tx, oldAbs, newAbs); err != nil {
 			return fmt.Errorf("dailystats: %w", err)
+		}
+		if err := migrateReferrals(tx, oldAbs, newAbs, report); err != nil {
+			return fmt.Errorf("referrals: %w", err)
 		}
 		return nil
 	})
@@ -520,6 +526,153 @@ func migrateDailyStats(tx *bolt.Tx, oldAbs, newAbs int64) error {
 		}
 		if err := bkt.Delete(k); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// migrateReferrals rekeys this chat's referral services, name index,
+// and referrals from oldAbs to newAbs. IDs are globally unique, so the
+// same service and referral IDs are reused at the destination.
+//
+// If the destination already has a service with the same NameKey,
+// source referrals under it are re-pointed to the destination service
+// and the source service (plus its name index entry) is dropped. An
+// exact URL already present at the destination is discarded to keep
+// chat-wide URL uniqueness; differing URLs are preserved even when the
+// (owner, service) pair then duplicates, because silent referral loss
+// is worse than a post-migration duplicate.
+func migrateReferrals(tx *bolt.Tx, oldAbs, newAbs int64, report *MigrationReport) error {
+	svcBkt := tx.Bucket(bktReferralServices)
+	nameBkt := tx.Bucket(bktReferralServicesName)
+	refBkt := tx.Bucket(bktReferrals)
+	if svcBkt == nil && refBkt == nil {
+		return nil
+	}
+
+	// Build the destination NameKey -> service ID map so source services
+	// with a matching destination category can be re-pointed rather than
+	// duplicated.
+	destByKey := make(map[string]uint64)
+	if svcBkt != nil {
+		dPrefix := ReferralServicePrefix(newAbs)
+		c := svcBkt.Cursor()
+		for k, v := c.Seek(dPrefix); k != nil && bytes.HasPrefix(k, dPrefix); k, v = c.Next() {
+			var svc referral.Service
+			if err := json.Unmarshal(v, &svc); err == nil {
+				destByKey[svc.NameKey] = svc.ID
+			}
+		}
+	}
+
+	// Set of URLs already present at the destination, to discard
+	// exact-duplicate source referrals.
+	destURLs := make(map[string]struct{})
+	if refBkt != nil {
+		dPrefix := ReferralPrefix(newAbs)
+		c := refBkt.Cursor()
+		for k, v := c.Seek(dPrefix); k != nil && bytes.HasPrefix(k, dPrefix); k, v = c.Next() {
+			var ref referral.Referral
+			if err := json.Unmarshal(v, &ref); err == nil {
+				destURLs[ref.URL] = struct{}{}
+			}
+		}
+	}
+
+	// serviceRemap maps a source service ID to the destination service
+	// ID it should be re-pointed to. Identity (zero value) means "copy
+	// with same ID".
+	serviceRemap := make(map[uint64]uint64)
+
+	// Walk source services and either copy them with the same ID or
+	// record a remap when the destination has the same NameKey.
+	if svcBkt != nil {
+		sPrefix := ReferralServicePrefix(oldAbs)
+		c := svcBkt.Cursor()
+		type svcRow struct {
+			key []byte
+			svc referral.Service
+		}
+		var rows []svcRow
+		for k, v := c.Seek(sPrefix); k != nil && bytes.HasPrefix(k, sPrefix); k, v = c.Next() {
+			var svc referral.Service
+			if err := json.Unmarshal(v, &svc); err != nil {
+				continue
+			}
+			rows = append(rows, svcRow{key: append([]byte(nil), k...), svc: svc})
+		}
+		for _, row := range rows {
+			if destID, ok := destByKey[row.svc.NameKey]; ok {
+				serviceRemap[row.svc.ID] = destID
+				_ = svcBkt.Delete(row.key)
+				if nameBkt != nil {
+					_ = nameBkt.Delete(ReferralServiceNameKey(oldAbs, row.svc.NameKey))
+				}
+				continue
+			}
+			svc := row.svc
+			svc.AbsChatID = newAbs
+			buf, err := json.Marshal(&svc)
+			if err != nil {
+				return fmt.Errorf("encode referral service %d: %w", row.svc.ID, err)
+			}
+			if err := svcBkt.Put(ReferralServiceKey(newAbs, svc.ID), buf); err != nil {
+				return err
+			}
+			if err := svcBkt.Delete(row.key); err != nil {
+				return err
+			}
+			if nameBkt != nil {
+				idBytes := []byte(fmt.Sprintf("%020d", svc.ID))
+				if err := nameBkt.Put(ReferralServiceNameKey(newAbs, svc.NameKey), idBytes); err != nil {
+					return err
+				}
+				_ = nameBkt.Delete(ReferralServiceNameKey(oldAbs, svc.NameKey))
+			}
+			destByKey[svc.NameKey] = svc.ID
+			report.ReferralServices++
+		}
+	}
+
+	// Walk source referrals: apply the service remap, drop exact URL
+	// duplicates, otherwise copy with the same ID.
+	if refBkt != nil {
+		sPrefix := ReferralPrefix(oldAbs)
+		c := refBkt.Cursor()
+		type refRow struct {
+			key []byte
+			ref referral.Referral
+		}
+		var rows []refRow
+		for k, v := c.Seek(sPrefix); k != nil && bytes.HasPrefix(k, sPrefix); k, v = c.Next() {
+			var ref referral.Referral
+			if err := json.Unmarshal(v, &ref); err != nil {
+				continue
+			}
+			rows = append(rows, refRow{key: append([]byte(nil), k...), ref: ref})
+		}
+		for _, row := range rows {
+			ref := row.ref
+			if _, dup := destURLs[ref.URL]; dup {
+				_ = refBkt.Delete(row.key)
+				continue
+			}
+			if remap, ok := serviceRemap[ref.ServiceID]; ok {
+				ref.ServiceID = remap
+			}
+			ref.AbsChatID = newAbs
+			buf, err := json.Marshal(&ref)
+			if err != nil {
+				return fmt.Errorf("encode referral %d: %w", ref.ID, err)
+			}
+			if err := refBkt.Put(ReferralKey(newAbs, ref.ID), buf); err != nil {
+				return err
+			}
+			if err := refBkt.Delete(row.key); err != nil {
+				return err
+			}
+			destURLs[ref.URL] = struct{}{}
+			report.Referrals++
 		}
 	}
 	return nil

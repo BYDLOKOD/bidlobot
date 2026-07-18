@@ -35,6 +35,9 @@ var buckets = []string{
 	"captcha",
 	"captcha_user_idx",
 	"gracekick",
+	"referral_services",
+	"referral_services_name_idx",
+	"referrals",
 }
 
 type BoltStore struct {

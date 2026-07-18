@@ -79,6 +79,9 @@ type App struct {
 	// captchaSvc is the opt-in new-member captcha. nil (default) means
 	// the feature is off: no join messages, no buttons, no sweep.
 	captchaSvc *captcha.Service
+	// referrals is the opt-in referral catalog UX. nil (default) means
+	// /refs, /refreg, and /refreport are not wired.
+	referrals *ReferralHandler
 }
 
 // InFlight exposes the WaitGroup for executors that need to register
@@ -320,6 +323,13 @@ func (a *App) AttachCaptcha(svc *captcha.Service) {
 	a.captchaSvc = svc
 }
 
+// AttachReferrals wires the chat-scoped referral catalog UX. Call
+// before Run so registerRoutes sees the wiring. A nil handler leaves
+// /refs, /refreg, and /refreport unwired.
+func (a *App) AttachReferrals(h *ReferralHandler) {
+	a.referrals = h
+}
+
 // runCaptchaSweep ticks every interval and kicks every user whose captcha
 // expired unanswered. The interval is sized from the configured timeout
 // (min 30s, capped at timeout/3) so the gap between expiry and kick stays
@@ -509,7 +519,6 @@ const helpDM = `BidloBot - бот для IT-сообщества.
 
 Добавьте меня в группу администратором, чтобы я мог
 собирать статистику, модерировать и играть.`
-
 const helpSupergroup = `BidloBot - статистика, мини-игры и модерация.
 
   /stats         - обзор чата
@@ -518,5 +527,8 @@ const helpSupergroup = `BidloBot - статистика, мини-игры и м
   /dice [emoji]  - бросок кубика
   /battle X Y    - голосование реакциями за 60с
   /quiz          - угадай язык по сниппету
+  /refs          - все рефки
+  /refreg        - добавить рефку
 
-Админы: /summarize [N] - итог последних сообщений через AI.`
+Админы: /summarize [N] - итог последних сообщений через AI.
+Админы: /refreport ID - удалить рефку.`

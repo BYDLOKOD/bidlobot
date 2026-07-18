@@ -22,6 +22,7 @@ var errReputationTarget = errors.New("reputation target missing")
 
 type reputationSender interface {
 	SendMessage(context.Context, *telego.SendMessageParams) (*telego.Message, error)
+	GetChatMember(context.Context, *telego.GetChatMemberParams) (telego.ChatMember, error)
 }
 
 type reputationMembers interface {
@@ -65,14 +66,14 @@ func (h *ReputationHandler) HandleRep(_ *th.Context, msg telego.Message) error {
 	}
 	isAdmin, ok := h.isAdmin(msg, msg.From.ID)
 	if !ok {
-		return h.reply(msg, "⚠️ <code>error</code>")
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
 	balance, err := h.store.Balance(context.Background(), storage.AbsChatID(msg.Chat.ID), msg.From.ID, isAdmin)
 	if err != nil {
 		h.log.Warn("reputation balance failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
-		return h.reply(msg, "⚠️ <code>error</code>")
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
-	return h.reply(msg, fmt.Sprintf("<code>%d</code>", balance))
+	return h.reply(msg, fmt.Sprintf("у %s осталось <b>%d</b> репутации...", h.actorDisplay(msg.From), balance))
 }
 
 func (h *ReputationHandler) HandleRepTop(_ *th.Context, msg telego.Message) error {
@@ -82,16 +83,16 @@ func (h *ReputationHandler) HandleRepTop(_ *th.Context, msg telego.Message) erro
 	entries, err := h.store.Leaderboard(context.Background(), storage.AbsChatID(msg.Chat.ID), 10)
 	if err != nil {
 		h.log.Warn("reputation leaderboard failed", "error", err, "chat_id", msg.Chat.ID)
-		return h.reply(msg, "⚠️ <code>error</code>")
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
 	lines := make([]string, 0, len(entries))
 	for i, entry := range entries {
-		lines = append(lines, fmt.Sprintf("%d. %s: %d", i+1, h.display(msg.Chat.ID, entry.UserID), entry.Balance))
+		lines = append(lines, fmt.Sprintf("%d. %s — <b>%d</b>", i+1, h.display(msg.Chat.ID, entry.UserID), entry.Balance))
 	}
 	if len(lines) == 0 {
-		return h.reply(msg, "<code>-</code>")
+		return h.reply(msg, "тут пока пусто... как обычно.")
 	}
-	return h.reply(msg, "<code>"+strings.Join(lines, "\n")+"</code>")
+	return h.reply(msg, "<b>у кого ещё что-то осталось...</b>\n"+strings.Join(lines, "\n"))
 }
 
 func (h *ReputationHandler) apply(msg telego.Message, kind reputation.Kind, templates []string) error {
@@ -100,22 +101,39 @@ func (h *ReputationHandler) apply(msg telego.Message, kind reputation.Kind, temp
 	}
 	target, err := h.target(msg)
 	if err != nil {
-		return h.reply(msg, "⚠️ <code>/"+reputationCommand(kind)+" @username</code>")
+		return h.reply(msg, "нужно ответить на сообщение или написать /"+reputationCommand(kind)+" @username...")
+	}
+	// Live Telegram membership check: an old replied-to message can
+	// outlive a missed leave event, and persisted membership can lie.
+	// Reject before any balance initialization or mutation.
+	if !h.isStillMember(msg.Chat.ID, target.UserID) {
+		return h.reply(msg, "его уже нет в чате... репутация тут больше не поможет.")
+	}
+	if msg.From.ID == target.UserID {
+		return h.reply(msg, "себе нельзя... даже так.")
 	}
 	actorAdmin, ok := h.isAdmin(msg, msg.From.ID)
 	if !ok {
-		return h.reply(msg, "⚠️ <code>error</code>")
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
 	targetAdmin, ok := h.isAdmin(msg, target.UserID)
 	if !ok {
-		return h.reply(msg, "⚠️ <code>error</code>")
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
 	result, err := h.store.Apply(context.Background(), storage.AbsChatID(msg.Chat.ID), msg.From.ID, target.UserID, kind, actorAdmin, targetAdmin)
 	if err != nil {
 		return h.replyApplyError(msg, err)
 	}
 	body := strings.Replace(templates[rand.IntN(len(templates))], "%s", h.memberDisplay(target), 1)
-	return h.reply(msg, fmt.Sprintf("%s\n<code>%d -> %d</code>", body, result.ActorBalance, result.TargetBalance))
+	actorLabel := h.actorDisplay(msg.From)
+	delta := "+3"
+	if kind == reputation.KindPraise && targetAdmin {
+		delta = "+6"
+	}
+	if kind == reputation.KindRoast {
+		return h.reply(msg, fmt.Sprintf("%s\n\nлови -1, чучело, от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>", body, actorLabel, actorLabel, result.ActorBalance, h.memberDisplay(target), result.TargetBalance))
+	}
+	return h.reply(msg, fmt.Sprintf("%s\n\nдержи %s от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>", body, delta, actorLabel, actorLabel, result.ActorBalance, h.memberDisplay(target), result.TargetBalance))
 }
 
 func (h *ReputationHandler) target(msg telego.Message) (*membership.Member, error) {
@@ -149,18 +167,43 @@ func (h *ReputationHandler) isAdmin(msg telego.Message, userID int64) (bool, boo
 }
 
 func (h *ReputationHandler) replyApplyError(msg telego.Message, err error) error {
-	code := "error"
 	switch {
 	case errors.Is(err, reputation.ErrSelfTarget):
-		code = "self"
+		return h.reply(msg, "себе нельзя... даже так.")
 	case errors.Is(err, reputation.ErrInsufficientBalance):
-		code = "balance"
+		return h.reply(msg, "у тебя ничего не осталось... раздавать больше нечего.")
 	case errors.Is(err, reputation.ErrTargetInsufficientBalance):
-		code = "target"
+		return h.reply(msg, "у него уже ноль... ниже некуда.")
 	default:
 		h.log.Warn("reputation apply failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
-	return h.reply(msg, "⚠️ <code>"+code+"</code>")
+}
+
+// isStillMember returns true when Telegram confirms the user is
+// currently a chat member. Fail-closed on API error or nil result so
+// an unreachable API never mutates a possibly-departed user's balance.
+func (h *ReputationHandler) isStillMember(chatID, userID int64) bool {
+	cm, err := h.bot.GetChatMember(context.Background(), &telego.GetChatMemberParams{
+		ChatID: telego.ChatID{ID: chatID},
+		UserID: userID,
+	})
+	if err != nil || cm == nil {
+		h.log.Warn("reputation live membership check failed", "error", err, "chat_id", chatID, "user_id", userID)
+		return false
+	}
+	return cm.MemberIsMember()
+}
+
+// actorDisplay renders the actor's inert display name with the same
+// rules as memberDisplay: handle without '@', escaped for HTML, with
+// numeric-ID fallback when neither username nor first name is known.
+func (h *ReputationHandler) actorDisplay(from *telego.User) string {
+	display := shared.UserDisplay(from.Username, from.FirstName)
+	if display == "" {
+		return fmt.Sprintf("%d", from.ID)
+	}
+	return html.EscapeString(display)
 }
 
 func (h *ReputationHandler) display(chatID, userID int64) string {

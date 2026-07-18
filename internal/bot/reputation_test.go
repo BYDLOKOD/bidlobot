@@ -15,11 +15,16 @@ import (
 )
 
 // stubRepSender records every SendMessage params for assertion.
-// Satisfies the reputationSender interface the handler requires.
 type stubRepSender struct {
 	mu      sync.Mutex
 	Sent    []*telego.SendMessageParams
 	SendErr error
+
+	// chatMembers maps userID -> a telego.ChatMember that GetChatMember
+	// returns. A missing entry falls back to DefaultMember; nil leaves
+	// the lookup unconfigured and the handler fail-closes.
+	chatMembers   map[int64]telego.ChatMember
+	DefaultMember telego.ChatMember
 }
 
 func (s *stubRepSender) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
@@ -30,6 +35,17 @@ func (s *stubRepSender) SendMessage(_ context.Context, params *telego.SendMessag
 	}
 	s.Sent = append(s.Sent, params)
 	return &telego.Message{MessageID: 2000 + len(s.Sent)}, nil
+}
+
+func (s *stubRepSender) GetChatMember(_ context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.chatMembers != nil {
+		if cm, ok := s.chatMembers[params.UserID]; ok {
+			return cm, nil
+		}
+	}
+	return s.DefaultMember, nil
 }
 
 func (s *stubRepSender) lastMsg() string {
@@ -126,7 +142,7 @@ func newRepHandler(t *testing.T) (*ReputationHandler, *stubRepSender, *stubRepMe
 	}
 	cleanup := func() { bs.Close() }
 
-	sender := &stubRepSender{}
+	sender := &stubRepSender{DefaultMember: &telego.ChatMemberMember{Status: "member"}}
 	members := newStubRepMembers()
 	store := storage.NewReputationRepo(bs.DB())
 	h := NewReputationHandler(sender, store, members, testLogger())
@@ -612,4 +628,254 @@ func TestRepNilFromIgnored(t *testing.T) {
 	if len(sender.Sent) != 0 {
 		t.Fatal("messages with nil From must be silently ignored")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Live membership gating - departed members cannot be praised/roasted
+// ---------------------------------------------------------------------------
+
+// repMember builds a telego.ChatMember that reports IsMember=true with
+// the given status string.
+func repMember(status string) telego.ChatMember {
+	switch status {
+	case "left", "kicked":
+		return &telego.ChatMemberLeft{Status: status}
+	case "restricted":
+		return &telego.ChatMemberRestricted{Status: status, IsMember: false}
+	case "administrator":
+		return &telego.ChatMemberAdministrator{Status: status}
+	case "owner":
+		return &telego.ChatMemberOwner{Status: status}
+	default:
+		return &telego.ChatMemberMember{Status: "member"}
+	}
+}
+
+// TestRepLiveMembershipRejectsDepartedUser asserts that praising a
+// replied-to user whose live Telegram status is "left" replies with
+// the departed-user copy and leaves both balances uninitialized.
+func TestRepLiveMembershipRejectsDepartedUser(t *testing.T) {
+	h, sender, members, store, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+	sender.DefaultMember = repMember("left")
+
+	msg := repReplyMessage("/praise", aliceUser, bobUser)
+	_ = h.HandlePraise(nil, msg)
+
+	if len(sender.Sent) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sender.Sent))
+	}
+	body := sender.Sent[0].Text
+	if !strings.Contains(body, "его уже нет в чате") {
+		t.Fatalf("expected departed-user copy, got %q", body)
+	}
+
+	// Neither actor nor target balance was created or mutated.
+	ctx := context.Background()
+	absChat := storage.AbsChatID(-1001234567890)
+	if _, err := store.Balance(ctx, absChat, bobUser.ID, false); err != nil {
+		t.Fatalf("target balance read: %v", err)
+	}
+}
+
+// TestRepLiveMembershipRejectsKickedByUsername covers the @username
+// resolution path with a kicked target.
+func TestRepLiveMembershipRejectsKickedByUsername(t *testing.T) {
+	h, sender, members, _, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+	sender.chatMembers = map[int64]telego.ChatMember{bobUser.ID: repMember("kicked")}
+
+	_ = h.HandlePraise(nil, repMessage("/praise @bob", aliceUser))
+	if len(sender.Sent) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sender.Sent))
+	}
+	if !strings.Contains(sender.Sent[0].Text, "его уже нет в чате") {
+		t.Fatalf("expected departed-user copy, got %q", sender.Sent[0].Text)
+	}
+}
+
+// TestRepLiveMembershipRejectsRestrictedNotMember covers the
+// restricted-with-is_member=false case the plan calls out.
+func TestRepLiveMembershipRejectsRestrictedNotMember(t *testing.T) {
+	h, sender, members, _, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+	sender.chatMembers = map[int64]telego.ChatMember{
+		bobUser.ID: &telego.ChatMemberRestricted{Status: "restricted", IsMember: false},
+	}
+
+	_ = h.HandleRoast(nil, repMessage("/roast @bob", aliceUser))
+	if len(sender.Sent) != 1 || !strings.Contains(sender.Sent[0].Text, "его уже нет в чате") {
+		t.Fatalf("expected departed-user copy, got %+v", sender.Sent)
+	}
+}
+
+// TestRepLiveMembershipAcceptsRestrictedMember covers the symmetric
+// case: restricted but still a member → operation proceeds.
+func TestRepLiveMembershipAcceptsRestrictedMember(t *testing.T) {
+	h, sender, members, _, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+	sender.chatMembers = map[int64]telego.ChatMember{
+		bobUser.ID: &telego.ChatMemberRestricted{Status: "restricted", IsMember: true},
+	}
+
+	_ = h.HandlePraise(nil, repMessage("/praise @bob", aliceUser))
+	if len(sender.Sent) != 1 {
+		t.Fatalf("expected 1 reply, got %d", len(sender.Sent))
+	}
+	if strings.Contains(sender.Sent[0].Text, "его уже нет в чате") {
+		t.Fatalf("restricted-but-member must not be rejected, got %q", sender.Sent[0].Text)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Exact apply copy
+// ---------------------------------------------------------------------------
+
+// TestRepPraiseCopy asserts the exact praise response shape the plan
+// specifies: "держи +3 от <actor>." plus a parenthesized balance line.
+func TestRepPraiseCopy(t *testing.T) {
+	h, sender, members, _, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+
+	_ = h.HandlePraise(nil, repMessage("/praise @bob", aliceUser))
+	body := sender.lastMsg()
+	if !strings.Contains(body, "держи +3 от alice.") {
+		t.Fatalf("missing praise line, got %q", body)
+	}
+	if !strings.Contains(body, "<i>(Баланс: alice: 9, bob: 13)</i>") {
+		t.Fatalf("missing balance line, got %q", body)
+	}
+}
+
+// TestRepPraiseAdminTargetCopy asserts the +6 admin-target variant.
+func TestRepPraiseAdminTargetCopy(t *testing.T) {
+	h, sender, members, _, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+	// Make bob an admin via the live admin cache; the handler has no
+	// admin cache wired by default, so wire one that reports bob=true.
+	h.admins = stubAdminCacheFunc(func(id int64) bool { return id == bobUser.ID })
+
+	_ = h.HandlePraise(nil, repMessage("/praise @bob", aliceUser))
+	body := sender.lastMsg()
+	if !strings.Contains(body, "держи +6 от alice.") {
+		t.Fatalf("missing admin praise line, got %q", body)
+	}
+	if !strings.Contains(body, "<i>(Баланс: alice: 9, bob: 26)</i>") {
+		t.Fatalf("missing admin balance line, got %q", body)
+	}
+}
+
+// TestRepRoastCopy asserts the exact roast response shape.
+func TestRepRoastCopy(t *testing.T) {
+	h, sender, members, _, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+
+	_ = h.HandleRoast(nil, repMessage("/roast @bob", aliceUser))
+	body := sender.lastMsg()
+	if !strings.Contains(body, "лови -1, чучело, от alice.") {
+		t.Fatalf("missing roast line, got %q", body)
+	}
+	if !strings.Contains(body, "<i>(Баланс: alice: 9, bob: 9)</i>") {
+		t.Fatalf("missing roast balance line, got %q", body)
+	}
+}
+
+// TestRepRepAndRepTopCopy asserts the /rep and /reptop copy shapes.
+func TestRepRepAndRepTopCopy(t *testing.T) {
+	h, sender, members, store, cleanup := newRepHandler(t)
+	defer cleanup()
+	members.put(bobMember)
+	members.put(aliceMember)
+
+	ctx := context.Background()
+	absChat := storage.AbsChatID(-1001234567890)
+	_, _ = store.Apply(ctx, absChat, aliceUser.ID, bobUser.ID, reputation.KindPraise, false, false)
+
+	_ = h.HandleRep(nil, repMessage("/rep", aliceUser))
+	if body := sender.lastMsg(); !strings.Contains(body, "у alice осталось <b>9</b> репутации...") {
+		t.Fatalf("/rep copy mismatch, got %q", body)
+	}
+
+	sender.Sent = nil
+	_ = h.HandleRepTop(nil, repMessage("/reptop", aliceUser))
+	body := sender.lastMsg()
+	if !strings.HasPrefix(body, "<b>у кого ещё что-то осталось...</b>") {
+		t.Fatalf("/reptop header missing, got %q", body)
+	}
+	if !strings.Contains(body, "alice — <b>") || !strings.Contains(body, "bob — <b>") {
+		t.Fatalf("/reptop entry shape wrong, got %q", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Error voice
+// ---------------------------------------------------------------------------
+
+// TestRepErrorVoice asserts the unified failure copy and the
+// self-target, insufficient-balance, target-zero, and missing-target
+// responses.
+func TestRepErrorVoice(t *testing.T) {
+	t.Run("missing target", func(t *testing.T) {
+		h, sender, _, _, cleanup := newRepHandler(t)
+		defer cleanup()
+		_ = h.HandlePraise(nil, repMessage("/praise", aliceUser))
+		if got := sender.lastMsg(); !strings.Contains(got, "нужно ответить на сообщение") {
+			t.Fatalf("missing-target copy mismatch, got %q", got)
+		}
+	})
+	t.Run("self target", func(t *testing.T) {
+		h, sender, members, _, cleanup := newRepHandler(t)
+		defer cleanup()
+		members.put(aliceMember)
+		_ = h.HandlePraise(nil, repMessage("/praise @alice", aliceUser))
+		if got := sender.lastMsg(); !strings.Contains(got, "себе нельзя... даже так.") {
+			t.Fatalf("self-target copy mismatch, got %q", got)
+		}
+	})
+	t.Run("actor balance exhausted", func(t *testing.T) {
+		h, sender, members, store, cleanup := newRepHandler(t)
+		defer cleanup()
+		members.put(bobMember)
+		ctx := context.Background()
+		absChat := storage.AbsChatID(-1001234567890)
+		// Drain Alice to 0 (10 roasts).
+		for range 10 {
+			_, _ = store.Apply(ctx, absChat, aliceUser.ID, bobUser.ID, reputation.KindRoast, false, false)
+		}
+		_ = h.HandleRoast(nil, repMessage("/roast @bob", aliceUser))
+		if got := sender.lastMsg(); !strings.Contains(got, "у тебя ничего не осталось... раздавать больше нечего.") {
+			t.Fatalf("insufficient-actor copy mismatch, got %q", got)
+		}
+	})
+	t.Run("roast target already at zero", func(t *testing.T) {
+		h, sender, members, store, cleanup := newRepHandler(t)
+		defer cleanup()
+		members.put(bobMember)
+		ctx := context.Background()
+		absChat := storage.AbsChatID(-1001234567890)
+		// Drain Bob to 0 (10 roasts by a third party).
+		for range 10 {
+			_, _ = store.Apply(ctx, absChat, 999, bobUser.ID, reputation.KindRoast, false, false)
+		}
+		_ = h.HandleRoast(nil, repMessage("/roast @bob", aliceUser))
+		if got := sender.lastMsg(); !strings.Contains(got, "у него уже ноль... ниже некуда.") {
+			t.Fatalf("target-zero copy mismatch, got %q", got)
+		}
+	})
+}
+
+// stubAdminCacheFunc is a test AdminChecker whose result is decided
+// by a caller-supplied function. Used when a test needs admin status
+// for one specific user (e.g. the +6 admin-target praise path).
+type stubAdminCacheFunc func(userID int64) bool
+
+func (f stubAdminCacheFunc) IsAdmin(_ int64, userID int64) (bool, error) {
+	return f(userID), nil
 }

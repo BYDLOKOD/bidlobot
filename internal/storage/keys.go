@@ -150,3 +150,43 @@ func StatsDailyPrefix(absChatID int64, day string) []byte {
 func StatsDailyChatPrefix(absChatID int64) []byte {
 	return []byte(fmt.Sprintf("sd:%020d:", absChatID))
 }
+
+// --- Referral catalog (Workstream: refs/reputation UX) ---
+//
+// Services and referrals are both keyed by (chat, numeric ID). IDs are
+// allocated globally via bbolt NextSequence so a chat-ID migration can
+// rekey records without primary-key collisions. The service name index
+// is keyed by the chat id + the NormalizeName reduction of the service
+// name (raw UTF-8 bytes), giving O(1) exact-category lookup per chat.
+
+// ReferralServiceKey is one service row, keyed by (chat, service ID).
+func ReferralServiceKey(absChatID int64, serviceID uint64) []byte {
+	return []byte(fmt.Sprintf("rfs:%020d:%020d", absChatID, serviceID))
+}
+
+// ReferralServicePrefix scans every service row in one chat.
+func ReferralServicePrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("rfs:%020d:", absChatID))
+}
+
+// ReferralServiceNameKey is the chat-scoped exact-name index entry. The
+// name component is the NormalizeName reduction (raw UTF-8 bytes); the
+// value is the service ID.
+func ReferralServiceNameKey(absChatID int64, normalized string) []byte {
+	return []byte(fmt.Sprintf("rfsn:%020d:%s", absChatID, normalized))
+}
+
+// ReferralServiceNamePrefix scans every name index entry in one chat.
+func ReferralServiceNamePrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("rfsn:%020d:", absChatID))
+}
+
+// ReferralKey is one referral row, keyed by (chat, referral ID).
+func ReferralKey(absChatID int64, referralID uint64) []byte {
+	return []byte(fmt.Sprintf("rf:%020d:%020d", absChatID, referralID))
+}
+
+// ReferralPrefix scans every referral row in one chat.
+func ReferralPrefix(absChatID int64) []byte {
+	return []byte(fmt.Sprintf("rf:%020d:", absChatID))
+}

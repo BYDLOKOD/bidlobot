@@ -220,9 +220,16 @@ func TestQuipTemplatesCuratedCounts(t *testing.T) {
 	if len(praiseTemplates) < 35 {
 		t.Errorf("praise pool too small for replayability: %d", len(praiseTemplates))
 	}
-	for i, tmpl := range append(append([]string{}, roastTemplates...), praiseTemplates...) {
+	all := append(append([]string{}, roastTemplates...), praiseTemplates...)
+	for i, tmpl := range all {
 		if strings.Count(tmpl, "%s") != 1 {
 			t.Errorf("template %d must contain exactly one %%s placeholder: %q", i, tmpl)
+		}
+		// Voice guard: the selected sad-bot corpus closes every
+		// one-liner with an unfinished thought marked by "...". A
+		// template missing it is a regression.
+		if !strings.Contains(tmpl, "...") {
+			t.Errorf("template %d must contain \"...\" to keep the elliptical voice: %q", i, tmpl)
 		}
 	}
 }

@@ -107,6 +107,23 @@ func registerRoutes(
 	// per-user cooldown key across both spellings.
 	sgGroup.HandleMessage(a.gateMsg("summarize", summarizeCooldown, a.handleSummarize), th.CommandEqual("summarize"))
 	sgGroup.HandleMessage(a.gateMsg("summarize", summarizeCooldown, a.handleSummarize), textCommandPredicate("/итог"))
+
+	// Referral catalog: /refs lists, /refreg registers, /refreport is
+	// admin moderation. The /ref and /ref-reg aliases share one
+	// cooldown key with their canonical forms so a user cannot dodge
+	// the throttle by alternating spellings. The awaited registration
+	// reply bypasses gateMsg (no cooldown) but is scoped by
+	// RegistrationInputPredicate so it never swallows ordinary chat
+	// traffic.
+	if a.referrals != nil {
+		sgGroup.HandleMessage(a.gateMsg("refs", 5*time.Second, a.referrals.HandleList), th.CommandEqual("refs"))
+		sgGroup.HandleMessage(a.gateMsg("refs", 5*time.Second, a.referrals.HandleList), textCommandPredicate("/ref"))
+		sgGroup.HandleMessage(a.gateMsg("refreg", 5*time.Second, a.referrals.HandleRegister), th.CommandEqual("refreg"))
+		sgGroup.HandleMessage(a.gateMsg("refreg", 5*time.Second, a.referrals.HandleRegister), textCommandPredicate("/ref-reg"))
+		sgGroup.HandleMessage(a.gateMsg("refreport", 5*time.Second, a.referrals.HandleReport), th.CommandEqual("refreport"))
+		sgGroup.HandleMessage(a.referrals.HandleRegistrationInput, a.referrals.RegistrationInputPredicate())
+	}
+
 	bh.HandleMessageReaction(reactionFanout(a, a.log), th.AnyMessageReaction())
 	bh.HandleMyChatMemberUpdated(membershipMyChatMemberHandler(a.memberSvc, a, a.log))
 	bh.HandleChatMemberUpdated(chatMemberFanout(a, a.log))
@@ -115,12 +132,15 @@ func registerRoutes(
 		bh.HandleInlineQuery(a.inlineSvc.Handler())
 	}
 
-	// Callback ordering matters: first match wins. The captcha predicate
-	// ("cap:") must precede the catch-all "v1:" dispatcher, or a new
-	// member's answer button would be swallowed by the "Кнопка устарела"
-	// fallback.
+	// Callback ordering matters: first match wins. Captcha ("cap:") and
+	// referral ("rf:") predicates must precede the catch-all "v1:"
+	// dispatcher, or a tap on their buttons would be swallowed by the
+	// "Кнопка устарела" fallback.
 	if a.captchaSvc != nil {
 		bh.HandleCallbackQuery(captchaCallbackHandler(a.captchaSvc, a.log), captchaCallbackPredicate())
+	}
+	if a.referrals != nil {
+		bh.HandleCallbackQuery(a.referrals.HandleCallback, ReferralCallbackPredicate())
 	}
 	if a.dispatcher != nil {
 		bh.HandleCallbackQuery(a.dispatcher.Handle, th.AnyCallbackQueryWithMessage())

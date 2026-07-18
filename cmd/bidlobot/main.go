@@ -204,6 +204,11 @@ func main() {
 	// inline router and slash handlers; AttachGames installs them on App.
 	app.AttachGames(buildGames(db, tgClient, botInfo.Username, adminCache, log))
 
+	// Chat-scoped referral catalog: /refs lists, /refreg registers,
+	// /refreport is admin moderation. Always on; the handler is nil-
+	// safe against a missing storage layer.
+	app.AttachReferrals(bot.NewReferralHandler(tgClient, storage.NewReferralRepo(db), adminCache, log))
+
 	// Summarization via Pi/OMP. Always-on; validated binary at startup.
 	app.AttachSummarize(summarizeSvc, tgClient)
 
