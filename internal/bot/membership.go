@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -76,13 +77,17 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 			})
 			log.Warn("non-owner add rejected",
 				"chat_id", cmu.Chat.ID,
+				"chat_title", cmu.Chat.Title,
+				"chat_username", cmu.Chat.Username,
 				"actor_id", cmu.From.ID,
+				"actor_name", strings.TrimSpace(cmu.From.FirstName+" "+cmu.From.LastName),
+				"actor_username", cmu.From.Username,
 				"leave_error", leaveErr,
 			)
 			if leaveErr == nil {
 				_, err := app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
 					ChatID: telego.ChatID{ID: app.botOwnerID},
-					Text:   fmt.Sprintf("Unauthorized bot admission rejected for chat %d.", cmu.Chat.ID),
+					Text:   formatAdmissionNotice(cmu),
 				})
 				if err != nil {
 					log.Warn("owner admission notice failed", "error", err)
@@ -131,6 +136,46 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 			})
 		}
 		return nil
+	}
+}
+
+func formatAdmissionNotice(cmu telego.ChatMemberUpdated) string {
+	return fmt.Sprintf(
+		"Unauthorized bot admission rejected.\n\nChat: %s\nChat ID: %d\n\nAdded by: %s\nUser ID: %d",
+		admissionChatDisplay(cmu.Chat),
+		cmu.Chat.ID,
+		admissionUserDisplay(cmu.From),
+		cmu.From.ID,
+	)
+}
+
+func admissionChatDisplay(chat telego.Chat) string {
+	title := strings.TrimSpace(chat.Title)
+	username := strings.TrimPrefix(strings.TrimSpace(chat.Username), "@")
+	switch {
+	case title != "" && username != "":
+		return fmt.Sprintf("%s (@%s)", title, username)
+	case title != "":
+		return title
+	case username != "":
+		return "@" + username
+	default:
+		return "Unknown chat"
+	}
+}
+
+func admissionUserDisplay(user telego.User) string {
+	name := strings.TrimSpace(user.FirstName + " " + user.LastName)
+	username := strings.TrimPrefix(strings.TrimSpace(user.Username), "@")
+	switch {
+	case name != "" && username != "":
+		return fmt.Sprintf("%s (@%s)", name, username)
+	case name != "":
+		return name
+	case username != "":
+		return "@" + username
+	default:
+		return "Unknown user"
 	}
 }
 

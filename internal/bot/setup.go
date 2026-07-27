@@ -7,11 +7,9 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-func setCommands(ctx context.Context, bot *telego.Bot) error {
-	// Group + admin-in-group menus expose the public, non-moderation
-	// surface (read-only stats + games + the referral catalog). There
-	// is no private management console anymore; the bot only responds
-	// to /help and /start in DMs.
+func setCommands(ctx context.Context, bot *telego.Bot, ownerID int64) error {
+	// Group menus expose the public surface. The installation console is
+	// published only in the owner's private chat.
 	groupCommands := []telego.BotCommand{
 		{Command: "stats", Description: "Статистика чата (top/today/month)"},
 		{Command: "summarize", Description: "Итог последних N сообщений (для админов)"},
@@ -43,12 +41,24 @@ func setCommands(ctx context.Context, bot *telego.Bot) error {
 		Description: "Удалить рефку по ID",
 	})
 
+	ownerCommands := []telego.BotCommand{
+		{Command: "start", Description: "Справка"},
+		{Command: "help", Description: "Справка"},
+		{Command: "chats", Description: "Чаты, где работает бот"},
+	}
+
 	scopes := []struct {
 		commands []telego.BotCommand
 		scope    telego.BotCommandScope
 	}{
 		{groupCommands, tu.ScopeAllGroupChats()},
 		{adminCommands, tu.ScopeAllChatAdministrators()},
+	}
+	if ownerID != 0 {
+		scopes = append(scopes, struct {
+			commands []telego.BotCommand
+			scope    telego.BotCommandScope
+		}{ownerCommands, tu.ScopeChat(telego.ChatID{ID: ownerID})})
 	}
 
 	for _, s := range scopes {

@@ -149,6 +149,21 @@ func (s *Service) RecordMyChatMember(ctx context.Context, cmu telego.ChatMemberU
 	})
 }
 
+// MarkBotLeft updates the local installation record after an owner-initiated
+// LeaveChat succeeds. Telegram will also send a my_chat_member update, but the
+// local list should reflect the completed action immediately.
+func (s *Service) MarkBotLeft(ctx context.Context, absChatID int64, ts time.Time) error {
+	chat, err := s.store.GetChat(ctx, absChatID)
+	if err != nil {
+		return err
+	}
+	chat.BotStatus = StatusLeft
+	chat.CanRestrict = false
+	chat.CanDelete = false
+	chat.LastUpdateAt = ts.UTC()
+	return s.store.UpsertChat(ctx, *chat)
+}
+
 func mapStatus(s string) Status {
 	switch Status(s) {
 	case StatusCreator, StatusAdministrator, StatusMember, StatusRestricted, StatusLeft, StatusKicked:

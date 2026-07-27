@@ -204,7 +204,7 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 		return err
 	}
 
-	if err := setCommands(ctx, a.bot); err != nil {
+	if err := setCommands(ctx, a.bot, a.botOwnerID); err != nil {
 		a.log.Warn("set commands failed", "error", err)
 	}
 
@@ -484,9 +484,13 @@ func (a *App) healthMiddleware() th.Handler {
 }
 
 func (a *App) handleHelpDM(_ *th.Context, msg telego.Message) error {
+	text := helpDM
+	if msg.From != nil && msg.From.ID == a.botOwnerID {
+		text += "\n\nВладелец: /chats — список подключённых чатов и отзыв бота."
+	}
 	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
 		ChatID: telego.ChatID{ID: msg.Chat.ID},
-		Text:   helpDM,
+		Text:   text,
 	})
 	return err
 }

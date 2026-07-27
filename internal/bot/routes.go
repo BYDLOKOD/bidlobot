@@ -51,11 +51,11 @@ func registerRoutes(
 ) {
 	bh.Use(loggingHandler(a.log))
 
-	// Private chat has no management console. Only help/start are
-	// meaningful here: they show a brief intro and point to group use.
+	// Private chat exposes help plus the owner-only installation console.
 	privateGroup := bh.Group(privatePredicate())
 	privateGroup.HandleMessage(a.handleHelpDM, th.CommandEqual("help"))
 	privateGroup.HandleMessage(a.handleHelpDM, th.CommandEqual("start"))
+	privateGroup.HandleMessage(a.handleOwnerChats, th.CommandEqual("chats"))
 
 	sgGroup := bh.Group(supergroupPredicate())
 
@@ -132,16 +132,16 @@ func registerRoutes(
 		bh.HandleInlineQuery(a.inlineSvc.Handler())
 	}
 
-	// Callback ordering matters: first match wins. Captcha ("cap:") and
-	// referral ("rf:") predicates must precede the catch-all "v1:"
-	// dispatcher, or a tap on their buttons would be swallowed by the
-	// "Кнопка устарела" fallback.
+	// Callback ordering matters: feature-specific predicates must precede
+	// the catch-all "v1:" dispatcher, or their buttons would be swallowed
+	// by the "Кнопка устарела" fallback.
 	if a.captchaSvc != nil {
 		bh.HandleCallbackQuery(captchaCallbackHandler(a.captchaSvc, a.log), captchaCallbackPredicate())
 	}
 	if a.referrals != nil {
 		bh.HandleCallbackQuery(a.referrals.HandleCallback, ReferralCallbackPredicate())
 	}
+	bh.HandleCallbackQuery(a.handleOwnerChatsCallback, ownerChatsCallbackPredicate())
 	if a.dispatcher != nil {
 		bh.HandleCallbackQuery(a.dispatcher.Handle, th.AnyCallbackQueryWithMessage())
 	}

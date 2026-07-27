@@ -313,7 +313,7 @@ func TestMyChatMemberHandler_NonOwnerAdd_LeavesAndDMsOwner(t *testing.T) {
 	svc := membership.NewService(storage.NewMembershipRepo(store.DB()), testLogger())
 	ts := time.Now().UTC().Unix()
 	botUser := telego.User{ID: 999, IsBot: true}
-	nonOwner := telego.User{ID: 12345, IsBot: false}
+	nonOwner := telego.User{ID: 12345, IsBot: false, FirstName: "Alice", LastName: "Smith", Username: "alice"}
 
 	t.Run("successful leave sends owner DM", func(t *testing.T) {
 		mock := testutil.NewMockAPI()
@@ -331,7 +331,7 @@ func TestMyChatMemberHandler_NonOwnerAdd_LeavesAndDMsOwner(t *testing.T) {
 		thctx := (&th.Context{}).WithContext(context.Background())
 
 		cmu := telego.ChatMemberUpdated{
-			Chat:          telego.Chat{ID: -100, Type: telego.ChatTypeSupergroup},
+			Chat:          telego.Chat{ID: -100, Type: telego.ChatTypeSupergroup, Title: "Builders", Username: "builders"},
 			Date:          ts,
 			From:          nonOwner,
 			OldChatMember: &telego.ChatMemberLeft{User: botUser},
@@ -355,6 +355,14 @@ func TestMyChatMemberHandler_NonOwnerAdd_LeavesAndDMsOwner(t *testing.T) {
 		dm := mock.Messages[len(mock.Messages)-1]
 		if dm.ChatID != 777 {
 			t.Fatalf("owner DM should target owner ID 777, got %d", dm.ChatID)
+		}
+		wantText := "Unauthorized bot admission rejected.\n\n" +
+			"Chat: Builders (@builders)\n" +
+			"Chat ID: -100\n\n" +
+			"Added by: Alice Smith (@alice)\n" +
+			"User ID: 12345"
+		if dm.Text != wantText {
+			t.Fatalf("owner DM text = %q, want %q", dm.Text, wantText)
 		}
 	})
 
