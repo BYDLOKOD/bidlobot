@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoapi"
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/storage"
@@ -82,6 +83,38 @@ func TestOwnerChatsListShowsOnlyCurrentChatsWithRevokeButtons(t *testing.T) {
 	}
 }
 
+func TestOwnerChatsListDropsTelegramInaccessibleChats(t *testing.T) {
+	a, repo, sender, _ := newOwnerChatsTestApp(t)
+	sender.ChatMembers["100333:999"] = telego.MemberStatusLeft
+	if err := repo.UpsertChat(context.Background(), membership.Chat{
+		AbsChatID:    100333,
+		Title:        "Stale chat",
+		Type:         telego.ChatTypeSupergroup,
+		BotStatus:    membership.StatusAdministrator,
+		LastUpdateAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	msg := telego.Message{
+		Chat: telego.Chat{ID: 777, Type: telego.ChatTypePrivate},
+		From: &telego.User{ID: 777},
+	}
+	if err := a.handleOwnerChats(nil, msg); err != nil {
+		t.Fatal(err)
+	}
+	if got := sender.LastMessage(); got == nil || !strings.Contains(got.Text, "не состоит ни в одном чате") {
+		t.Fatalf("stale chat remained visible: %#v", got)
+	}
+	stored, err := repo.GetChat(context.Background(), 100333)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.BotStatus != membership.StatusLeft {
+		t.Fatalf("stale chat status = %q, want left", stored.BotStatus)
+	}
+}
+
 func TestOwnerChatsRevokeRequiresOwnerConfirmation(t *testing.T) {
 	a, repo, sender, leaver := newOwnerChatsTestApp(t)
 	now := time.Now().UTC()
@@ -148,6 +181,46 @@ func TestOwnerChatsRevokeRequiresOwnerConfirmation(t *testing.T) {
 	}
 	if got := lastEdit(t, sender).Text; !strings.Contains(got, "Бот вышел из чата") {
 		t.Fatalf("completion text = %q", got)
+	}
+}
+
+func TestOwnerChatsUnavailableLeaveCleansStaleRecord(t *testing.T) {
+	a, repo, sender, leaver := newOwnerChatsTestApp(t)
+	leaver.err = &telegoapi.Error{
+		ErrorCode:   400,
+		Description: "Bad Request: chat not found",
+	}
+	if err := repo.UpsertChat(context.Background(), membership.Chat{
+		AbsChatID:    100111,
+		Title:        "Stale chat",
+		Type:         telego.ChatTypeSupergroup,
+		BotStatus:    membership.StatusMember,
+		LastUpdateAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	query := telego.CallbackQuery{
+		ID:   "leave",
+		From: telego.User{ID: 777},
+		Message: &telego.Message{
+			MessageID: 42,
+			Chat:      telego.Chat{ID: 777, Type: telego.ChatTypePrivate},
+		},
+		Data: "oc:leave:100111",
+	}
+	if err := a.handleOwnerChatsCallback(nil, query); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.GetChat(context.Background(), 100111)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.BotStatus != membership.StatusLeft {
+		t.Fatalf("stale chat status = %q, want left", stored.BotStatus)
+	}
+	if got := lastEdit(t, sender).Text; !strings.Contains(got, "уже не состоит") {
+		t.Fatalf("stale completion text = %q", got)
 	}
 }
 

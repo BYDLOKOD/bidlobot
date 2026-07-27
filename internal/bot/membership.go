@@ -65,6 +65,8 @@ const msgOnboardingAdmin = "<b>BidloBot</b> подключён.\n\n" +
 	"Статистика и игры: /stats, /dice, /quiz.\n" +
 	"Администраторам: /summarize - итог чата через AI."
 
+const unauthorizedAdmissionNoticeLimit uint64 = 2
+
 func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.Logger) th.ChatMemberUpdatedHandler {
 	return func(ctx *th.Context, cmu telego.ChatMemberUpdated) error {
 		// Owner-only admission check: must happen before any
@@ -72,6 +74,17 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 		switch EvaluateMyChatMemberAdmission(cmu, app.botOwnerID) {
 		case AdmissionReject:
 			bgCtx := context.Background()
+			attemptCount := uint64(0)
+			noticeAllowed := app.admissionAttempts == nil
+			if app.admissionAttempts != nil {
+				var err error
+				attemptCount, err = app.admissionAttempts.RecordUnauthorizedAdmission(bgCtx, cmu.From.ID)
+				if err != nil {
+					log.Error("record unauthorized admission failed", "error", err, "actor_id", cmu.From.ID)
+				} else {
+					noticeAllowed = attemptCount <= unauthorizedAdmissionNoticeLimit
+				}
+			}
 			leaveErr := app.leaver.LeaveChat(bgCtx, &telego.LeaveChatParams{
 				ChatID: telego.ChatID{ID: cmu.Chat.ID},
 			})
@@ -82,9 +95,11 @@ func membershipMyChatMemberHandler(svc *membership.Service, app *App, log *slog.
 				"actor_id", cmu.From.ID,
 				"actor_name", strings.TrimSpace(cmu.From.FirstName+" "+cmu.From.LastName),
 				"actor_username", cmu.From.Username,
+				"attempt_count", attemptCount,
+				"notice_suppressed", !noticeAllowed,
 				"leave_error", leaveErr,
 			)
-			if leaveErr == nil {
+			if leaveErr == nil && noticeAllowed {
 				_, err := app.sender.SendMessage(bgCtx, &telego.SendMessageParams{
 					ChatID: telego.ChatID{ID: app.botOwnerID},
 					Text:   formatAdmissionNotice(cmu),

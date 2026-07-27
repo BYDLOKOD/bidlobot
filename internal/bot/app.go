@@ -75,7 +75,8 @@ type App struct {
 	// botOwnerID is the required Telegram user ID of the bot owner.
 	// Only this user may add the bot to a supergroup; non-owner adds
 	// trigger an immediate LeaveChat.
-	botOwnerID int64
+	botOwnerID        int64
+	admissionAttempts AdmissionAttemptStore
 	// captchaSvc is the opt-in new-member captcha. nil (default) means
 	// the feature is off: no join messages, no buttons, no sweep.
 	captchaSvc *captcha.Service
@@ -101,6 +102,10 @@ type PendingGC interface {
 
 type ChatLeaver interface {
 	LeaveChat(ctx context.Context, params *telego.LeaveChatParams) error
+}
+
+type AdmissionAttemptStore interface {
+	RecordUnauthorizedAdmission(ctx context.Context, userID int64) (uint64, error)
 }
 
 // NewApp wires the App. `sender` MUST be the rate-limited tgclient
@@ -130,6 +135,12 @@ func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminC
 // owner-only admission control. Must be called before Run.
 func (a *App) SetBotOwnerID(ownerID int64) {
 	a.botOwnerID = ownerID
+}
+
+// SetAdmissionAttemptStore enables durable suppression of repeated
+// unauthorized-admission notices.
+func (a *App) SetAdmissionAttemptStore(store AdmissionAttemptStore) {
+	a.admissionAttempts = store
 }
 
 // AttachHealth wires the /health and /version listener and the in-memory

@@ -114,6 +114,7 @@ func main() {
 	statsRepo := storage.NewStatsRepo(db)
 	warnRepo := storage.NewWarnRepo(db)
 	memberRepo := storage.NewMembershipRepo(db)
+	admissionAttemptRepo := storage.NewAdmissionAttemptRepo(db)
 	pendingRepo := storage.NewPendingRepo(db)
 
 	memberSvc := membership.NewService(memberRepo, log)
@@ -176,6 +177,7 @@ func main() {
 	// inside Telegram's 20 msg/min/chat.
 	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, monthBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
 	app.SetBotOwnerID(cfg.BotOwnerID)
+	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	if err := app.AttachHealth(
 		// dbOpen probes bbolt with a no-op view txn. Path() returning a
 		// non-empty string is a tautology (it's set at open time and

@@ -32,6 +32,8 @@ type MockAPI struct {
 	ChatMemberUsers map[string]telego.User // "chatID:userID" -> identity GetChatMember returns
 	ChatMemberErrs  map[string]error       // "chatID:userID" -> GetChatMember error
 	ChatPerms       *telego.ChatPermissions
+	Chats           map[int64]*telego.ChatFullInfo
+	ChatErrs        map[int64]error
 	BotInfo         *telego.User
 }
 
@@ -42,6 +44,8 @@ func NewMockAPI() *MockAPI {
 		ChatMembers:     make(map[string]string),
 		ChatMemberUsers: make(map[string]telego.User),
 		ChatMemberErrs:  make(map[string]error),
+		Chats:           make(map[int64]*telego.ChatFullInfo),
+		ChatErrs:        make(map[int64]error),
 		BotInfo:         &telego.User{ID: 999, Username: "test_bot", IsBot: true},
 	}
 }
@@ -156,6 +160,13 @@ func (m *MockAPI) GetChat(_ context.Context, params *telego.GetChatParams) (*tel
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, APICall{"GetChat", params})
 
+	if err := m.ChatErrs[params.ChatID.ID]; err != nil {
+		return nil, err
+	}
+	if chat := m.Chats[params.ChatID.ID]; chat != nil {
+		copy := *chat
+		return &copy, nil
+	}
 	return &telego.ChatFullInfo{
 		ID:          params.ChatID.ID,
 		Type:        telego.ChatTypeSupergroup,

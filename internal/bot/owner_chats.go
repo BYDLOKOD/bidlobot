@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
@@ -38,7 +40,7 @@ func (a *App) handleOwnerChats(_ *th.Context, msg telego.Message) error {
 		return sendErr
 	}
 
-	active := currentBotChats(chats)
+	active := a.verifiedCurrentBotChats(context.Background(), chats)
 	if len(active) == 0 {
 		_, err = a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
 			ChatID: telego.ChatID{ID: msg.Chat.ID},
@@ -85,6 +87,35 @@ func currentBotChats(chats []membership.Chat) []membership.Chat {
 		return left < right
 	})
 	return active
+}
+
+func (a *App) verifiedCurrentBotChats(ctx context.Context, chats []membership.Chat) []membership.Chat {
+	active := currentBotChats(chats)
+	botInfo, err := a.sender.GetMe(ctx)
+	if err != nil {
+		a.log.Warn("resolve bot identity for owner chats failed", "error", err)
+		return active
+	}
+
+	verified := make([]membership.Chat, 0, len(active))
+	for _, chat := range active {
+		member, err := a.sender.GetChatMember(ctx, &telego.GetChatMemberParams{
+			ChatID: telego.ChatID{ID: -chat.AbsChatID},
+			UserID: botInfo.ID,
+		})
+		switch {
+		case err == nil && member.MemberStatus() != telego.MemberStatusLeft &&
+			member.MemberStatus() != telego.MemberStatusBanned:
+			verified = append(verified, chat)
+		case err == nil || telegramChatUnavailable(err):
+			a.markOwnerChatLeft(chat.AbsChatID)
+			a.log.Info("removed stale owner chat", "chat_id", -chat.AbsChatID, "error", err)
+		default:
+			a.log.Warn("verify owner chat failed", "chat_id", -chat.AbsChatID, "error", err)
+			verified = append(verified, chat)
+		}
+	}
+	return verified
 }
 
 func botStatusIsCurrent(status membership.Status) bool {
@@ -178,10 +209,21 @@ func (a *App) handleOwnerChatsCallback(_ *th.Context, query telego.CallbackQuery
 			showAlert = true
 		}
 	case "leave":
-		if err := a.leaver.LeaveChat(context.Background(), &telego.LeaveChatParams{
+		var leaveErr error
+		leaveErr = a.leaver.LeaveChat(context.Background(), &telego.LeaveChatParams{
 			ChatID: telego.ChatID{ID: -chat.AbsChatID},
-		}); err != nil {
-			a.log.Warn("owner chat revoke failed", "error", err, "chat_id", -chat.AbsChatID)
+		})
+		if leaveErr != nil {
+			if telegramChatUnavailable(leaveErr) {
+				a.markOwnerChatLeft(chat.AbsChatID)
+				text := fmt.Sprintf("Бот уже не состоит в чате %s.\n\nID: -%d\nЗапись удалена из списка.", ownerChatName(*chat), chat.AbsChatID)
+				if err := a.editOwnerChatsMessage(query, text, emptyKeyboard()); err != nil {
+					a.log.Warn("edit stale owner chat result failed", "error", err, "chat_id", -chat.AbsChatID)
+				}
+				answer = "Бота уже нет в этом чате. Запись удалена."
+				return nil
+			}
+			a.log.Warn("owner chat revoke failed", "error", leaveErr, "chat_id", -chat.AbsChatID)
 			answer = "Telegram не позволил выйти из чата. Попробуйте ещё раз."
 			showAlert = true
 			return nil
@@ -199,6 +241,23 @@ func (a *App) handleOwnerChatsCallback(_ *th.Context, query telego.CallbackQuery
 		answer = "Бот отозван."
 	}
 	return nil
+}
+
+func (a *App) markOwnerChatLeft(absChatID int64) {
+	if err := a.memberSvc.MarkBotLeft(context.Background(), absChatID, time.Now().UTC()); err != nil {
+		a.log.Error("mark owner chat left failed", "error", err, "chat_id", -absChatID)
+	}
+}
+
+func telegramChatUnavailable(err error) bool {
+	var apiErr *telegoapi.Error
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	description := strings.ToLower(apiErr.Description)
+	return strings.Contains(description, "chat not found") ||
+		strings.Contains(description, "bot was kicked") ||
+		strings.Contains(description, "bot is not a member")
 }
 
 func parseOwnerChatsCallback(data string) (string, int64, bool) {
