@@ -1,7 +1,7 @@
 package summarize
 
 import (
-	"bytes"
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -23,47 +23,56 @@ var (
 	ErrTimeout         = errors.New("summarize: timeout")
 )
 
-// Runner is the command-execution seam. The real implementation uses
-// os/exec; tests inject a fake that captures args and returns canned
-// output.
+// Runner is the command-execution seam. The real implementation streams
+// OMP's JSONL output into a final Completion; tests inject a fake that
+// captures args and returns a canned result.
 type Runner interface {
-	Run(ctx context.Context, binary string, args []string, stdin string) (string, error)
+	Run(ctx context.Context, binary string, args []string, stdin string) (Completion, error)
 }
 
 type execRunner struct{}
 
-func (execRunner) Run(ctx context.Context, binary string, args []string, stdin string) (string, error) {
+func (execRunner) Run(ctx context.Context, binary string, args []string, stdin string) (Completion, error) {
 	fd, err := unix.MemfdCreate("bidlobot-summarize", unix.MFD_CLOEXEC)
 	if err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	prompt := os.NewFile(uintptr(fd), "bidlobot-summarize")
 	defer prompt.Close()
 	if _, err := prompt.WriteString(stdin); err != nil {
-		return "", err
+		return Completion{}, err
 	}
 	if _, err := prompt.Seek(0, 0); err != nil {
-		return "", err
+		return Completion{}, err
 	}
 
 	args = append(args, "@/proc/self/fd/3")
 	cmd := exec.CommandContext(ctx, binary, args...)
 	cmd.ExtraFiles = []*os.File{prompt}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err = cmd.Run()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		// Never leak stderr, argv, or credentials in the error.
-		return "", err
+		return Completion{}, err
 	}
+	// OMP diagnostics are intentionally never exposed: they may contain
+	// provider details, and retaining an unbounded stderr was pure memory
+	// overhead on the only path where the caller discards it.
+	cmd.Stderr = io.Discard
 
-	out := strings.TrimSpace(stdout.String())
-	if out == "" {
-		return "", errors.New("empty output")
+	if err := cmd.Start(); err != nil {
+		return Completion{}, err
 	}
-	return out, nil
+	completion, parseErr := parseOMPJSON(stdout)
+	if parseErr != nil {
+		// Stop a malformed or oversized producer immediately. Waiting
+		// without killing could deadlock once its stdout pipe fills.
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return Completion{}, parseErr
+	}
+	if err := cmd.Wait(); err != nil {
+		return Completion{}, err
+	}
+	return completion, nil
 }
 
 // Completion is the public result of one OMP turn. CostUSD comes from the
@@ -72,6 +81,12 @@ type Completion struct {
 	Text    string
 	CostUSD float64
 }
+
+// maxOMPJSONEventBytes is a hard per-event ceiling. OMP emits one JSON
+// object per line; a valid tool-free summary event is tiny compared with
+// this limit. Bounding the scanner prevents one malformed or runaway event
+// from replacing the old whole-stream OOM with a single-event OOM.
+const maxOMPJSONEventBytes = 4 << 20
 
 type ompJSONEvent struct {
 	Type    string          `json:"type"`
@@ -131,33 +146,39 @@ func (r *PiRunner) Complete(ctx context.Context, systemPrompt, transcript string
 		"--model", r.model,
 	}
 
-	out, err := r.runner.Run(ctx, r.binary, args, transcript)
+	completion, err := r.runner.Run(ctx, r.binary, args, transcript)
 	if err != nil {
 		if ctx.Err() != nil {
 			return Completion{}, ErrTimeout
 		}
 		return Completion{}, fmt.Errorf("%w: %v", ErrProviderFailure, err)
 	}
-	completion, err := parseOMPJSON(out)
-	if err != nil {
-		return Completion{}, fmt.Errorf("%w: invalid OMP JSON output", ErrProviderFailure)
-	}
 	return completion, nil
 }
 
-func parseOMPJSON(out string) (Completion, error) {
-	dec := json.NewDecoder(strings.NewReader(out))
+func parseOMPJSON(in io.Reader) (Completion, error) {
+	scanner := bufio.NewScanner(in)
+	scanner.Buffer(make([]byte, 64<<10), maxOMPJSONEventBytes)
+
 	var completion Completion
 	found := false
-	for {
-		var event ompJSONEvent
-		if err := dec.Decode(&event); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		var header struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(line, &header); err != nil {
 			return Completion{}, err
 		}
-		if event.Type != "message_end" || event.Message == nil || event.Message.Role != "assistant" {
+		if header.Type != "message_end" {
+			continue
+		}
+
+		var event ompJSONEvent
+		if err := json.Unmarshal(line, &event); err != nil {
+			return Completion{}, err
+		}
+		if event.Message == nil || event.Message.Role != "assistant" {
 			continue
 		}
 
@@ -167,17 +188,21 @@ func parseOMPJSON(out string) (Completion, error) {
 				text.WriteString(content.Text)
 			}
 		}
-		if strings.TrimSpace(text.String()) == "" ||
+		body := strings.TrimSpace(text.String())
+		if body == "" ||
 			event.Message.Usage == nil ||
 			event.Message.Usage.Cost == nil ||
 			event.Message.Usage.Cost.Total == nil {
 			continue
 		}
 		completion = Completion{
-			Text:    strings.TrimSpace(text.String()),
+			Text:    body,
 			CostUSD: *event.Message.Usage.Cost.Total,
 		}
 		found = true
+	}
+	if err := scanner.Err(); err != nil {
+		return Completion{}, err
 	}
 	if !found {
 		return Completion{}, errors.New("missing assistant completion or usage")
