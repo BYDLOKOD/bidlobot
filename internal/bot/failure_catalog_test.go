@@ -167,8 +167,8 @@ func TestTikTok_DownloadFail_MustUseFailureCatalog(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 	// Pass a non-existent file path - os.Stat fails, triggering
-	// sendDecline with msgTikTokDownloadFail.
-	processTikTok(context.Background(), snd, log, msg,
+	// sendDecline with a FailureCatalog note.
+	processTikTok(context.Background(), snd, log, nil, msg,
 		"https://www.tiktok.com/@user/video/123",
 		filepath.Join(t.TempDir(), "nonexistent.mp4"))
 
@@ -203,7 +203,7 @@ func TestTikTok_SizeLimit_MustUseFailureCatalog(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, msg,
+	processTikTok(context.Background(), snd, log, nil, msg,
 		"https://www.tiktok.com/@user/video/123", videoPath)
 
 	if len(snd.Messages) != 1 {

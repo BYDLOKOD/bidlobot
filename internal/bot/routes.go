@@ -94,6 +94,7 @@ func registerRoutes(
 	// Stats stays public: it is read-only, not chat management. Help
 	// stays public so members can discover the bot.
 	sgGroup.HandleMessage(a.gateMsg("stats", 5*time.Second, statsH.HandleStats), th.CommandEqual("stats"))
+	sgGroup.HandleMessage(a.gateMsg("flush", flushCooldown, a.handleFlush), th.CommandEqual("flush"))
 	sgGroup.HandleMessage(a.handleHelpSupergroup, th.CommandEqual("help"))
 
 	// /summarize is admin-only (checked inside the handler) but read-only

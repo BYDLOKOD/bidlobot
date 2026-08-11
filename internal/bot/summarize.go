@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -148,6 +149,27 @@ func (a *App) handleSummarize(_ *th.Context, msg telego.Message) error {
 	a.summarize.Go(func() {
 		defer a.summarize.Release(absChatID)
 		body, meta, serr := a.summarize.Summarize(absChatID, args.n, args.questions)
+
+		// Enqueue for later retry if Pi failed.
+		if serr != nil && a.deferredQ != nil {
+			payload, _ := json.Marshal(storage.SummarizePayload{
+				N:             args.n,
+				Questions:     args.questions,
+				PlaceholderID: placeholderID,
+				Requester:     requester,
+			})
+			if err := a.deferredQ.Enqueue(context.Background(), storage.DeferredJob{
+				UserID:    msg.From.ID,
+				Type:      storage.DeferredSummarize,
+				ChatID:    signedChatID,
+				MessageID: msg.MessageID,
+				Payload:   payload,
+				CreatedAt: time.Now().UTC(),
+			}); err != nil {
+				a.log.Warn("summarize: enqueue deferred retry failed", "error", err)
+			}
+		}
+
 		final := composeSummaryMessage(body, meta, requester, serr)
 		ectx, ecancel := a.summarize.OpContext(summarizeEditTO)
 		defer ecancel()

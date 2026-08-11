@@ -83,6 +83,10 @@ type App struct {
 	// referrals is the opt-in referral catalog UX. nil (default) means
 	// /refs, /refreg, and /refreport are not wired.
 	referrals *ReferralHandler
+	// deferredQ is the per-user deferred-job queue (TikTok exports,
+	// summarize retries). nil (default) means failures get a decline
+	// reply instead of being queued.
+	deferredQ DeferredQueuer
 }
 
 // InFlight exposes the WaitGroup for executors that need to register
@@ -141,6 +145,12 @@ func (a *App) SetBotOwnerID(ownerID int64) {
 // unauthorized-admission notices.
 func (a *App) SetAdmissionAttemptStore(store AdmissionAttemptStore) {
 	a.admissionAttempts = store
+}
+
+// SetDeferredQueue wires the per-user deferred-job queue for failed
+// TikTok exports and summarize retries. Call before Run.
+func (a *App) SetDeferredQueue(q DeferredQueuer) {
+	a.deferredQ = q
 }
 
 // AttachHealth wires the /health and /version listener and the in-memory
@@ -237,6 +247,9 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	}
 	if a.pendingGC != nil {
 		go a.runPendingGC(ctx, time.Minute)
+	}
+	if a.deferredQ != nil {
+		go a.runDeferredGC(ctx, 10*time.Minute)
 	}
 	if a.dailyCleanup != nil {
 		// Tracked in inFlight: this worker kicks members and writes bbolt,

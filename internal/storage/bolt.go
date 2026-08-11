@@ -39,6 +39,7 @@ var buckets = []string{
 	"referral_services_name_idx",
 	"referrals",
 	"admission_attempts",
+	"deferred_jobs",
 }
 
 type BoltStore struct {

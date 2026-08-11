@@ -2,13 +2,18 @@ package bot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
+
+	"github.com/veschin/bidlobot/internal/storage"
 )
 
 func TestTikTokDecision(t *testing.T) {
@@ -195,6 +200,10 @@ func TestDownloadTikTok(t *testing.T) {
 //   - SendVideo is called with correct chat ID, caption, parse mode
 //   - DeleteMessage is called AFTER SendVideo succeeds (repost-first)
 func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
+	origFFprobe := ffprobeHasAudio
+	ffprobeHasAudio = func(string) bool { return true }
+	defer func() { ffprobeHasAudio = origFFprobe }()
+
 	dir := t.TempDir()
 	videoPath := filepath.Join(dir, "test.mp4")
 	if err := os.WriteFile(videoPath, []byte("fake mp4 content"), 0644); err != nil {
@@ -211,7 +220,7 @@ func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
 		Caption:   "original caption",
 	}
 
-	processTikTok(context.Background(), snd, log, msg,
+	processTikTok(context.Background(), snd, log, nil, msg,
 		"https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Assert SendVideo was called with correct params.
@@ -267,7 +276,7 @@ func TestProcessTikTokVideoTooLarge(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, msg,
+	processTikTok(context.Background(), snd, log, nil, msg,
 		"https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Should NOT have called SendVideo (too large).
@@ -305,7 +314,7 @@ func TestProcessTikTokDeleteFailsRepostStands(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, msg,
+	processTikTok(context.Background(), snd, log, nil, msg,
 		"https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Repost MUST stand even when delete fails.
@@ -326,5 +335,191 @@ func ttTestMessage(text string) *telego.Message {
 		Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 		Text:      text,
+	}
+}
+
+// --- Deferred queue + audio-check tests ---
+
+// fakeDeferredQueue is an in-memory DeferredQueuer for tests.
+type fakeDeferredQueue struct {
+	jobs []storage.DeferredJob
+}
+
+func (f *fakeDeferredQueue) Enqueue(_ context.Context, job storage.DeferredJob) error {
+	f.jobs = append(f.jobs, job)
+	return nil
+}
+func (f *fakeDeferredQueue) ListByUser(_ context.Context, userID int64) ([]storage.DeferredJob, error) {
+	var out []storage.DeferredJob
+	for _, j := range f.jobs {
+		if j.UserID == userID {
+			out = append(out, j)
+		}
+	}
+	return out, nil
+}
+func (f *fakeDeferredQueue) Delete(_ context.Context, _ string) error { return nil }
+func (f *fakeDeferredQueue) GarbageCollect(_ context.Context, _ time.Time) (int, error) {
+	return 0, nil
+}
+
+// TestProcessTikTok_NoAudio_QueuesNotUploads verifies that a video with
+// no audio stream is enqueued for later flush instead of being uploaded.
+// The original message is left intact (no delete, no decline).
+func TestProcessTikTok_NoAudio_QueuesNotUploads(t *testing.T) {
+	origFFprobe := ffprobeHasAudio
+	ffprobeHasAudio = func(string) bool { return false }
+	defer func() { ffprobeHasAudio = origFFprobe }()
+
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	q := &fakeDeferredQueue{}
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, q, msg,
+		"https://vt.tiktok.com/Ztest", videoPath)
+
+	if len(snd.Videos) != 0 {
+		t.Errorf("expected 0 uploads, got %d", len(snd.Videos))
+	}
+	if len(snd.Deletes) != 0 {
+		t.Errorf("expected 0 deletes, got %d", len(snd.Deletes))
+	}
+	if len(q.jobs) != 1 {
+		t.Fatalf("expected 1 queued job, got %d", len(q.jobs))
+	}
+	var p storage.TikTokPayload
+	json.Unmarshal(q.jobs[0].Payload, &p)
+	if p.URL != "https://vt.tiktok.com/Ztest" {
+		t.Errorf("queued URL = %q", p.URL)
+	}
+	if q.jobs[0].UserID != 200 {
+		t.Errorf("queued UserID = %d, want 200", q.jobs[0].UserID)
+	}
+	// No decline message when queue is available.
+	if len(snd.Messages) != 0 {
+		t.Errorf("expected 0 decline messages, got %d", len(snd.Messages))
+	}
+}
+
+// TestProcessTikTok_NoAudio_NoQueue_Declines verifies that without a
+// queue the no-audio case falls back to a public decline (old behavior).
+func TestProcessTikTok_NoAudio_NoQueue_Declines(t *testing.T) {
+	origFFprobe := ffprobeHasAudio
+	ffprobeHasAudio = func(string) bool { return false }
+	defer func() { ffprobeHasAudio = origFFprobe }()
+
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, nil, msg,
+		"https://vt.tiktok.com/Ztest", videoPath)
+
+	if len(snd.Videos) != 0 {
+		t.Errorf("expected 0 uploads, got %d", len(snd.Videos))
+	}
+	if len(snd.Messages) != 1 {
+		t.Fatalf("expected 1 decline, got %d", len(snd.Messages))
+	}
+	if !failureCatalogContains(snd.Messages[0].Text) {
+		t.Errorf("decline must be from FailureCatalog; got %q", snd.Messages[0].Text)
+	}
+}
+
+// TestEnqueueOrFail_WithQueue verifies that the job is stored silently
+// (no public decline) when a queue is wired.
+func TestEnqueueOrFail_WithQueue(t *testing.T) {
+	q := &fakeDeferredQueue{}
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+		Caption:   "cap",
+	}
+
+	enqueueOrFail(context.Background(), snd, log, q, msg, "https://vt.tiktok.com/Ztest")
+
+	if len(q.jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d", len(q.jobs))
+	}
+	job := q.jobs[0]
+	if job.UserID != 200 || job.ChatID != -100123 || job.MessageID != 42 {
+		t.Errorf("job user/chat/msg = %d/%d/%d", job.UserID, job.ChatID, job.MessageID)
+	}
+	if job.Type != storage.DeferredTikTok {
+		t.Errorf("job type = %q, want %q", job.Type, storage.DeferredTikTok)
+	}
+	var p storage.TikTokPayload
+	json.Unmarshal(job.Payload, &p)
+	if p.URL != "https://vt.tiktok.com/Ztest" {
+		t.Errorf("payload URL = %q", p.URL)
+	}
+	if p.Username != "alice" || p.FirstName != "Alice" {
+		t.Errorf("payload sender = %q/%q", p.Username, p.FirstName)
+	}
+	if p.Caption != "cap" {
+		t.Errorf("payload caption = %q", p.Caption)
+	}
+	if len(snd.Messages) != 0 {
+		t.Errorf("expected 0 decline messages, got %d", len(snd.Messages))
+	}
+}
+
+// TestEnqueueOrFail_NoQueue_Declines verifies that without a queue the
+// caller gets a public decline (backward-compatible fallback).
+func TestEnqueueOrFail_NoQueue_Declines(t *testing.T) {
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	enqueueOrFail(context.Background(), snd, log, nil, msg, "https://vt.tiktok.com/Ztest")
+
+	if len(snd.Messages) != 1 {
+		t.Fatalf("expected 1 decline, got %d", len(snd.Messages))
+	}
+	if !failureCatalogContains(snd.Messages[0].Text) {
+		t.Errorf("decline must be from FailureCatalog; got %q", snd.Messages[0].Text)
+	}
+}
+
+func TestTiktokCaption(t *testing.T) {
+	got := tiktokCaption("alice", "Alice", "check this out")
+	if !strings.Contains(got, "alice") {
+		t.Errorf("caption should contain display name; got %q", got)
+	}
+	if !strings.Contains(got, "check this out") {
+		t.Errorf("caption should contain raw caption; got %q", got)
+	}
+	// No caption → just the header, no trailing newline.
+	got = tiktokCaption("bob", "Bob", "")
+	if strings.Contains(got, "\n") {
+		t.Errorf("empty caption should not add newline; got %q", got)
 	}
 }
