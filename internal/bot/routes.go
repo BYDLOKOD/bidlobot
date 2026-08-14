@@ -23,6 +23,11 @@ func reactionFanout(a *App, log *slog.Logger) th.MessageReactionHandler {
 				log.Warn("battle reaction observer failed", "error", err)
 			}
 		}
+		if a.repReactor != nil {
+			if err := a.repReactor.Handle(ctx, reaction); err != nil {
+				log.Warn("rep reaction observer failed", "error", err)
+			}
+		}
 		return membership(ctx, reaction)
 	}
 }
@@ -72,6 +77,13 @@ func registerRoutes(
 	}
 	sgGroup.Use(membershipMessageMiddleware(a.memberSvc, a.log))
 	sgGroup.Use(statsCountHandler(a.statsBuffer, monthly))
+	// Reaction-rep author index: records (chat, messageID) -> author for
+	// every supergroup message so a later reaction can be attributed.
+	// Runs before the reposters so the original human message is always
+	// indexed even when a later middleware deletes it.
+	if a.repReactor != nil {
+		sgGroup.Use(repAuthorIndexMiddleware(a.repReactor))
+	}
 	// Passive RAM recorder for the Pi/OMP summarization feature. Like
 	// the stats observer it must see the original human message, so it
 	// sits among the observers, before the YouTube sanitizer (which

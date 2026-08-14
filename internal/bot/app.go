@@ -87,6 +87,9 @@ type App struct {
 	// summarize retries). nil (default) means failures get a decline
 	// reply instead of being queued.
 	deferredQ DeferredQueuer
+	// repReactor is the reaction->rep pipeline (👍 +rep, 👎/🤡 -rep).
+	// nil (default) means reactions are ignored for reputation.
+	repReactor *repReactor
 }
 
 // InFlight exposes the WaitGroup for executors that need to register
@@ -151,6 +154,13 @@ func (a *App) SetAdmissionAttemptStore(store AdmissionAttemptStore) {
 // TikTok exports and summarize retries. Call before Run.
 func (a *App) SetDeferredQueue(q DeferredQueuer) {
 	a.deferredQ = q
+}
+
+// AttachRepReactions wires the reaction->rep pipeline (👍 +rep, 👎/🤡 -rep
+// with a 10s combined-message batcher). Call before Run so registerRoutes
+// sees the wiring. A nil reactor is a no-op (feature off).
+func (a *App) AttachRepReactions(r *repReactor) {
+	a.repReactor = r
 }
 
 // AttachHealth wires the /health and /version listener and the in-memory
@@ -508,22 +518,33 @@ func (a *App) healthMiddleware() th.Handler {
 }
 
 func (a *App) handleHelpDM(_ *th.Context, msg telego.Message) error {
-	text := helpDM
-	if msg.From != nil && msg.From.ID == a.botOwnerID {
-		text += "\n\nВладелец: /chats — список подключённых чатов и отзыв бота."
-	}
+	owner := msg.From != nil && msg.From.ID == a.botOwnerID
 	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: msg.Chat.ID},
-		Text:   text,
+		ChatID:    telego.ChatID{ID: msg.Chat.ID},
+		Text:      buildHelpMarkdown(owner),
+		ParseMode: telego.ModeMarkdownV2,
 	})
 	return err
 }
 
+// handleHelpSupergroup sends the full command reference to the caller's
+// private chat with the bot, so a long list never spams the group. If the
+// DM cannot be delivered (user has not started the bot), it falls back to
+// a short group reply instead of leaving the user in silence.
 func (a *App) handleHelpSupergroup(_ *th.Context, msg telego.Message) error {
+	owner := msg.From != nil && msg.From.ID == a.botOwnerID
 	_, err := a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: msg.Chat.ID},
-		Text:   helpSupergroup,
+		ChatID:    telego.ChatID{ID: msg.From.ID},
+		Text:      buildHelpMarkdown(owner),
+		ParseMode: telego.ModeMarkdownV2,
 	})
+	if err != nil {
+		a.log.Warn("help DM failed, falling back to group", "user_id", msg.From.ID, "error", err)
+		_, err = a.sender.SendMessage(context.Background(), &telego.SendMessageParams{
+			ChatID: telego.ChatID{ID: msg.Chat.ID},
+			Text:   helpSupergroup,
+		})
+	}
 	return err
 }
 
@@ -543,10 +564,6 @@ func (a *App) replySummarize(msg *telego.Message, reply string) error {
 	return nil
 }
 
-const helpDM = `BidloBot - бот для IT-сообщества.
-
-Добавьте меня в группу администратором, чтобы я мог
-собирать статистику, модерировать и играть.`
 const helpSupergroup = `BidloBot - статистика, мини-игры и модерация.
 
   /stats         - обзор чата

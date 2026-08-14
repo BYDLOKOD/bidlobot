@@ -29,6 +29,7 @@ func setCommands(ctx context.Context, bot *telego.Bot, ownerID int64) error {
 		{Command: "refs", Description: "Реферальные ссылки чата"},
 		{Command: "refreg", Description: "Добавить реферальную ссылку"},
 		{Command: "flush", Description: "Повторить неудачные запросы"},
+		{Command: "help", Description: "Список команд (в личку)"},
 	}
 
 	// Administrator scope = the public surface plus the moderation

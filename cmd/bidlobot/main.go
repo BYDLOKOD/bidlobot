@@ -179,6 +179,9 @@ func main() {
 	app.SetBotOwnerID(cfg.BotOwnerID)
 	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	app.SetDeferredQueue(storage.NewDeferredRepo(db))
+	// Reaction reputation: 👍 +rep, 👎/🤡 -rep with a 10s combined-message
+	// batcher. Shares the reputation bbolt bucket with /praise and /roast.
+	app.AttachRepReactions(bot.NewRepReactor(storage.NewReputationRepo(db), adminCache, tgClient, log))
 	if err := app.AttachHealth(
 		// dbOpen probes bbolt with a no-op view txn. Path() returning a
 		// non-empty string is a tautology (it's set at open time and
