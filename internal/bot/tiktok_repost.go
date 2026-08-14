@@ -201,7 +201,10 @@ func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error)
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		cmd := exec.CommandContext(dlCtx,
 			"yt-dlp",
-			"-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best",
+			// Prefer an h264 single-file variant: TikTok serves the bytevc1
+			// (h265) variant muted to non-browser clients, and the ffprobe
+			// audio gate would reject it. h264 variants carry aac audio.
+			"-f", "b[vcodec=h264]/b",
 			"--no-playlist",
 			"-o", workDir+"/video.%(ext)s",
 			dlURL,
