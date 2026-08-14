@@ -353,7 +353,9 @@ func (b *repBatcher) flush(chatID int64) {
 		ParseMode: telego.ModeHTML,
 	}); err != nil {
 		b.log.Warn("rep batcher send failed", "chat_id", chatID, "error", err)
+		return
 	}
+	b.log.Info("rep batcher flushed", "chat_id", chatID, "events", len(events))
 }
 
 // composeRepMessage renders the combined rep report in the classic
