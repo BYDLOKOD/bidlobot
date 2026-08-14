@@ -2,19 +2,17 @@
 # Host-side backup for the dockerized bot.
 #
 # Strategy: stop -> cp -> start. bbolt holds an exclusive flock while the
-# bot is running, so the in-container `bidlobot-backup` binary cannot
-# obtain even a read lock without the bot releasing it. A naive `cp` of a
-# live mmap'd database can capture in-flight writes mid-transaction;
-# bbolt's double-write meta + page checksums recovers from torn meta but
-# not from torn data pages, so for a guaranteed-consistent snapshot the
-# only safe path is to stop the bot first.
+# bot is running, so no second process can open the database at all; a
+# naive `cp` of a live mmap'd database can capture in-flight writes
+# mid-transaction. bbolt's double-write meta + page checksums recovers
+# from torn meta but not from torn data pages, so for a guaranteed-
+# consistent snapshot the only safe path is to stop the bot first.
 #
 # Downtime is the duration of `cp` + `docker compose start` startup
-# (~5-15s for a < 100 MB db on local disk). For a community moderation
-# bot whose updates Telegram replays on next poll via offset, this is
-# acceptable. If downtime becomes a constraint, run the bot behind a
-# webhook with two replicas and switch the cron to bidlobot-backup
-# inside one replica while the other handles traffic.
+# (~5-15s for a < 100 MB db on local disk). For a community bot whose
+# updates Telegram replays on next poll via offset, this is acceptable.
+# If downtime becomes a constraint, run the bot behind a webhook with
+# two replicas and back up the replica that is not serving traffic.
 #
 # Cron suggestion (root crontab on the deployment host):
 #     17 3 * * * /opt/bidlobot/deploy/backup.sh >>/var/log/bidlobot-backup.log 2>&1

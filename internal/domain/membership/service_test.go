@@ -2,8 +2,6 @@ package membership_test
 
 import (
 	"context"
-	"log/slog"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -23,8 +21,7 @@ func newSvc(t *testing.T) (*membership.Service, *storage.MembershipRepo) {
 	}
 	t.Cleanup(func() { st.Close() })
 	repo := storage.NewMembershipRepo(st.DB())
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return membership.NewService(repo, log), repo
+	return membership.NewService(repo), repo
 }
 
 func TestServiceRecordMessageHappyPath(t *testing.T) {

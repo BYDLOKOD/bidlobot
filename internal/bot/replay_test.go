@@ -61,7 +61,7 @@ func replayThroughDomain(t *testing.T, jsonlPath string) (*storage.MembershipRep
 	t.Cleanup(func() { store.Close() })
 
 	memberRepo := storage.NewMembershipRepo(store.DB())
-	memberSvc := membership.NewService(memberRepo, testLogger())
+	memberSvc := membership.NewService(memberRepo)
 
 	updates, err := LoadRecording(jsonlPath)
 	if err != nil {

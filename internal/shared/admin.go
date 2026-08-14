@@ -12,9 +12,8 @@ import (
 const groupAnonymousBotID int64 = 1087968824
 
 type adminEntry struct {
-	admins      map[int64]struct{}
-	canRestrict bool
-	fetchedAt   time.Time
+	admins    map[int64]struct{}
+	fetchedAt time.Time
 }
 
 type AdminCache struct {
@@ -43,14 +42,6 @@ func (c *AdminCache) IsAdmin(absChatID int64, userID int64) (bool, error) {
 	}
 	_, ok := entry.admins[userID]
 	return ok, nil
-}
-
-func (c *AdminCache) BotCanRestrict(absChatID int64) (bool, error) {
-	entry, err := c.getOrFetch(absChatID)
-	if err != nil {
-		return false, err
-	}
-	return entry.canRestrict, nil
 }
 
 func (c *AdminCache) Invalidate(absChatID int64) {
@@ -93,11 +84,6 @@ func (c *AdminCache) getOrFetch(absChatID int64) (*adminEntry, error) {
 	for _, m := range members {
 		user := m.MemberUser()
 		if user.IsBot {
-			if user.ID == c.botID {
-				if admin, ok := m.(*telego.ChatMemberAdministrator); ok {
-					entry.canRestrict = admin.CanRestrictMembers
-				}
-			}
 			continue
 		}
 		entry.admins[user.ID] = struct{}{}

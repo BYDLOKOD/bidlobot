@@ -62,23 +62,6 @@ func TestStatsChatPrefixScan(t *testing.T) {
 	}
 }
 
-func TestWarnTargetPrefixScan(t *testing.T) {
-	prefix := WarnTargetPrefix(100, 222)
-	k1 := WarnTargetIndex(100, 222, "uuid-1")
-	k2 := WarnTargetIndex(100, 222, "uuid-2")
-	k3 := WarnTargetIndex(100, 333, "uuid-3")
-
-	if !bytes.HasPrefix(k1, prefix) {
-		t.Fatal("k1 should match prefix")
-	}
-	if !bytes.HasPrefix(k2, prefix) {
-		t.Fatal("k2 should match prefix")
-	}
-	if bytes.HasPrefix(k3, prefix) {
-		t.Fatal("different user should not match")
-	}
-}
-
 func TestParseID(t *testing.T) {
 	tests := []struct {
 		in   string

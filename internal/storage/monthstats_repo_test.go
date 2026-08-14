@@ -32,8 +32,8 @@ func TestMonthStatsAdditiveFlushAndSplit(t *testing.T) {
 	if err := repo.Flush(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
-	// Flush again: the repo is purely additive (dedup is the importer's
-	// job, never the store's) - counts must double.
+	// Flush again: the repo is purely additive (dedup is never the
+	// store's job) - counts must double.
 	if err := repo.Flush(ctx, batch); err != nil {
 		t.Fatal(err)
 	}
@@ -97,19 +97,20 @@ func TestMonthStatsStateAndSummaryRoundTrip(t *testing.T) {
 	if _, err := repo.GetState(ctx, 100); !errors.Is(err, monthstats.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing state, got %v", err)
 	}
-	st := &monthstats.MonthState{
-		AbsChatID: 100, ImportHWM: 5000,
-		Sealed:    map[string]bool{"2026-03": true},
-		UpdatedAt: time.Now().UTC().Truncate(time.Second),
+	ts := time.Date(2026, 4, 3, 0, 0, 0, 0, time.UTC)
+	if err := repo.SetLiveTrackStart(ctx, 100, ts); err != nil {
+		t.Fatal(err)
 	}
-	if err := repo.PutState(ctx, st); err != nil {
+	// A later SetLiveTrackStart must not move the recorded boundary
+	// (first write wins).
+	if err := repo.SetLiveTrackStart(ctx, 100, ts.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := repo.GetState(ctx, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ImportHWM != 5000 || !got.Sealed["2026-03"] {
+	if got.AbsChatID != 100 || !got.LiveTrackStart.Equal(ts) || got.UpdatedAt.IsZero() {
 		t.Fatalf("state round-trip wrong: %+v", got)
 	}
 

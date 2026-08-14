@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -271,32 +270,5 @@ func (s *InlineService) Handler() th.InlineQueryHandler {
 			s.log.Warn("AnswerInlineQuery failed", "error", err, "query", query.Query, "user_id", query.From.ID)
 		}
 		return nil
-	}
-}
-
-// htmlEscape and formatDuration are shared rendering helpers. They are
-// placed here after the destructive-inline code was removed.
-func htmlEscape(s string) string {
-	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;")
-	return r.Replace(s)
-}
-
-func formatDuration(d time.Duration) string {
-	day := 24 * time.Hour
-	year := 365 * day
-	month := 30 * day
-	switch {
-	case d >= year && d%year == 0:
-		return fmt.Sprintf("%dг", int(d/year))
-	case d >= month && d%month == 0:
-		return fmt.Sprintf("%dмес", int(d/month))
-	case d >= day && d%day == 0:
-		return fmt.Sprintf("%dд", int(d/day))
-	case d >= time.Hour && d%time.Hour == 0:
-		return fmt.Sprintf("%dч", int(d/time.Hour))
-	case d >= time.Minute && d%time.Minute == 0:
-		return fmt.Sprintf("%dм", int(d/time.Minute))
-	default:
-		return d.String()
 	}
 }

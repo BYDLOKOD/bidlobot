@@ -29,7 +29,6 @@ func TestConfigAcceptsValidOwner(t *testing.T) {
 		Token:      validToken,
 		DBPath:     t.TempDir(),
 		BotOwnerID: 123456789,
-		HealthPort: 8080,
 		LogLevel:   "info",
 	}
 	if err := cfg.Validate(); err != nil {

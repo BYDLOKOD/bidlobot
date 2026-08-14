@@ -3,7 +3,6 @@ package stats
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 
 	"github.com/veschin/bidlobot/internal/shared"
@@ -11,19 +10,15 @@ import (
 
 type Service struct {
 	buffer  *Buffer
-	store   Store
 	display shared.DisplayResolver
-	log     *slog.Logger
 }
 
-// NewService создаёт сервис статистики с буфером и хранилищем.
+// NewService создаёт сервис статистики с буфером накопления.
 // display может быть nil - тогда имена пользователей не подставляются.
-func NewService(store Store, buffer *Buffer, display shared.DisplayResolver, log *slog.Logger) *Service {
+func NewService(buffer *Buffer, display shared.DisplayResolver) *Service {
 	return &Service{
 		buffer:  buffer,
-		store:   store,
 		display: display,
-		log:     log,
 	}
 }
 

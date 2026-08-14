@@ -9,6 +9,7 @@ package bot
 import (
 	"time"
 
+	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
@@ -43,16 +44,7 @@ type GamesRegistry struct {
 	Guess      th.MessageHandler  // "/guess", "/guess N", "/guess top"
 	Hangman    th.MessageHandler  // "/hangman", "/hangman X"
 	Duel       th.MessageHandler  // "/duel @user"
-	Trivia     TriviaRoutes       // "/trivia" / "/trivia top" + its callback
-}
-
-// TriviaRoutes mirrors QuizRoutes: slash + a prefix-scoped callback that
-// must register before the broader quiz callback (telego is
-// first-match-wins).
-type TriviaRoutes struct {
-	Slash             th.MessageHandler
-	Callback          th.CallbackQueryHandler
-	CallbackPredicate th.Predicate
+	Trivia     QuizRoutes         // "/trivia" / "/trivia top" + its callback
 }
 
 // BattleRoutes exposes only the surface registerGameRoutes needs from
@@ -62,9 +54,9 @@ type BattleRoutes struct {
 	ReactionObserver th.MessageReactionHandler
 }
 
-// QuizRoutes is the analogous shape for Game 3 (quiz). The callback
-// handler is registered with a prefix predicate so quiz callbacks bypass
-// the pending-action dispatcher.
+// QuizRoutes is the slash + callback surface shared by the quiz and
+// trivia games. Both register a prefix-scoped callback handler before
+// the pending-action dispatcher (telego is first-match-wins).
 type QuizRoutes struct {
 	Slash             th.MessageHandler
 	Callback          th.CallbackQueryHandler
@@ -135,4 +127,17 @@ func registerGameRoutes(bh *th.BotHandler, sgGroup *th.HandlerGroup, a *App) {
 		// registration line.
 		bh.HandleCallbackQuery(g.Quiz.Callback, g.Quiz.CallbackPredicate)
 	}
+}
+
+// AdminChecker is the narrow contract handlers need from the admin
+// cache - declared here so tests can stub admin status without
+// constructing a full AdminCache backed by a Telegram API mock.
+type AdminChecker interface {
+	IsAdmin(absChatID, userID int64) (bool, error)
+}
+
+// emptyKeyboard is an inline markup with no buttons - used to strip a
+// keyboard off a message on edit (games end screens, etc.).
+func emptyKeyboard() *telego.InlineKeyboardMarkup {
+	return &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{}}
 }

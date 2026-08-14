@@ -2,6 +2,7 @@ package storage_test
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -75,6 +76,45 @@ func TestReputationApplySelfTarget(t *testing.T) {
 	_, err := repo.Apply(ctx, 103, 1, 1, reputation.KindPraise, false, false)
 	if err == nil {
 		t.Fatal("expected error for self-target")
+	}
+	if !errors.Is(err, reputation.ErrSelfTarget) {
+		t.Fatalf("expected ErrSelfTarget, got %v", err)
+	}
+}
+
+func TestReputationApplyInsufficientActorBalance(t *testing.T) {
+	repo := newReputationRepo(t)
+	ctx := context.Background()
+	const chatID, actor, target int64 = 104, 1, 2
+
+	for range 10 {
+		_, _ = repo.Apply(ctx, chatID, actor, target, reputation.KindRoast, false, false)
+	}
+
+	_, err := repo.Apply(ctx, chatID, actor, target, reputation.KindRoast, false, false)
+	if err == nil {
+		t.Fatal("roast with zero actor balance must return validation error")
+	}
+	if !errors.Is(err, reputation.ErrInsufficientBalance) {
+		t.Fatalf("expected ErrInsufficientBalance, got %v", err)
+	}
+}
+
+func TestReputationApplyZeroTargetBalanceRejectsRoast(t *testing.T) {
+	repo := newReputationRepo(t)
+	ctx := context.Background()
+	const chatID, actor, target int64 = 105, 1, 2
+
+	for range 10 {
+		_, _ = repo.Apply(ctx, chatID, 3, target, reputation.KindRoast, false, false)
+	}
+
+	_, err := repo.Apply(ctx, chatID, actor, target, reputation.KindRoast, false, false)
+	if err == nil {
+		t.Fatal("roast of zero-balance target must return validation error")
+	}
+	if !errors.Is(err, reputation.ErrTargetInsufficientBalance) {
+		t.Fatalf("expected ErrTargetInsufficientBalance, got %v", err)
 	}
 }
 

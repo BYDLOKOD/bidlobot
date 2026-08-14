@@ -67,51 +67,6 @@ func (r *StatsRepo) ListByChat(_ context.Context, absChatID int64) ([]stats.Stat
 	return results, err
 }
 
-func (r *StatsRepo) Flush(_ context.Context, batch map[stats.FlushKey]*stats.FlushDelta) error {
-	if len(batch) == 0 {
-		return nil
-	}
-	return r.db.Update(func(tx *bolt.Tx) error {
-		bkt := tx.Bucket(bktStats)
-		idx := tx.Bucket(bktStatsByChat)
-
-		for key, delta := range batch {
-			dbKey := StatsKey(key.UserID, key.AbsChatID)
-			var s stats.Stats
-
-			if existing := bkt.Get(dbKey); existing != nil {
-				if err := json.Unmarshal(existing, &s); err != nil {
-					return err
-				}
-				s.MessageCount += delta.CountDelta
-				if delta.LastSeen.After(s.LastSeen) {
-					s.LastSeen = delta.LastSeen
-				}
-			} else {
-				s = stats.Stats{
-					UserID:       key.UserID,
-					ChatID:       key.AbsChatID,
-					MessageCount: delta.CountDelta,
-					FirstSeen:    delta.FirstSeen,
-					LastSeen:     delta.LastSeen,
-				}
-				if err := idx.Put(StatsChatIndex(key.AbsChatID, key.UserID), nil); err != nil {
-					return err
-				}
-			}
-
-			data, err := json.Marshal(&s)
-			if err != nil {
-				return err
-			}
-			if err := bkt.Put(dbKey, data); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 func (r *StatsRepo) GetDaily(_ context.Context, absChatID int64, day string) (map[int64]*stats.Stats, error) {
 	results := make(map[int64]*stats.Stats)
 	err := r.db.View(func(tx *bolt.Tx) error {
@@ -139,47 +94,6 @@ func (r *StatsRepo) GetDaily(_ context.Context, absChatID int64, day string) (ma
 		return nil, err
 	}
 	return results, nil
-}
-
-func (r *StatsRepo) FlushDaily(_ context.Context, batch map[stats.FlushKey]*stats.FlushDelta, day string) error {
-	if len(batch) == 0 {
-		return nil
-	}
-	return r.db.Update(func(tx *bolt.Tx) error {
-		bkt, err := tx.CreateBucketIfNotExists(bktStatsDaily)
-		if err != nil {
-			return err
-		}
-		for key, delta := range batch {
-			dbKey := StatsDailyKey(key.AbsChatID, day, key.UserID)
-			var s stats.Stats
-			if existing := bkt.Get(dbKey); existing != nil {
-				if err := json.Unmarshal(existing, &s); err != nil {
-					return err
-				}
-				s.MessageCount += delta.CountDelta
-				if delta.LastSeen.After(s.LastSeen) {
-					s.LastSeen = delta.LastSeen
-				}
-			} else {
-				s = stats.Stats{
-					UserID:       key.UserID,
-					ChatID:       key.AbsChatID,
-					MessageCount: delta.CountDelta,
-					FirstSeen:    delta.FirstSeen,
-					LastSeen:     delta.LastSeen,
-				}
-			}
-			data, err := json.Marshal(&s)
-			if err != nil {
-				return err
-			}
-			if err := bkt.Put(dbKey, data); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
 }
 
 func (r *StatsRepo) FlushAtomic(_ context.Context, lifetime map[stats.FlushKey]*stats.FlushDelta, daily map[string]map[stats.FlushKey]*stats.FlushDelta) error {

@@ -2,6 +2,8 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -17,12 +19,9 @@ var buckets = []string{
 	"profiles_by_chat",
 	"stats",
 	"stats_by_chat",
-	"warnings",
-	"warns_by_target",
 	"members",
 	"members_by_chat",
 	"chats",
-	"pending_actions",
 	"dice_leaderboard",
 	"quiz_leaderboard",
 	"stats_month",
@@ -84,4 +83,15 @@ func (s *BoltStore) Close() error {
 func (s *BoltStore) MigrateChatID(ctx context.Context, oldAbs, newAbs int64) error {
 	_, err := MigrateChatID(ctx, s.db, oldAbs, newAbs)
 	return err
+}
+
+// NewID returns a 16-char hex string (8 random bytes) suitable for
+// embedding into short-lived identifiers (battle ids, etc.). Callable
+// without holding the DB so callers can prepare a record then write once.
+func NewID() (string, error) {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", fmt.Errorf("random id: %w", err)
+	}
+	return hex.EncodeToString(b[:]), nil
 }

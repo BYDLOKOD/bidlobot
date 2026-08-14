@@ -140,20 +140,3 @@ func TestExtractSampleHappyPath(t *testing.T) {
 		t.Errorf("Keyword = %d, want 2 (text+caption)", s.Keyword)
 	}
 }
-
-func TestSetKeywordPattern(t *testing.T) {
-	t.Cleanup(func() { _ = SetKeywordPattern(DefaultKeywordPattern) })
-	if err := SetKeywordPattern("(?i)golang|go"); err != nil {
-		t.Fatal(err)
-	}
-	if CountKeyword("я пишу на Golang и go") != 2 {
-		t.Fatal("custom keyword pattern not applied")
-	}
-	if err := SetKeywordPattern("("); err == nil {
-		t.Fatal("expected invalid regex to error")
-	}
-	// Invalid pattern must leave the previous regex in force.
-	if CountKeyword("golang") != 1 {
-		t.Fatal("invalid SetKeywordPattern must not clobber the working regex")
-	}
-}

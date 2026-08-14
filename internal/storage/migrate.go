@@ -9,7 +9,6 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
-	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/referral"
 	"github.com/veschin/bidlobot/internal/domain/stats"
@@ -26,8 +25,6 @@ type MigrationReport struct {
 	Members           int
 	MemberIndex       int
 	Chats             int
-	Warnings          int
-	WarnIndexes       int
 	MonthStatsRekeyed int
 	MonthStateMoved   int
 	MonthSummaryMoved int
@@ -38,8 +35,7 @@ type MigrationReport struct {
 }
 
 // MigrateChatID rewrites every record keyed by oldAbs to be keyed by
-// newAbs. The pending_actions and profiles* buckets are intentionally
-// skipped (TTL'd / archived).
+// newAbs. The profiles* buckets are intentionally skipped (archived).
 //
 // Migration runs in a single bolt transaction so partial state cannot be
 // observed by concurrent readers. If anything fails the transaction is
@@ -64,9 +60,6 @@ func MigrateChatID(_ context.Context, db *bolt.DB, oldAbs, newAbs int64) (*Migra
 		}
 		if err := migrateChats(tx, oldAbs, newAbs, report); err != nil {
 			return fmt.Errorf("chats: %w", err)
-		}
-		if err := migrateWarnings(tx, oldAbs, newAbs, report); err != nil {
-			return fmt.Errorf("warnings: %w", err)
 		}
 		if err := migrateMonthStats(tx, oldAbs, newAbs, report); err != nil {
 			return fmt.Errorf("monthstats: %w", err)
@@ -239,72 +232,6 @@ func migrateChats(tx *bolt.Tx, oldAbs, newAbs int64, report *MigrationReport) er
 		return err
 	}
 	report.Chats++
-	return nil
-}
-
-// migrateWarnings updates both the warnings bucket (rewriting each
-// matching warning's ChatID field in JSON) and the warns_by_target
-// secondary index, where the chat id appears in the key prefix.
-//
-// We walk the secondary index (keyed by chat id) to collect uuids that
-// need rewriting; this avoids a full scan of `warnings`.
-func migrateWarnings(tx *bolt.Tx, oldAbs, newAbs int64, report *MigrationReport) error {
-	warnBkt := tx.Bucket(bktWarnings)
-	idxBkt := tx.Bucket(bktWarnsByTarget)
-
-	type pair struct {
-		target int64
-		uuid   string
-	}
-	var pending []pair
-
-	idxPrefix := []byte(fmt.Sprintf("wt:%020d:", oldAbs))
-	c := idxBkt.Cursor()
-	for k, _ := c.Seek(idxPrefix); k != nil && bytes.HasPrefix(k, idxPrefix); k, _ = c.Next() {
-		// key shape: wt:absChatID:targetUserID:uuid
-		// after prefix "wt:absChatID:" we have "targetUserID:uuid"
-		tail := k[len(idxPrefix):]
-		idx := bytes.IndexByte(tail, ':')
-		if idx <= 0 {
-			continue
-		}
-		target := parseID(tail[:idx])
-		uuid := string(tail[idx+1:])
-		pending = append(pending, pair{target: target, uuid: uuid})
-	}
-
-	for _, p := range pending {
-		uid := p.uuid
-		// Update the value: rewrite warning.ChatID.
-		key := WarnKey(uid)
-		data := warnBkt.Get(key)
-		if data == nil {
-			_ = idxBkt.Delete(WarnTargetIndex(oldAbs, p.target, uid))
-			continue
-		}
-		var w moderation.Warning
-		if err := json.Unmarshal(data, &w); err != nil {
-			return fmt.Errorf("decode warning %s: %w", uid, err)
-		}
-		w.ChatID = newAbs
-		updated, err := json.Marshal(&w)
-		if err != nil {
-			return fmt.Errorf("encode warning %s: %w", uid, err)
-		}
-		if err := warnBkt.Put(key, updated); err != nil {
-			return err
-		}
-
-		// Move the index entry.
-		if err := idxBkt.Put(WarnTargetIndex(newAbs, p.target, uid), nil); err != nil {
-			return err
-		}
-		if err := idxBkt.Delete(WarnTargetIndex(oldAbs, p.target, uid)); err != nil {
-			return err
-		}
-		report.Warnings++
-		report.WarnIndexes++
-	}
 	return nil
 }
 

@@ -179,11 +179,6 @@ var triviaSet = []Trivia{
 		CorrectIdx: 0,
 	},
 	{
-		Question:   "Какая структура данных работает по принципу LIFO?",
-		Options:    [4]string{"Очередь", "Стек", "Связный список", "Дерево"},
-		CorrectIdx: 1,
-	},
-	{
 		Question:   "Что означает ACID в контексте баз данных?",
 		Options:    [4]string{"Atomicity, Consistency, Isolation, Durability", "Access, Cache, Index, Data", "Async, Commit, Index, Durability", "Atomicity, Cache, Isolation, Delta"},
 		CorrectIdx: 0,
@@ -222,16 +217,6 @@ var triviaSet = []Trivia{
 		Question:   "Что такое SQL JOIN, возвращающий только совпавшие строки обеих таблиц?",
 		Options:    [4]string{"LEFT JOIN", "RIGHT JOIN", "FULL OUTER JOIN", "INNER JOIN"},
 		CorrectIdx: 3,
-	},
-	{
-		Question:   "Сколько бит в одном байте?",
-		Options:    [4]string{"4", "8", "16", "32"},
-		CorrectIdx: 1,
-	},
-	{
-		Question:   "Какой принцип ООП скрывает внутреннее состояние объекта?",
-		Options:    [4]string{"Наследование", "Полиморфизм", "Инкапсуляция", "Композиция"},
-		CorrectIdx: 2,
 	},
 	{
 		Question:   "Что делает команда 'docker build'?",

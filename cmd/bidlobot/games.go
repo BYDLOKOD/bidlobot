@@ -77,7 +77,7 @@ func buildGames(db *bbolt.DB, sender *tgclient.Client, botUsername string, admin
 		Guess:      guessHandler.HandleGuess,
 		Hangman:    hangmanHandler.HandleHangman,
 		Duel:       duelHandler.HandleDuel,
-		Trivia: bot.TriviaRoutes{
+		Trivia: bot.QuizRoutes{
 			Slash:             triviaHandler.HandleTrivia,
 			Callback:          triviaHandler.HandleCallback,
 			CallbackPredicate: bot.TriviaCallbackPredicate(),

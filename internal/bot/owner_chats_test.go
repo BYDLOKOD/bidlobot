@@ -40,7 +40,7 @@ func newOwnerChatsTestApp(t *testing.T) (*App, *storage.MembershipRepo, *testuti
 	a := &App{
 		sender:     sender,
 		leaver:     leaver,
-		memberSvc:  membership.NewService(repo, testLogger()),
+		memberSvc:  membership.NewService(repo),
 		botOwnerID: 777,
 		log:        testLogger(),
 	}

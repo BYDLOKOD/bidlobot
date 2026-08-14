@@ -17,10 +17,9 @@ import (
 // Config bundles every operator-supplied input. Loading from env is split
 // from validation so tests can inject Config{} literals.
 type Config struct {
-	Token      string
-	DBPath     string
-	HealthPort int    // 0 disables; -1 means "unset, use default"
-	LogLevel   string // debug|info|warn|error
+	Token    string
+	DBPath   string
+	LogLevel string // debug|info|warn|error
 
 	// --- inactive-cleanup campaign tuning ---
 	//
@@ -70,10 +69,9 @@ func loadConfig() Config {
 	captchaTimeout, _ := time.ParseDuration(captchaTimeoutRaw)
 
 	return Config{
-		Token:      os.Getenv("TG_BOT_TOKEN"),
-		DBPath:     envOr("DB_PATH", "./data"),
-		HealthPort: parseHealthPortRaw(os.Getenv("HEALTH_PORT")),
-		LogLevel:   envOr("LOG_LEVEL", "info"),
+		Token:    os.Getenv("TG_BOT_TOKEN"),
+		DBPath:   envOr("DB_PATH", "./data"),
+		LogLevel: envOr("LOG_LEVEL", "info"),
 
 		CleanupDailyAtRaw: atRaw,
 		CleanupDailyAtMin: parseHHMM(atRaw),
@@ -141,20 +139,6 @@ func envInt(key string, fallback int) int {
 	return n
 }
 
-// parseHealthPortRaw parses HEALTH_PORT into an int with -1 sentinel for
-// "unset". Returns -2 for "set but unparseable" so the caller can flag
-// the validation error.
-func parseHealthPortRaw(raw string) int {
-	if raw == "" {
-		return -1
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil {
-		return -2
-	}
-	return v
-}
-
 // tokenRegexp mirrors telego's accepted token format: numeric bot id,
 // colon, then 35+ chars of [A-Za-z0-9_-].
 //
@@ -179,17 +163,6 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("DB_PATH is empty"))
 	} else if err := validateDBPath(c.DBPath); err != nil {
 		errs = append(errs, fmt.Errorf("DB_PATH: %w", err))
-	}
-
-	switch c.HealthPort {
-	case -1, 0:
-		// -1 = unset (use default 8080); 0 = explicit disable. Both ok.
-	case -2:
-		errs = append(errs, fmt.Errorf("HEALTH_PORT: not an integer: %q", os.Getenv("HEALTH_PORT")))
-	default:
-		if c.HealthPort < 1 || c.HealthPort > 65535 {
-			errs = append(errs, fmt.Errorf("HEALTH_PORT: out of range 1..65535: %d", c.HealthPort))
-		}
 	}
 
 	switch strings.ToLower(c.LogLevel) {

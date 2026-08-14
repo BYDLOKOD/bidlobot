@@ -67,7 +67,7 @@ func statsCountHandler(buffer StatsIncrementer, monthly MonthlyIncrementer) th.H
 }
 
 // hasContent delegates to monthstats.HasContent so the live exclusion
-// predicate has exactly one definition shared with the importer.
+// predicate has exactly one definition.
 func hasContent(msg *telego.Message) bool {
 	return monthstats.HasContent(msg)
 }

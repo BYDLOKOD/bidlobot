@@ -170,11 +170,6 @@ func (b *Battle) Tally(now time.Time) *Result {
 	return r
 }
 
-// IsLeftMessage and IsRightMessage are used by the registry to find the
-// battle a reaction belongs to.
-func (b *Battle) IsLeftMessage(msgID int) bool  { return msgID != 0 && msgID == b.LeftMessageID }
-func (b *Battle) IsRightMessage(msgID int) bool { return msgID != 0 && msgID == b.RightMessageID }
-
 // Registry is the thread-safe in-memory store of active battles.
 // Battles are addressable both by their ID (for the goroutine that
 // finishes them) and by their per-side message ID (for the reaction

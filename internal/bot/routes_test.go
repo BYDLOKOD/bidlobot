@@ -146,7 +146,7 @@ func TestSupergroupMessageReachesMembershipMiddleware(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	repo := storage.NewMembershipRepo(store.DB())
-	svc := membership.NewService(repo, testLogger())
+	svc := membership.NewService(repo)
 	statsBuf := stats.NewBuffer(nil, testLogger())
 
 	a := &App{

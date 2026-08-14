@@ -107,13 +107,12 @@ func TestSealMemoizationAndInvalidation(t *testing.T) {
 	if cached != first {
 		t.Error("past month should return the memoized HTML unchanged")
 	}
-	// An import advancing state.UpdatedAt invalidates the memo.
-	_ = st.PutState(context.Background(), &MonthState{
-		AbsChatID: 100, UpdatedAt: time.Now().Add(time.Hour).UTC(),
-	})
+	// Recording the live boundary advances state.UpdatedAt and must
+	// invalidate the memo.
+	_ = st.SetLiveTrackStart(context.Background(), 100, time.Now().Add(time.Hour).UTC())
 	rebuilt, _ := svc.MonthReport(context.Background(), 100, "2026-04")
 	if rebuilt == first {
-		t.Error("memo should be invalidated after a later import (state.UpdatedAt)")
+		t.Error("memo should be invalidated after the boundary write (state.UpdatedAt)")
 	}
 }
 

@@ -241,13 +241,6 @@ func main() {
 		Answer: LangRust,
 	},
 	{
-		Code: `(defn factorial [n]
-  (reduce * (range 1 (inc n))))
-
-(println (factorial 5))`,
-		Answer: LangClojure,
-	},
-	{
 		Code: `(->> (range 10)
      (filter even?)
      (map #(* % %))

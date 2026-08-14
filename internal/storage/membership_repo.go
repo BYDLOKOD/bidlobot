@@ -102,7 +102,7 @@ func (r *MembershipRepo) UpsertMember(_ context.Context, p membership.MemberPatc
 		}
 		if p.KnownVia != "" {
 			// Monotonic identity provenance. A live-observed source
-			// (message/reaction/chat_member/my_chat_admin) carries the
+			// (message/reaction/chat_member) carries the
 			// user's real Telegram identity; SourceImport carries only
 			// the operator's address-book label. A later (re-)import -
 			// e.g. a periodic backfill - must NOT downgrade a member

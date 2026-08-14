@@ -1,9 +1,7 @@
 package storage
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -23,21 +21,21 @@ var bktQuizLeaderboard = []byte("quiz_leaderboard")
 // produces at most a few thousand entries, well below the threshold
 // where a secondary index pays for itself.
 type QuizRepo struct {
-	db *bolt.DB
+	entries *jsonBucket[quiz.Entry]
 }
 
 func NewQuizRepo(db *bolt.DB) *QuizRepo {
-	return &QuizRepo{db: db}
+	return &QuizRepo{entries: newJSONBucket[quiz.Entry](db, bktQuizLeaderboard)}
 }
 
 // QuizKey returns the bbolt key for (absChatID, userID).
 func QuizKey(absChatID, userID int64) []byte {
-	return []byte(fmt.Sprintf("ql:%020d:%020d", absChatID, userID))
+	return keyf("ql:%020d:%020d", absChatID, userID)
 }
 
 // QuizChatPrefix returns the scan prefix for all entries in a chat.
 func QuizChatPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("ql:%020d:", absChatID))
+	return keyf("ql:%020d:", absChatID)
 }
 
 // IncrementCorrect creates the entry on first call and bumps
@@ -48,22 +46,9 @@ func (r *QuizRepo) IncrementCorrect(_ context.Context, e quiz.Entry) error {
 	if e.AbsChatID == 0 || e.UserID == 0 {
 		return fmt.Errorf("quiz repo: zero AbsChatID or UserID")
 	}
-	return r.db.Update(func(tx *bolt.Tx) error {
-		bkt := tx.Bucket(bktQuizLeaderboard)
-		key := QuizKey(e.AbsChatID, e.UserID)
-
-		var existing quiz.Entry
-		if data := bkt.Get(key); data != nil {
-			if err := json.Unmarshal(data, &existing); err != nil {
-				return err
-			}
-		} else {
-			existing = quiz.Entry{
-				AbsChatID:    e.AbsChatID,
-				UserID:       e.UserID,
-				CorrectCount: 0,
-			}
-		}
+	return r.entries.Update(QuizKey(e.AbsChatID, e.UserID), func(existing *quiz.Entry) error {
+		existing.AbsChatID = e.AbsChatID
+		existing.UserID = e.UserID
 		existing.CorrectCount++
 		// Username/FirstName: overwrite so renames propagate. Empty
 		// string in patch means "no update" - keep prior.
@@ -76,30 +61,14 @@ func (r *QuizRepo) IncrementCorrect(_ context.Context, e quiz.Entry) error {
 		if !e.LastPlayedAt.IsZero() {
 			existing.LastPlayedAt = e.LastPlayedAt.UTC()
 		}
-
-		data, err := json.Marshal(&existing)
-		if err != nil {
-			return err
-		}
-		return bkt.Put(key, data)
+		return nil
 	})
 }
 
 // GetEntry returns the leaderboard entry for (absChatID, userID), or
 // quiz.ErrNotFound when the user has never solved a quiz in this chat.
 func (r *QuizRepo) GetEntry(_ context.Context, absChatID, userID int64) (*quiz.Entry, error) {
-	var e quiz.Entry
-	err := r.db.View(func(tx *bolt.Tx) error {
-		data := tx.Bucket(bktQuizLeaderboard).Get(QuizKey(absChatID, userID))
-		if data == nil {
-			return quiz.ErrNotFound
-		}
-		return json.Unmarshal(data, &e)
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &e, nil
+	return r.entries.Get(QuizKey(absChatID, userID), quiz.ErrNotFound)
 }
 
 // TopByChat returns up to limit entries from the chat sorted by
@@ -108,17 +77,8 @@ func (r *QuizRepo) GetEntry(_ context.Context, absChatID, userID int64) (*quiz.E
 // every entry.
 func (r *QuizRepo) TopByChat(_ context.Context, absChatID int64, limit int) ([]quiz.Entry, error) {
 	var all []quiz.Entry
-	err := r.db.View(func(tx *bolt.Tx) error {
-		bkt := tx.Bucket(bktQuizLeaderboard)
-		c := bkt.Cursor()
-		prefix := QuizChatPrefix(absChatID)
-		for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
-			var e quiz.Entry
-			if err := json.Unmarshal(v, &e); err != nil {
-				continue
-			}
-			all = append(all, e)
-		}
+	err := r.entries.ScanPrefix(QuizChatPrefix(absChatID), func(_ []byte, e quiz.Entry) error {
+		all = append(all, e)
 		return nil
 	})
 	if err != nil {

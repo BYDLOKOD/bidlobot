@@ -33,7 +33,7 @@ func TestMyChatMemberHandlerRoutesAllSendsThroughSender(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	svc := membership.NewService(storage.NewMembershipRepo(store.DB()), testLogger())
+	svc := membership.NewService(storage.NewMembershipRepo(store.DB()))
 
 	mock := testutil.NewMockAPI()
 	a := &App{

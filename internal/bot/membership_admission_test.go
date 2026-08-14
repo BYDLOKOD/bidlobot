@@ -310,7 +310,7 @@ func TestMyChatMemberHandler_NonOwnerAdd_LeavesAndDMsOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	svc := membership.NewService(storage.NewMembershipRepo(store.DB()), testLogger())
+	svc := membership.NewService(storage.NewMembershipRepo(store.DB()))
 	ts := time.Now().UTC().Unix()
 	botUser := telego.User{ID: 999, IsBot: true}
 	nonOwner := telego.User{ID: 12345, IsBot: false, FirstName: "Alice", LastName: "Smith", Username: "alice"}

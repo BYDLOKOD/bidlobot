@@ -21,7 +21,6 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
-	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/domain/summarize"
@@ -112,39 +111,26 @@ func main() {
 	}
 
 	statsRepo := storage.NewStatsRepo(db)
-	warnRepo := storage.NewWarnRepo(db)
 	memberRepo := storage.NewMembershipRepo(db)
 	admissionAttemptRepo := storage.NewAdmissionAttemptRepo(db)
-	pendingRepo := storage.NewPendingRepo(db)
 
-	memberSvc := membership.NewService(memberRepo, log)
+	memberSvc := membership.NewService(memberRepo)
 
 	displayResolver := &membershipDisplayResolver{repo: memberRepo}
 	statsLookup := &membershipStatsLookup{repo: memberRepo}
 
 	statsBuffer := stats.NewBuffer(statsRepo, log)
-	statsSvc := stats.NewService(statsRepo, statsBuffer, displayResolver, log)
+	statsSvc := stats.NewService(statsBuffer, displayResolver)
 
 	// Retroactive monthly nominations (chat-export.org parity). Fed by
-	// the same live message handler and by the DM history import; the
-	// importer's idempotency keeps the two from double-counting.
+	// the same live message handler.
 	monthRepo := storage.NewMonthStatsRepo(db)
 	monthBuffer := monthstats.NewBuffer(monthRepo, log)
 	monthSvc := monthstats.NewService(monthRepo, monthBuffer, displayResolver, log)
 
 	statsHandler := stats.NewHandler(statsSvc, monthSvc, statsLookup, tgClient, log)
 
-	// Moderation routes its writes through the wrapped client so 429/5xx,
-	// migration, and per-chat rate limits all apply to ban/restrict/etc.
-	// The service is consumed only by the private DM console now - the
-	// public slash/inline handlers were removed (privacy principle).
-	modSvc := moderation.NewService(warnRepo, tgClient, adminCache, log)
-
-	dispatcher := bot.NewCallbackDispatcher(pendingRepo, adminCache, tgBot, log)
 	inlineSvc := bot.NewInlineService(log)
-
-	modExecutor := bot.NewModerationExecutor(modSvc, memberRepo, adminCache, log)
-	modExecutor.RegisterAll(dispatcher)
 
 	// Cleanup kicks go through the rate-limited + retried wrapper so that
 	// a 200-candidate sweep never trips Telegram's per-chat budget and
@@ -175,7 +161,7 @@ func main() {
 	// tgClient (rate-limited + retried) is the public-surface sender:
 	// help, onboarding - same budget as games/stats so a busy chat stays
 	// inside Telegram's 20 msg/min/chat.
-	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, monthBuffer, memberSvc, dispatcher, pendingRepo, inlineSvc)
+	app := bot.NewApp(tgBot, tgClient, log, adminCache, statsBuffer, monthBuffer, memberSvc, inlineSvc)
 	app.SetBotOwnerID(cfg.BotOwnerID)
 	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	app.SetDeferredQueue(storage.NewDeferredRepo(db))

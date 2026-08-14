@@ -146,8 +146,9 @@ func registerRoutes(
 	}
 
 	// Callback ordering matters: feature-specific predicates must precede
-	// the catch-all "v1:" dispatcher, or their buttons would be swallowed
-	// by the "Кнопка устарела" fallback.
+	// the broader ones (captcha before referral before owner chats before
+	// the games "g1:" prefix) - telego routes a callback to the first
+	// matching handler only.
 	if a.captchaSvc != nil {
 		bh.HandleCallbackQuery(captchaCallbackHandler(a.captchaSvc, a.log), captchaCallbackPredicate())
 	}
@@ -155,7 +156,4 @@ func registerRoutes(
 		bh.HandleCallbackQuery(a.referrals.HandleCallback, ReferralCallbackPredicate())
 	}
 	bh.HandleCallbackQuery(a.handleOwnerChatsCallback, ownerChatsCallbackPredicate())
-	if a.dispatcher != nil {
-		bh.HandleCallbackQuery(a.dispatcher.Handle, th.AnyCallbackQueryWithMessage())
-	}
 }

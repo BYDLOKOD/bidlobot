@@ -1,30 +1,19 @@
-import express from 'express';
+import { createServer } from 'http';
 import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { dirname } from 'path';
 import puppeteer from 'puppeteer';
 import { pipeline } from 'stream/promises';
 import { Readable } from 'stream';
-import { readFileSync } from 'fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const app = express();
 const PORT = process.env.PORT || 3210;
-
-const WATERMARK_ENABLED = process.env.WATERMARK_ENABLED === 'true';
-const WATERMARK_NAME = process.env.WATERMARK_NAME || '';
-const WATERMARK_HANDLE = process.env.WATERMARK_HANDLE || '';
-const WATERMARK_LOGO = process.env.WATERMARK_LOGO || join(__dirname, 'assets/logo.png');
-const WATERMARK_QR = process.env.WATERMARK_QR || join(__dirname, 'assets/qr.png');
-
-let logoB64 = '';
-let qrB64 = '';
-try { logoB64 = 'data:image/png;base64,' + readFileSync(WATERMARK_LOGO, 'base64'); } catch {}
-try { qrB64 = 'data:image/png;base64,' + readFileSync(WATERMARK_QR, 'base64'); } catch {}
 
 const ALLOWED_VIDEO_HOSTS = new Set([
   'video.twimg.com',
   'pbs.twimg.com',
 ]);
+
+const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
 let browser = null;
 
@@ -47,9 +36,7 @@ function parseTweetUrl(url) {
 
 function formatNumber(n) {
   if (n == null) return '0';
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K';
-  return String(n);
+  return compactFormat.format(n).replace(/\.0$/, '');
 }
 
 function relativeTime(timestamp) {
@@ -126,7 +113,7 @@ function buildMediaHtml(tweet) {
   return html;
 }
 
-function buildTweetHtml(tweet, { showWatermark = WATERMARK_ENABLED } = {}) {
+function buildTweetHtml(tweet) {
   const time = relativeTime(tweet.created_timestamp);
   const textHtml = escapeHtml(tweet.text).replace(/\n/g, '<br>');
   const media = buildMediaHtml(tweet);
@@ -270,45 +257,6 @@ function buildTweetHtml(tweet, { showWatermark = WATERMARK_ENABLED } = {}) {
   .stat svg { width: 18px; height: 18px; fill: #536471; }
   .stat.likes svg { fill: #f91880; }
   .stat.likes { color: #f91880; }
-  .watermark {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 0 0;
-    margin-top: 12px;
-    border-top: 1px solid #e1e8ed;
-  }
-  .wm-left {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .wm-logo {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    object-fit: cover;
-  }
-  .wm-text {
-    display: flex;
-    flex-direction: column;
-  }
-  .wm-name {
-    font-size: 14px;
-    font-weight: 700;
-    color: #0f1419;
-    line-height: 1.2;
-  }
-  .wm-handle {
-    font-size: 13px;
-    color: #536471;
-    line-height: 1.2;
-  }
-  .wm-qr {
-    width: 56px;
-    height: 56px;
-    border-radius: 6px;
-  }
 </style>
 </head>
 <body>
@@ -346,132 +294,131 @@ function buildTweetHtml(tweet, { showWatermark = WATERMARK_ENABLED } = {}) {
       <span>${formatNumber(tweet.views)}</span>
     </div>
   </div>
-  ${showWatermark ? `<div class="watermark">
-    <div class="wm-left">
-      ${logoB64 ? `<img class="wm-logo" src="${logoB64}" alt="" />` : ''}
-      <div class="wm-text">
-        ${WATERMARK_NAME ? `<span class="wm-name">${escapeHtml(WATERMARK_NAME)}</span>` : ''}
-        ${WATERMARK_HANDLE ? `<span class="wm-handle">${escapeHtml(WATERMARK_HANDLE)}</span>` : ''}
-      </div>
-    </div>
-    ${qrB64 ? `<img class="wm-qr" src="${qrB64}" alt="QR" />` : ''}
-  </div>` : ''}
 </div>
 </body>
 </html>`;
 }
 
-app.use(express.static(join(__dirname, 'public')));
+function sendJson(res, status, obj) {
+  res.statusCode = status;
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(JSON.stringify(obj));
+}
 
-app.get('/api/config', (req, res) => {
-  res.json({
-    watermarkAvailable: !!(logoB64 || WATERMARK_NAME),
-    watermarkDefault: WATERMARK_ENABLED,
-  });
-});
+const server = createServer(async (req, res) => {
+  const { pathname, searchParams } = new URL(req.url, 'http://localhost');
 
-app.get('/api/tweet', async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
-
-  const parsed = parseTweetUrl(url);
-  if (!parsed) return res.status(400).json({ error: 'Invalid tweet URL' });
-
-  try {
-    const apiUrl = `https://api.fxtwitter.com/${parsed.username}/status/${parsed.tweetId}`;
-    const response = await fetch(apiUrl, {
-      headers: { 'User-Agent': 'xshot/1.0' },
-    });
-    const data = await response.json();
-
-    if (data.code !== 200 || !data.tweet) {
-      return res.status(404).json({ error: 'Tweet not found' });
-    }
-
-    res.json({ tweet: data.tweet });
-  } catch (err) {
-    console.error('fxtwitter error:', err.message);
-    res.status(502).json({ error: 'Failed to fetch tweet data' });
+  if (req.method !== 'GET') {
+    return sendJson(res, 404, { error: 'Not found' });
   }
-});
 
-app.get('/api/screenshot', async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
+  if (pathname === '/api/config') {
+    return sendJson(res, 200, {});
+  }
 
-  const parsed = parseTweetUrl(url);
-  if (!parsed) return res.status(400).json({ error: 'Invalid tweet URL' });
+  if (pathname === '/api/tweet') {
+    const url = searchParams.get('url');
+    if (!url) return sendJson(res, 400, { error: 'URL is required' });
 
-  try {
-    const apiUrl = `https://api.fxtwitter.com/${parsed.username}/status/${parsed.tweetId}`;
-    const response = await fetch(apiUrl, {
-      headers: { 'User-Agent': 'xshot/1.0' },
-    });
-    const data = await response.json();
-
-    if (data.code !== 200 || !data.tweet) {
-      return res.status(404).json({ error: 'Tweet not found' });
-    }
-
-    const wm = req.query.watermark;
-    const showWatermark = wm !== undefined ? wm !== '0' : WATERMARK_ENABLED;
-    await embedImages(data.tweet);
-    const html = buildTweetHtml(data.tweet, { showWatermark });
-    const b = await getBrowser();
-    const page = await b.newPage();
+    const parsed = parseTweetUrl(url);
+    if (!parsed) return sendJson(res, 400, { error: 'Invalid tweet URL' });
 
     try {
-      await page.setViewport({ width: 600, height: 800, deviceScaleFactor: 2 });
-      await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15000 });
-      const card = await page.$('#card');
-      const png = await card.screenshot({ type: 'png', omitBackground: true });
-      res.set('Content-Type', 'image/png');
-      res.set('Content-Disposition', `inline; filename="tweet-${parsed.tweetId}.png"`);
-      res.send(png);
-    } finally {
-      await page.close();
-    }
-  } catch (err) {
-    console.error('Screenshot error:', err.message);
-    res.status(500).json({ error: 'Failed to generate screenshot' });
-  }
-});
+      const apiUrl = `https://api.fxtwitter.com/${parsed.username}/status/${parsed.tweetId}`;
+      const response = await fetch(apiUrl, {
+        headers: { 'User-Agent': 'xshot/1.0' },
+      });
+      const data = await response.json();
 
-app.get('/api/video', async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: 'URL is required' });
+      if (data.code !== 200 || !data.tweet) {
+        return sendJson(res, 404, { error: 'Tweet not found' });
+      }
 
-  let parsed;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return res.status(400).json({ error: 'Invalid URL' });
-  }
-
-  if (parsed.protocol !== 'https:' || !ALLOWED_VIDEO_HOSTS.has(parsed.hostname)) {
-    return res.status(403).json({ error: 'Forbidden host' });
-  }
-
-  try {
-    const upstream = await fetch(url);
-    if (!upstream.ok) {
-      await upstream.body?.cancel();
-      return res.status(upstream.status).json({ error: 'Upstream error' });
-    }
-
-    const contentType = upstream.headers.get('content-type') || 'video/mp4';
-    const contentLength = upstream.headers.get('content-length');
-
-    res.set('Content-Type', contentType);
-    res.set('Content-Disposition', 'attachment; filename="video.mp4"');
-    if (contentLength) res.set('Content-Length', contentLength);
-
-    await pipeline(Readable.fromWeb(upstream.body), res);
-  } catch (err) {
-    if (!res.headersSent) {
-      res.status(502).json({ error: 'Failed to fetch video' });
+      return sendJson(res, 200, { tweet: data.tweet });
+    } catch (err) {
+      console.error('fxtwitter error:', err.message);
+      return sendJson(res, 502, { error: 'Failed to fetch tweet data' });
     }
   }
+
+  if (pathname === '/api/screenshot') {
+    const url = searchParams.get('url');
+    if (!url) return sendJson(res, 400, { error: 'URL is required' });
+
+    const parsed = parseTweetUrl(url);
+    if (!parsed) return sendJson(res, 400, { error: 'Invalid tweet URL' });
+
+    try {
+      const apiUrl = `https://api.fxtwitter.com/${parsed.username}/status/${parsed.tweetId}`;
+      const response = await fetch(apiUrl, {
+        headers: { 'User-Agent': 'xshot/1.0' },
+      });
+      const data = await response.json();
+
+      if (data.code !== 200 || !data.tweet) {
+        return sendJson(res, 404, { error: 'Tweet not found' });
+      }
+
+      await embedImages(data.tweet);
+      const html = buildTweetHtml(data.tweet);
+      const b = await getBrowser();
+      const page = await b.newPage();
+
+      try {
+        await page.setViewport({ width: 600, height: 800, deviceScaleFactor: 2 });
+        await page.setContent(html, { waitUntil: 'networkidle0', timeout: 15000 });
+        const card = await page.$('#card');
+        const png = await card.screenshot({ type: 'png', omitBackground: true });
+        res.setHeader('Content-Type', 'image/png');
+        res.setHeader('Content-Disposition', `inline; filename="tweet-${parsed.tweetId}.png"`);
+        res.end(png);
+      } finally {
+        await page.close();
+      }
+    } catch (err) {
+      console.error('Screenshot error:', err.message);
+      return sendJson(res, 500, { error: 'Failed to generate screenshot' });
+    }
+  }
+
+  if (pathname === '/api/video') {
+    const url = searchParams.get('url');
+    if (!url) return sendJson(res, 400, { error: 'URL is required' });
+
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return sendJson(res, 400, { error: 'Invalid URL' });
+    }
+
+    if (parsed.protocol !== 'https:' || !ALLOWED_VIDEO_HOSTS.has(parsed.hostname)) {
+      return sendJson(res, 403, { error: 'Forbidden host' });
+    }
+
+    try {
+      const upstream = await fetch(url);
+      if (!upstream.ok) {
+        await upstream.body?.cancel();
+        return sendJson(res, upstream.status, { error: 'Upstream error' });
+      }
+
+      const contentType = upstream.headers.get('content-type') || 'video/mp4';
+      const contentLength = upstream.headers.get('content-length');
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Disposition', 'attachment; filename="video.mp4"');
+      if (contentLength) res.setHeader('Content-Length', contentLength);
+
+      await pipeline(Readable.fromWeb(upstream.body), res);
+    } catch (err) {
+      if (!res.headersSent) {
+        sendJson(res, 502, { error: 'Failed to fetch video' });
+      }
+    }
+  }
+
+  return sendJson(res, 404, { error: 'Not found' });
 });
 
 process.on('SIGINT', async () => {
@@ -479,6 +426,6 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
   console.log(`xshot -> http://localhost:${PORT}`);
 });

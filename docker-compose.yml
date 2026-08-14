@@ -68,9 +68,6 @@ services:
     image: bidlobot-xshot:${VERSION:-latest}
     container_name: bidlobot-xshot
     restart: unless-stopped
-    environment:
-      - PORT=3210
-      - WATERMARK_ENABLED=false
     expose:
       - "3210"
     healthcheck:

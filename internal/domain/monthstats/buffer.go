@@ -24,9 +24,8 @@ type bufferEntry struct {
 // Buffer is the live accumulation layer. It copies stats.Buffer's proven
 // design verbatim: a mutex-guarded pending map, a periodic atomic
 // swap+flush, additive re-merge on flush error, and DB+buffer merged
-// reads so the in-progress month is never stale. Idempotent dedup is NOT
-// the buffer's concern (each live message is Add-ed exactly once); the
-// importer owns dedup via MonthState.
+// reads so the in-progress month is never stale. Each live message is
+// Add-ed exactly once, so no dedup is needed here.
 type Buffer struct {
 	mu      sync.Mutex
 	pending map[FlushKey]*bufferEntry
@@ -35,9 +34,8 @@ type Buffer struct {
 	ticker  *time.Ticker
 	stopCh  chan struct{}
 
-	// liveStart tracks the earliest live message ts per chat so the first
-	// flush can persist MonthState.LiveTrackStart - the boundary the
-	// importer uses to avoid double-counting messages already seen live.
+	// liveStart tracks the earliest live message ts per chat so the
+	// first flush can persist MonthState.LiveTrackStart.
 	liveStart     map[int64]time.Time
 	liveStartDone map[int64]bool
 	liveStartKick map[int64]bool // first-Add async-persist fired once per chat
@@ -65,10 +63,10 @@ func (b *Buffer) Add(s Sample) {
 		b.liveStart[s.AbsChatID] = s.TS
 	}
 	// Persist LiveTrackStart eagerly on the FIRST message for a chat
-	// (atomic, off the hot path) so the <=60s gap to the first flush
-	// cannot let a concurrent /import double-count the overlap window.
-	// Fired at most once per chat per process; the flush path is the
-	// backstop if this goroutine loses on shutdown.
+	// (atomic, off the hot path) so the boundary survives even if the
+	// process dies before the first flush. Fired at most once per chat
+	// per process; the flush path is the backstop if this goroutine
+	// loses on shutdown.
 	if !b.liveStartKick[s.AbsChatID] {
 		b.liveStartKick[s.AbsChatID] = true
 		chat, ts := s.AbsChatID, s.TS
@@ -211,11 +209,10 @@ func (b *Buffer) flush(ctx context.Context) {
 	}
 
 	// Flush succeeded: persist LiveTrackStart once per chat via the
-	// atomic single-txn setter. A read-modify-write here
-	// (GetState/PutState) would clobber a concurrently-advanced
-	// ImportHWM/Sealed back to zero and silently double-count a later
-	// re-import. Non-fatal on error (retried next flush; the first-Add
-	// goroutine is the other backstop).
+	// atomic single-txn setter (first write wins). A read-modify-write
+	// here could clobber the boundary back to zero, and a plain
+	// overwrite could move it. Non-fatal on error (retried next flush;
+	// the first-Add goroutine is the other backstop).
 	for chat, earliest := range starts {
 		if err := b.store.SetLiveTrackStart(ctx, chat, earliest); err != nil {
 			continue

@@ -249,8 +249,8 @@ func parseBattleArgs(text string) (left, right string, ok bool) {
 }
 
 // formatBattleWindow renders a duration as a Russian short label. We
-// keep it custom instead of reusing inline.go's formatDuration because
-// "60s" reads better as "60с" than "1м" in this context.
+// keep it custom because "60s" reads better as "60с" than "1м" in this
+// context.
 func formatBattleWindow(d time.Duration) string {
 	if d == battle.DefaultDuration {
 		return "60с"

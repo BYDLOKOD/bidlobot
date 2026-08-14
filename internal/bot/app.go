@@ -33,20 +33,14 @@ type App struct {
 	statsBuffer *stats.Buffer
 	monthBuffer *monthstats.Buffer
 	memberSvc   *membership.Service
-	dispatcher  *CallbackDispatcher
-	pendingGC   PendingGC
 	inlineSvc   *InlineService
 	games       *GamesRegistry
 	cooldown    *cooldown
 
 	// summarize is the always-on Pi/OMP summarization feature.
 	// nil only in tests that do not wire it.
-	// summarizeSender is the narrow Telegram surface the feature needs
-	// (SendMessage + EditMessageText); shared.TelegramAPI now covers both,
-	// but the narrow interface is kept so tests inject a fake without
-	// stubbing the full API surface.
 	summarize       *summarize.Service
-	summarizeSender summarizeSender
+	summarizeSender shared.TelegramAPI
 
 	// sender is the rate-limited + retried wrapper used for every
 	// outgoing message on the public surface (help, onboarding, the
@@ -100,13 +94,6 @@ func (a *App) InFlight() *sync.WaitGroup {
 	return &a.inFlight
 }
 
-// PendingGC is the narrow API the App needs to periodically clean up
-// expired pending actions; declared here so wiring can pass either a
-// PendingRepo or a fake without depending on the storage package.
-type PendingGC interface {
-	GarbageCollect(ctx context.Context, now time.Time) (int, error)
-}
-
 type ChatLeaver interface {
 	LeaveChat(ctx context.Context, params *telego.LeaveChatParams) error
 }
@@ -121,7 +108,7 @@ type AdmissionAttemptStore interface {
 // chat stays inside Telegram's 20 msg/min/chat budget. It is a
 // constructor parameter (not a setter) so the type system forbids
 // forgetting it.
-func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, monthBuffer *monthstats.Buffer, memberSvc *membership.Service, dispatcher *CallbackDispatcher, pendingGC PendingGC, inlineSvc *InlineService) *App {
+func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminCache *shared.AdminCache, statsBuffer *stats.Buffer, monthBuffer *monthstats.Buffer, memberSvc *membership.Service, inlineSvc *InlineService) *App {
 	return &App{
 		bot:         bot,
 		leaver:      bot,
@@ -131,8 +118,6 @@ func NewApp(bot *telego.Bot, sender shared.TelegramAPI, log *slog.Logger, adminC
 		statsBuffer: statsBuffer,
 		monthBuffer: monthBuffer,
 		memberSvc:   memberSvc,
-		dispatcher:  dispatcher,
-		pendingGC:   pendingGC,
 		inlineSvc:   inlineSvc,
 		cooldown:    newCooldown(),
 	}
@@ -204,7 +189,7 @@ func (a *App) AttachGames(g *GamesRegistry) {
 // AttachSummarize wires the Pi/OMP summarization feature.
 // Call before Run so registerRoutes wires the passive recorder and the
 // /summarize command. A nil service or sender is a no-op (feature off).
-func (a *App) AttachSummarize(svc *summarize.Service, sender summarizeSender) {
+func (a *App) AttachSummarize(svc *summarize.Service, sender shared.TelegramAPI) {
 	if svc == nil || sender == nil {
 		return
 	}
@@ -254,9 +239,6 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	go a.statsBuffer.Run(ctx, 60*time.Second)
 	if a.monthBuffer != nil {
 		go a.monthBuffer.Run(ctx, 60*time.Second)
-	}
-	if a.pendingGC != nil {
-		go a.runPendingGC(ctx, time.Minute)
 	}
 	if a.deferredQ != nil {
 		go a.runDeferredGC(ctx, 10*time.Minute)
@@ -313,29 +295,6 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 		}
 		a.log.Warn("bot handler stopped without shutdown signal")
 		return nil
-	}
-}
-
-// runPendingGC sweeps expired pending actions out of bbolt every
-// interval. The 5-minute TTL means a 1-minute sweep keeps stale entries
-// out of the way without thrashing on small chats.
-func (a *App) runPendingGC(ctx context.Context, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			n, err := a.pendingGC.GarbageCollect(ctx, time.Now().UTC())
-			if err != nil {
-				a.log.Warn("pending GC failed", "error", err)
-				continue
-			}
-			if n > 0 {
-				a.log.Info("pending GC removed expired actions", "count", n)
-			}
-		}
 	}
 }
 

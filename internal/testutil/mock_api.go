@@ -31,10 +31,6 @@ type MockAPI struct {
 	ChatMembers     map[string]string      // "chatID:userID" -> status
 	ChatMemberUsers map[string]telego.User // "chatID:userID" -> identity GetChatMember returns
 	ChatMemberErrs  map[string]error       // "chatID:userID" -> GetChatMember error
-	ChatPerms       *telego.ChatPermissions
-	Chats           map[int64]*telego.ChatFullInfo
-	ChatErrs        map[int64]error
-	BotInfo         *telego.User
 }
 
 func NewMockAPI() *MockAPI {
@@ -44,9 +40,6 @@ func NewMockAPI() *MockAPI {
 		ChatMembers:     make(map[string]string),
 		ChatMemberUsers: make(map[string]telego.User),
 		ChatMemberErrs:  make(map[string]error),
-		Chats:           make(map[int64]*telego.ChatFullInfo),
-		ChatErrs:        make(map[int64]error),
-		BotInfo:         &telego.User{ID: 999, Username: "test_bot", IsBot: true},
 	}
 }
 
@@ -111,14 +104,6 @@ func (m *MockAPI) GetChatAdministrators(_ context.Context, params *telego.GetCha
 		members = append(members, admin)
 	}
 
-	if m.BotInfo != nil {
-		botAdmin := &telego.ChatMemberAdministrator{
-			User:               *m.BotInfo,
-			CanRestrictMembers: m.BotCanRestrict,
-		}
-		members = append(members, botAdmin)
-	}
-
 	return members, nil
 }
 
@@ -160,17 +145,9 @@ func (m *MockAPI) GetChat(_ context.Context, params *telego.GetChatParams) (*tel
 	defer m.mu.Unlock()
 	m.Calls = append(m.Calls, APICall{"GetChat", params})
 
-	if err := m.ChatErrs[params.ChatID.ID]; err != nil {
-		return nil, err
-	}
-	if chat := m.Chats[params.ChatID.ID]; chat != nil {
-		copy := *chat
-		return &copy, nil
-	}
 	return &telego.ChatFullInfo{
-		ID:          params.ChatID.ID,
-		Type:        telego.ChatTypeSupergroup,
-		Permissions: m.ChatPerms,
+		ID:   params.ChatID.ID,
+		Type: telego.ChatTypeSupergroup,
 	}, nil
 }
 
@@ -210,7 +187,7 @@ func (m *MockAPI) AnswerCallbackQuery(_ context.Context, params *telego.AnswerCa
 }
 
 func (m *MockAPI) GetMe(_ context.Context) (*telego.User, error) {
-	return m.BotInfo, nil
+	return &telego.User{ID: 999, Username: "bidlobot_test", IsBot: true}, nil
 }
 
 func (m *MockAPI) LastMessage() *SentMessage {
@@ -220,13 +197,6 @@ func (m *MockAPI) LastMessage() *SentMessage {
 		return nil
 	}
 	return &m.Messages[len(m.Messages)-1]
-}
-
-func (m *MockAPI) Reset() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.Messages = nil
-	m.Calls = nil
 }
 
 func (m *MockAPI) CallCount(method string) int {

@@ -217,7 +217,7 @@ func TestTikTok_SizeLimit_MustUseFailureCatalog(t *testing.T) {
 
 func TestCooldown_Notice_MustUseFailureCatalog(t *testing.T) {
 	snd := &recordMessageSender{}
-	a := NewApp(nil, snd, testLogger(), nil, nil, nil, nil, nil, nil, nil)
+	a := NewApp(nil, snd, testLogger(), nil, nil, nil, nil, nil)
 
 	noop := func(_ *th.Context, _ telego.Message) error { return nil }
 	gated := a.gateMsg("testcmd", time.Second, noop)
@@ -244,21 +244,6 @@ func TestCooldown_Notice_MustUseFailureCatalog(t *testing.T) {
 	if !failureCatalogContains(snd.Messages[0].Text) {
 		t.Errorf("cooldown notice text must be from FailureCatalog; got hardcoded %q",
 			snd.Messages[0].Text)
-	}
-}
-
-func TestStaleCallback_Answer_MustUseFailureCatalog(t *testing.T) {
-	store := newFakePending()
-	d := NewCallbackDispatcher(store, nil, nil, testLogger())
-
-	resp := d.dispatch(context.Background(), telego.CallbackQuery{Data: "garbage"})
-
-	if resp.AnswerText == "" {
-		t.Fatal("unknown callback data must produce a toast answer")
-	}
-	if !failureCatalogContains(resp.AnswerText) {
-		t.Errorf("stale callback answer must be from FailureCatalog; got hardcoded %q",
-			resp.AnswerText)
 	}
 }
 

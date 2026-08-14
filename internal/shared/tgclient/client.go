@@ -391,17 +391,6 @@ func (c *Client) AnswerCallbackQuery(ctx context.Context, params *telego.AnswerC
 	})
 }
 
-// AnswerInlineQuery has the same characteristics as callback answers
-// (no chat id, strict server timeout) - retry only.
-func (c *Client) AnswerInlineQuery(ctx context.Context, params *telego.AnswerInlineQueryParams) error {
-	if params == nil {
-		return errors.New("tgclient: nil params")
-	}
-	return retry.Do(ctx, c.retryPolicy, func(ctx context.Context) error {
-		return c.bot.AnswerInlineQuery(ctx, params)
-	})
-}
-
 // Read-only passthrough methods. These do not produce chat traffic so
 // they bypass the rate limiter; we still apply retry because GetChat /
 // GetChatMember can hit transient 5xx during Telegram outages.

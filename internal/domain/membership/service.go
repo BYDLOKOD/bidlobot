@@ -2,7 +2,6 @@ package membership
 
 import (
 	"context"
-	"log/slog"
 	"time"
 
 	"github.com/mymmrac/telego"
@@ -13,11 +12,10 @@ import (
 // individual handlers stay shallow.
 type Service struct {
 	store Store
-	log   *slog.Logger
 }
 
-func NewService(store Store, log *slog.Logger) *Service {
-	return &Service{store: store, log: log}
+func NewService(store Store) *Service {
+	return &Service{store: store}
 }
 
 func (s *Service) Store() Store { return s.store }

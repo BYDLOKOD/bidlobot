@@ -2,45 +2,28 @@ package storage
 
 import "fmt"
 
-func StatsKey(userID, absChatID int64) []byte {
-	return []byte(fmt.Sprintf("s:%020d:%020d", userID, absChatID))
+// keyf is the single helper behind every key builder in this file: it
+// formats the on-disk key with the exact format string each builder
+// passes, so the byte layout stays in one place.
+func keyf(prefix string, parts ...any) []byte {
+	return []byte(fmt.Sprintf(prefix, parts...))
 }
 
-func StatsChatIndex(absChatID, userID int64) []byte {
-	return []byte(fmt.Sprintf("sc:%020d:%020d", absChatID, userID))
-}
+func StatsKey(userID, absChatID int64) []byte { return keyf("s:%020d:%020d", userID, absChatID) }
 
-func StatsChatPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("sc:%020d:", absChatID))
-}
+func StatsChatIndex(absChatID, userID int64) []byte { return keyf("sc:%020d:%020d", absChatID, userID) }
 
-func WarnKey(uuid string) []byte {
-	return []byte(fmt.Sprintf("w:%s", uuid))
-}
+func StatsChatPrefix(absChatID int64) []byte { return keyf("sc:%020d:", absChatID) }
 
-func WarnTargetIndex(absChatID, targetUserID int64, uuid string) []byte {
-	return []byte(fmt.Sprintf("wt:%020d:%020d:%s", absChatID, targetUserID, uuid))
-}
-
-func WarnTargetPrefix(absChatID, targetUserID int64) []byte {
-	return []byte(fmt.Sprintf("wt:%020d:%020d:", absChatID, targetUserID))
-}
-
-func MemberKey(userID, absChatID int64) []byte {
-	return []byte(fmt.Sprintf("m:%020d:%020d", userID, absChatID))
-}
+func MemberKey(userID, absChatID int64) []byte { return keyf("m:%020d:%020d", userID, absChatID) }
 
 func MemberChatIndex(absChatID, userID int64) []byte {
-	return []byte(fmt.Sprintf("mc:%020d:%020d", absChatID, userID))
+	return keyf("mc:%020d:%020d", absChatID, userID)
 }
 
-func MemberChatPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("mc:%020d:", absChatID))
-}
+func MemberChatPrefix(absChatID int64) []byte { return keyf("mc:%020d:", absChatID) }
 
-func ChatKey(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("c:%020d", absChatID))
-}
+func ChatKey(absChatID int64) []byte { return keyf("c:%020d", absChatID) }
 
 // --- Monthly statistics (Workstream A) ---
 //
@@ -54,69 +37,53 @@ func ChatKey(absChatID int64) []byte {
 // MonthStatsKey is the per-(chat, month, user) aggregate row. userID 0 is
 // the MonthMeta sentinel for that (chat, month).
 func MonthStatsKey(absChatID int64, month string, userID int64) []byte {
-	return []byte(fmt.Sprintf("ms:%020d:%s:%020d", absChatID, month, userID))
+	return keyf("ms:%020d:%s:%020d", absChatID, month, userID)
 }
 
 // MonthStatsMonthPrefix scans every row (MonthMeta + all users) of one
 // (chat, month).
 func MonthStatsMonthPrefix(absChatID int64, month string) []byte {
-	return []byte(fmt.Sprintf("ms:%020d:%s:", absChatID, month))
+	return keyf("ms:%020d:%s:", absChatID, month)
 }
 
 // MonthStatsChatIndex is a value-less key recording that a chat has data
 // for a month (drives /stats months and the months menu cheaply).
 func MonthStatsChatIndex(absChatID int64, month string) []byte {
-	return []byte(fmt.Sprintf("msi:%020d:%s", absChatID, month))
+	return keyf("msi:%020d:%s", absChatID, month)
 }
 
 // MonthStatsChatIndexPrefix scans every month a chat has any data for.
 func MonthStatsChatIndexPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("msi:%020d:", absChatID))
+	return keyf("msi:%020d:", absChatID)
 }
 
 // MonthStatsStateKey is the per-chat import/seal ledger singleton.
-func MonthStatsStateKey(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("mss:%020d", absChatID))
-}
+func MonthStatsStateKey(absChatID int64) []byte { return keyf("mss:%020d", absChatID) }
 
 // MonthStatsSummaryKey is the memoized rendered leaderboard for a sealed
 // (chat, month).
 func MonthStatsSummaryKey(absChatID int64, month string) []byte {
-	return []byte(fmt.Sprintf("msum:%020d:%s", absChatID, month))
-}
-
-// MonthStatsImportedIDKey is a value-less key recording that a specific
-// (chat, messageID) was already imported, for per-message-ID dedup.
-func MonthStatsImportedIDKey(absChatID int64, messageID int64) []byte {
-	return []byte(fmt.Sprintf("mii:%020d:%020d", absChatID, messageID))
+	return keyf("msum:%020d:%s", absChatID, month)
 }
 
 // MonthStatsImportedIDPrefix scans all imported IDs for a given chat.
-func MonthStatsImportedIDPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("mii:%020d:", absChatID))
-}
+func MonthStatsImportedIDPrefix(absChatID int64) []byte { return keyf("mii:%020d:", absChatID) }
 
 // GraceKickKey is one open grace ticket for (chat, user). The chat id
 // leads so GraceKickChatPrefix scans a whole chat's open tickets in one
 // cursor pass during the daily sweep.
-func GraceKickKey(absChatID, userID int64) []byte {
-	return []byte(fmt.Sprintf("gk:%020d:%020d", absChatID, userID))
-}
+func GraceKickKey(absChatID, userID int64) []byte { return keyf("gk:%020d:%020d", absChatID, userID) }
 
-func GraceKickChatPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("gk:%020d:", absChatID))
-}
+func GraceKickChatPrefix(absChatID int64) []byte { return keyf("gk:%020d:", absChatID) }
 
 // CaptchaKey is one open captcha challenge, keyed by its 16-hex id.
-func CaptchaKey(challengeID string) []byte {
-	return []byte(fmt.Sprintf("cc:%s", challengeID))
-}
+func CaptchaKey(challengeID string) []byte { return keyf("cc:%s", challengeID) }
 
 // CaptchaUserIndex lets GetByUser find the open challenge for (chat, user)
 // in one read - the value is the challenge id. Used by OnJoin to drop a
 // stale challenge when a user rejoins before the timeout fires.
 func CaptchaUserIndex(absChatID, userID int64) []byte {
-	return []byte(fmt.Sprintf("ccu:%020d:%020d", absChatID, userID))
+	return keyf("ccu:%020d:%020d", absChatID, userID)
 }
 
 func AbsChatID(chatID int64) int64 {
@@ -138,18 +105,16 @@ func parseID(b []byte) int64 {
 
 // StatsDailyKey is the per-(chat, day, user) daily aggregate. Day is "YYYY-MM-DD" in Moscow time.
 func StatsDailyKey(absChatID int64, day string, userID int64) []byte {
-	return []byte(fmt.Sprintf("sd:%020d:%s:%020d", absChatID, day, userID))
+	return keyf("sd:%020d:%s:%020d", absChatID, day, userID)
 }
 
 // StatsDailyPrefix scans one (chat, day) for all users.
 func StatsDailyPrefix(absChatID int64, day string) []byte {
-	return []byte(fmt.Sprintf("sd:%020d:%s:", absChatID, day))
+	return keyf("sd:%020d:%s:", absChatID, day)
 }
 
 // StatsDailyChatPrefix scans all days of one chat in stats_daily.
-func StatsDailyChatPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("sd:%020d:", absChatID))
-}
+func StatsDailyChatPrefix(absChatID int64) []byte { return keyf("sd:%020d:", absChatID) }
 
 // --- Referral catalog (Workstream: refs/reputation UX) ---
 //
@@ -161,32 +126,23 @@ func StatsDailyChatPrefix(absChatID int64) []byte {
 
 // ReferralServiceKey is one service row, keyed by (chat, service ID).
 func ReferralServiceKey(absChatID int64, serviceID uint64) []byte {
-	return []byte(fmt.Sprintf("rfs:%020d:%020d", absChatID, serviceID))
+	return keyf("rfs:%020d:%020d", absChatID, serviceID)
 }
 
 // ReferralServicePrefix scans every service row in one chat.
-func ReferralServicePrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("rfs:%020d:", absChatID))
-}
+func ReferralServicePrefix(absChatID int64) []byte { return keyf("rfs:%020d:", absChatID) }
 
 // ReferralServiceNameKey is the chat-scoped exact-name index entry. The
 // name component is the NormalizeName reduction (raw UTF-8 bytes); the
 // value is the service ID.
 func ReferralServiceNameKey(absChatID int64, normalized string) []byte {
-	return []byte(fmt.Sprintf("rfsn:%020d:%s", absChatID, normalized))
-}
-
-// ReferralServiceNamePrefix scans every name index entry in one chat.
-func ReferralServiceNamePrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("rfsn:%020d:", absChatID))
+	return keyf("rfsn:%020d:%s", absChatID, normalized)
 }
 
 // ReferralKey is one referral row, keyed by (chat, referral ID).
 func ReferralKey(absChatID int64, referralID uint64) []byte {
-	return []byte(fmt.Sprintf("rf:%020d:%020d", absChatID, referralID))
+	return keyf("rf:%020d:%020d", absChatID, referralID)
 }
 
 // ReferralPrefix scans every referral row in one chat.
-func ReferralPrefix(absChatID int64) []byte {
-	return []byte(fmt.Sprintf("rf:%020d:", absChatID))
-}
+func ReferralPrefix(absChatID int64) []byte { return keyf("rf:%020d:", absChatID) }

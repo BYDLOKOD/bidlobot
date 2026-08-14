@@ -17,10 +17,9 @@ var (
 type Source string
 
 const (
-	SourceMessage     Source = "message"
-	SourceReaction    Source = "reaction"
-	SourceChatMember  Source = "chat_member"
-	SourceMyChatAdmin Source = "my_chat_admin"
+	SourceMessage    Source = "message"
+	SourceReaction   Source = "reaction"
+	SourceChatMember Source = "chat_member"
 	// SourceImport marks a member learned from a Telegram Desktop chat
 	// export rather than a live event. Live events overwrite it so
 	// "observed for real" always wins over "imported".

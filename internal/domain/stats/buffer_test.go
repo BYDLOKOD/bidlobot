@@ -11,12 +11,11 @@ import (
 )
 
 type mockStore struct {
-	mu            sync.Mutex
-	data          map[FlushKey]*Stats
-	daily         map[string]map[FlushKey]*Stats // day -> key -> stats
-	flushErr      error
-	flushDailyErr error
-	flushCnt      int
+	mu       sync.Mutex
+	data     map[FlushKey]*Stats
+	daily    map[string]map[FlushKey]*Stats // day -> key -> stats
+	flushErr error
+	flushCnt int
 }
 
 func newMockStore() *mockStore {
@@ -50,32 +49,6 @@ func (m *mockStore) ListByChat(_ context.Context, absChatID int64) ([]Stats, err
 	return result, nil
 }
 
-func (m *mockStore) Flush(_ context.Context, batch map[FlushKey]*FlushDelta) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.flushCnt++
-	if m.flushErr != nil {
-		return m.flushErr
-	}
-	for k, d := range batch {
-		if s, ok := m.data[k]; ok {
-			s.MessageCount += d.CountDelta
-			if d.LastSeen.After(s.LastSeen) {
-				s.LastSeen = d.LastSeen
-			}
-		} else {
-			m.data[k] = &Stats{
-				UserID:       k.UserID,
-				ChatID:       k.AbsChatID,
-				MessageCount: d.CountDelta,
-				FirstSeen:    d.FirstSeen,
-				LastSeen:     d.LastSeen,
-			}
-		}
-	}
-	return nil
-}
-
 func (m *mockStore) GetDaily(_ context.Context, absChatID int64, day string) (map[int64]*Stats, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -96,36 +69,6 @@ func (m *mockStore) GetDaily(_ context.Context, absChatID int64, day string) (ma
 		}
 	}
 	return result, nil
-}
-
-func (m *mockStore) FlushDaily(_ context.Context, batch map[FlushKey]*FlushDelta, day string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.flushDailyErr != nil {
-		return m.flushDailyErr
-	}
-	dayMap, ok := m.daily[day]
-	if !ok {
-		dayMap = make(map[FlushKey]*Stats)
-		m.daily[day] = dayMap
-	}
-	for k, d := range batch {
-		if s, ok := dayMap[k]; ok {
-			s.MessageCount += d.CountDelta
-			if d.LastSeen.After(s.LastSeen) {
-				s.LastSeen = d.LastSeen
-			}
-		} else {
-			dayMap[k] = &Stats{
-				UserID:       k.UserID,
-				ChatID:       k.AbsChatID,
-				MessageCount: d.CountDelta,
-				FirstSeen:    d.FirstSeen,
-				LastSeen:     d.LastSeen,
-			}
-		}
-	}
-	return nil
 }
 
 func (m *mockStore) FlushAtomic(_ context.Context, lifetime map[FlushKey]*FlushDelta, daily map[string]map[FlushKey]*FlushDelta) error {
@@ -317,11 +260,11 @@ func TestBufferNotFoundBeforeAnyActivity(t *testing.T) {
 	}
 }
 
-// TestBufferFlushDailyErrorDoesNotDuplicateLifetime verifies that a
+// TestBufferFlushAtomicErrorDoesNotDuplicateLifetime verifies that a
 // FlushAtomic failure does NOT cause lifetime counts to be duplicated
 // on retry. Since the operation is atomic, nothing was committed, and
 // re-queued deltas produce exactly the expected count after one retry.
-func TestBufferFlushDailyErrorDoesNotDuplicateLifetime(t *testing.T) {
+func TestBufferFlushAtomicErrorDoesNotDuplicateLifetime(t *testing.T) {
 	store := newMockStore()
 	store.flushErr = errors.New("atomic flush failed")
 	buf := NewBuffer(store, testLogger())

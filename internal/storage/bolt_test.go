@@ -2,13 +2,11 @@ package storage_test
 
 import (
 	"context"
+	"encoding/hex"
 	"path/filepath"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
-	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -34,7 +32,7 @@ func TestStatsFlushAndGet(t *testing.T) {
 		{UserID: 111, AbsChatID: 100}: {CountDelta: 5, FirstSeen: now, LastSeen: now},
 		{UserID: 222, AbsChatID: 100}: {CountDelta: 3, FirstSeen: now, LastSeen: now},
 	}
-	if err := repo.Flush(ctx, batch); err != nil {
+	if err := repo.FlushAtomic(ctx, batch, nil); err != nil {
 		t.Fatal("flush:", err)
 	}
 
@@ -49,7 +47,7 @@ func TestStatsFlushAndGet(t *testing.T) {
 	batch2 := map[stats.FlushKey]*stats.FlushDelta{
 		{UserID: 111, AbsChatID: 100}: {CountDelta: 10, FirstSeen: now, LastSeen: now.Add(time.Hour)},
 	}
-	if err := repo.Flush(ctx, batch2); err != nil {
+	if err := repo.FlushAtomic(ctx, batch2, nil); err != nil {
 		t.Fatal("flush2:", err)
 	}
 
@@ -70,7 +68,7 @@ func TestStatsListByChat(t *testing.T) {
 		{UserID: 222, AbsChatID: 100}: {CountDelta: 3, FirstSeen: now, LastSeen: now},
 		{UserID: 333, AbsChatID: 999}: {CountDelta: 1, FirstSeen: now, LastSeen: now},
 	}
-	repo.Flush(ctx, batch)
+	repo.FlushAtomic(ctx, batch, nil)
 
 	list, err := repo.ListByChat(ctx, 100)
 	if err != nil {
@@ -81,53 +79,22 @@ func TestStatsListByChat(t *testing.T) {
 	}
 }
 
-func TestWarningAtomicCreate(t *testing.T) {
-	store := newTestStore(t)
-	repo := storage.NewWarnRepo(store.DB())
-	ctx := context.Background()
-
-	for i := 0; i < 3; i++ {
-		w := &moderation.Warning{
-			ID: uuid.NewString(), TargetUserID: 222, ChatID: 100,
-			IssuerUserID: 111, Reason: "spam", Timestamp: time.Now(),
-		}
-		count, err := repo.CreateWarning(ctx, w)
+func TestNewIDHex16(t *testing.T) {
+	seen := make(map[string]struct{}, 100)
+	for i := 0; i < 100; i++ {
+		id, err := storage.NewID()
 		if err != nil {
-			t.Fatal("warn:", err)
+			t.Fatal(err)
 		}
-		if count != i+1 {
-			t.Fatalf("warn %d: expected count %d, got %d", i, i+1, count)
+		if len(id) != 16 {
+			t.Fatalf("NewID() = %q, length %d, want 16 hex chars", id, len(id))
 		}
-	}
-}
-
-func TestWarningClear(t *testing.T) {
-	store := newTestStore(t)
-	repo := storage.NewWarnRepo(store.DB())
-	ctx := context.Background()
-
-	for i := 0; i < 2; i++ {
-		repo.CreateWarning(ctx, &moderation.Warning{
-			ID: uuid.NewString(), TargetUserID: 222, ChatID: 100,
-			IssuerUserID: 111, Timestamp: time.Now(),
-		})
-	}
-
-	if err := repo.ClearWarnings(ctx, 222, 100); err != nil {
-		t.Fatal(err)
-	}
-
-	count, _ := repo.CountActive(ctx, 222, 100)
-	if count != 0 {
-		t.Fatalf("expected 0 active after clear, got %d", count)
-	}
-
-	w := &moderation.Warning{
-		ID: uuid.NewString(), TargetUserID: 222, ChatID: 100,
-		IssuerUserID: 111, Timestamp: time.Now(),
-	}
-	newCount, _ := repo.CreateWarning(ctx, w)
-	if newCount != 1 {
-		t.Fatalf("expected count 1 after clear+new, got %d", newCount)
+		if _, err := hex.DecodeString(id); err != nil {
+			t.Fatalf("NewID() = %q is not hex: %v", id, err)
+		}
+		if _, dup := seen[id]; dup {
+			t.Fatalf("NewID() returned duplicate %q across 100 iterations", id)
+		}
+		seen[id] = struct{}{}
 	}
 }

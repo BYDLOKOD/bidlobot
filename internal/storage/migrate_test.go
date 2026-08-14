@@ -6,10 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/veschin/bidlobot/internal/domain/membership"
-	"github.com/veschin/bidlobot/internal/domain/moderation"
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/storage"
@@ -35,12 +32,12 @@ func TestMigrateChatID_RekeysAllBuckets(t *testing.T) {
 	// Seed stats: two users.
 	statsRepo := storage.NewStatsRepo(store.DB())
 	now := time.Now().UTC()
-	if err := statsRepo.Flush(ctx, map[stats.FlushKey]*stats.FlushDelta{
+	if err := statsRepo.FlushAtomic(ctx, map[stats.FlushKey]*stats.FlushDelta{
 		{UserID: 100, AbsChatID: oldAbs}: {CountDelta: 5, FirstSeen: now, LastSeen: now},
 		{UserID: 200, AbsChatID: oldAbs}: {CountDelta: 3, FirstSeen: now, LastSeen: now},
 		// Unrelated chat to confirm we don't touch it.
 		{UserID: 100, AbsChatID: 555}: {CountDelta: 1, FirstSeen: now, LastSeen: now},
-	}); err != nil {
+	}, nil); err != nil {
 		t.Fatalf("seed stats: %v", err)
 	}
 
@@ -88,32 +85,6 @@ func TestMigrateChatID_RekeysAllBuckets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Seed warnings: 3 for user 200 in old chat.
-	warnRepo := storage.NewWarnRepo(store.DB())
-	for i := 0; i < 3; i++ {
-		if _, err := warnRepo.CreateWarning(ctx, &moderation.Warning{
-			ID:           uuid.NewString(),
-			TargetUserID: 200,
-			ChatID:       oldAbs,
-			IssuerUserID: 100,
-			Reason:       "spam",
-			Timestamp:    now,
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Unrelated warning in another chat.
-	unrelatedID := uuid.NewString()
-	if _, err := warnRepo.CreateWarning(ctx, &moderation.Warning{
-		ID:           unrelatedID,
-		TargetUserID: 200,
-		ChatID:       555,
-		IssuerUserID: 100,
-		Timestamp:    now,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
 	// Migrate.
 	report, err := storage.MigrateChatID(ctx, store.DB(), oldAbs, newAbs)
 	if err != nil {
@@ -127,9 +98,6 @@ func TestMigrateChatID_RekeysAllBuckets(t *testing.T) {
 	}
 	if report.Chats != 1 {
 		t.Errorf("chats counter: %+v", report)
-	}
-	if report.Warnings != 3 || report.WarnIndexes != 3 {
-		t.Errorf("warning counters: %+v", report)
 	}
 
 	// Verify stats moved.
@@ -210,28 +178,6 @@ func TestMigrateChatID_RekeysAllBuckets(t *testing.T) {
 	if ch.AbsChatID != newAbs || ch.Title != "Old Group" {
 		t.Errorf("chat record corrupted: %+v", ch)
 	}
-
-	// Verify warnings moved.
-	count, _ := warnRepo.CountActive(ctx, 200, oldAbs)
-	if count != 0 {
-		t.Errorf("oldAbs warnings should be 0, got %d", count)
-	}
-	count, _ = warnRepo.CountActive(ctx, 200, newAbs)
-	if count != 3 {
-		t.Errorf("newAbs warnings should be 3, got %d", count)
-	}
-	// Unrelated warning still works.
-	count, _ = warnRepo.CountActive(ctx, 200, 555)
-	if count != 1 {
-		t.Errorf("unrelated warnings should be 1, got %d", count)
-	}
-	// Inspect a moved warning's value.
-	moved, _ := warnRepo.ListActive(ctx, 200, newAbs)
-	for _, w := range moved {
-		if w.ChatID != newAbs {
-			t.Errorf("warning.ChatID expected %d, got %d (id=%s)", newAbs, w.ChatID, w.ID)
-		}
-	}
 }
 
 func TestMigrateChatID_NoOpSameID(t *testing.T) {
@@ -241,7 +187,7 @@ func TestMigrateChatID_NoOpSameID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.StatsRekeyed+report.Members+report.Chats+report.Warnings != 0 {
+	if report.StatsRekeyed+report.Members+report.Chats != 0 {
 		t.Errorf("expected zero work for same-id, got %+v", report)
 	}
 }
@@ -264,7 +210,7 @@ func TestMigrateChatID_EmptyDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("empty migrate failed: %v", err)
 	}
-	if report.StatsRekeyed+report.Members+report.Chats+report.Warnings != 0 {
+	if report.StatsRekeyed+report.Members+report.Chats != 0 {
 		t.Errorf("expected zero counters on empty db: %+v", report)
 	}
 }

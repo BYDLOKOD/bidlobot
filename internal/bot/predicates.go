@@ -75,12 +75,3 @@ func textCommandPredicate(cmd string) th.Predicate {
 		return head == cmd
 	}
 }
-
-func notLinkedChannelPredicate() th.Predicate {
-	return func(_ context.Context, update telego.Update) bool {
-		if msg := update.Message; msg != nil {
-			return msg.SenderChat == nil
-		}
-		return true
-	}
-}

@@ -16,8 +16,8 @@ func testLogger() *slog.Logger {
 }
 
 // memStore is an in-memory monthstats.Store for buffer/service tests. It
-// is purely additive on Flush (idempotency is the importer's job, never
-// the store's) so it can also prove the additive contract directly.
+// is purely additive on Flush so it can also prove the additive contract
+// directly.
 type memStore struct {
 	mu       sync.Mutex
 	meta     map[string]*MonthMeta     // key: chat|month
@@ -83,14 +83,6 @@ func (s *memStore) GetState(_ context.Context, chat int64) (*MonthState, error) 
 	return &c, nil
 }
 
-func (s *memStore) PutState(_ context.Context, st *MonthState) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	c := *st
-	s.state[st.AbsChatID] = &c
-	return nil
-}
-
 func (s *memStore) SetLiveTrackStart(_ context.Context, chat int64, ts time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -100,7 +92,7 @@ func (s *memStore) SetLiveTrackStart(_ context.Context, chat int64, ts time.Time
 		s.state[chat] = st
 	}
 	if !st.LiveTrackStart.IsZero() {
-		return nil // already set; never overwrite (preserves importer fields)
+		return nil // already set; never overwrite
 	}
 	st.LiveTrackStart = ts
 	st.UpdatedAt = time.Now().UTC()

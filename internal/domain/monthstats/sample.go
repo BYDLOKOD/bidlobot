@@ -12,10 +12,9 @@ import (
 
 // Sample is one counted message reduced to exactly the dimensions the
 // legacy chat-export.org report needs. It is produced two ways - from a
-// live telego.Message via ExtractSample, and from an export row by the
-// history importer - and both must produce identical numbers, so all the
-// counting primitives (RuneLen, AddEntityType, CountKeyword) live here
-// and are shared by both paths.
+// live telego.Message via ExtractSample - all the counting primitives
+// (RuneLen, AddEntityType, CountKeyword) live here and are shared by
+// every counting path.
 type Sample struct {
 	AbsChatID   int64
 	UserID      int64
@@ -44,9 +43,7 @@ type Sample struct {
 func RuneLen(s string) int64 { return int64(utf8.RuneCountInString(s)) }
 
 // AddEntityType increments the matching nomination counter for a Bot API
-// MessageEntity .Type. The export's text_entities[].type uses the same
-// vocabulary, so the importer calls this with the same strings and gets
-// the same totals. Only the four legacy nominations are tracked; the
+// MessageEntity .Type. Only the four legacy nominations are tracked; the
 // legacy code counted entity type "code" (not "pre") and "mention" (not
 // "mention_name"), so we match exactly.
 func (s *Sample) AddEntityType(typ string) {
@@ -75,8 +72,7 @@ func Excerpt(s string) (text string, full bool) {
 
 // HasContent mirrors bot.hasContent: a message counts only if it carries
 // some content (text or a media kind). bot.hasContent delegates here so
-// the live exclusion predicate has a single definition shared with the
-// importer.
+// the live exclusion predicate has a single definition.
 func HasContent(msg *telego.Message) bool {
 	if strings.HasPrefix(msg.Text, "/") {
 		return false

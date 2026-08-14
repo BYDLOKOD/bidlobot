@@ -4,10 +4,9 @@
 // a fundamentally different shape - keyed by (chat, "YYYY-MM", user) with
 // per-user message/char/entity/keyword counters plus a per-month longest
 // message and totals - so bolting it onto stats.Stats would force a
-// migration on every existing record for zero gain. Both the live
-// message handler and the history importer feed the same additive
-// counters through the same counting rules (see sample.go), so a chat's
-// monthly numbers converge regardless of how the data arrived.
+// migration on every existing record for zero gain. The live message
+// handler feeds the additive counters through the counting rules (see
+// sample.go).
 package monthstats
 
 import (
@@ -31,9 +30,8 @@ const MetaUserID int64 = 0
 const SummarySchemaVer = 1
 
 // MonthUserStat is the per-(chat, month, user) aggregate. Every counter
-// is additive across both the live and the import paths. Char counts are
-// rune (code-point) based, never bytes - the legacy Clojure `(count s)`
-// counted characters.
+// is additive across flushes. Char counts are rune (code-point) based,
+// never bytes - the legacy Clojure `(count s)` counted characters.
 type MonthUserStat struct {
 	AbsChatID    int64     `json:"abs_chat_id"`
 	Month        string    `json:"month"` // "2006-01"
@@ -68,19 +66,15 @@ type MonthMeta struct {
 // capped.
 const LongestExcerptRunes = 400
 
-// MonthState is the per-chat idempotency + seal ledger (singleton). It is
-// what makes additive monthly counters safe to re-import: the importer
-// skips any export message id <= ImportHWM and any message at or after
-// LiveTrackStart (already counted live), so every message is counted
-// exactly once across both paths.
+// MonthState is the per-chat live-tracking ledger (singleton).
+// LiveTrackStart is the earliest message timestamp the live buffer has
+// flushed, recorded atomically (first write wins) so a retried flush
+// cannot move it. UpdatedAt is the last state write and drives
+// invalidation of memoized past-month summaries.
 type MonthState struct {
-	AbsChatID      int64           `json:"abs_chat_id"`
-	ImportHWM      int64           `json:"import_hwm"`       // highest export message id ingested
-	ImportMinID    int64           `json:"import_min_id"`    // lowest id ever ingested
-	ImportMaxTS    time.Time       `json:"import_max_ts"`    // newest ts seen by import
-	Sealed         map[string]bool `json:"sealed"`           // month -> immutable
-	LiveTrackStart time.Time       `json:"live_track_start"` // first live Add ts for this chat
-	UpdatedAt      time.Time       `json:"updated_at"`
+	AbsChatID      int64     `json:"abs_chat_id"`
+	LiveTrackStart time.Time `json:"live_track_start"` // first live Add ts for this chat
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // MonthSummary is the memoized rendered leaderboard of a sealed month.
@@ -119,8 +113,8 @@ type FlushDelta struct {
 }
 
 // Store is the persistence surface. Flush is purely additive (counters
-// summed, longest max-reduced); idempotency is the importer's job via
-// MonthState, never the store's.
+// summed, longest max-reduced); the store never dedups - every Flush
+// call applies its deltas verbatim.
 type Store interface {
 	// GetMonth returns the MonthMeta and every MonthUserStat for one
 	// (chat, month). meta is nil and stats is empty when the month has no
@@ -130,14 +124,11 @@ type Store interface {
 	ListMonths(ctx context.Context, absChatID int64) ([]string, error)
 
 	GetState(ctx context.Context, absChatID int64) (*MonthState, error)
-	PutState(ctx context.Context, st *MonthState) error
-	// SetLiveTrackStart atomically sets LiveTrackStart (and UpdatedAt)
-	// for a chat ONLY if it is currently zero, in a single transaction
+	// SetLiveTrackStart records LiveTrackStart (and UpdatedAt) for a
+	// chat only if it is not already recorded, in a single transaction
 	// that preserves every other MonthState field. This is the only safe
-	// way for the live buffer to record the boundary without racing the
-	// importer's ApplyImport (a read-modify-write via GetState/PutState
-	// would clobber a concurrently-advanced ImportHWM/Sealed back to
-	// zero, silently double-counting a later re-import).
+	// way for the live buffer to set the boundary (a read-modify-write
+	// via GetState would clobber other fields back to zero).
 	SetLiveTrackStart(ctx context.Context, absChatID int64, ts time.Time) error
 
 	GetSummary(ctx context.Context, absChatID int64, month string) (*MonthSummary, error)

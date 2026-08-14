@@ -39,7 +39,6 @@ func FormatDate(t time.Time) string {
 	return t.UTC().Format("Jan 2, 2006")
 }
 
-
 // UserDisplay renders a member's identity as INERT text: the handle is
 // shown WITHOUT a leading '@'. A literal "@handle" of a real account is
 // parsed by Telegram as a mention that notifies that user, so a command
@@ -74,9 +73,4 @@ func UserDisplayFull(username, firstName string) string {
 	default:
 		return name
 	}
-}
-
-func TodayUTC() time.Time {
-	now := time.Now().UTC()
-	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
 }

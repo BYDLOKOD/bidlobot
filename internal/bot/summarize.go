@@ -33,15 +33,9 @@ const (
 	summarizeEditTO        = 25 * time.Second
 )
 
-// summarizeSender is the narrow Telegram surface the feature needs:
-// SendMessage for the placeholder and EditMessageText to swap in the
-// result. shared.TelegramAPI now covers both (EditMessageText was added
-// for the captcha domain), but the narrow interface is retained so tests
-// inject a fake without stubbing the full API surface.
-type summarizeSender interface {
-	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
-	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
-}
+// summarizeSender is satisfied by the rate-limited shared.TelegramAPI
+// wrapper (SendMessage for the placeholder, EditMessageText to swap in
+// the result).
 
 // summarizeRecorder is a passive observer (registered like
 // statsCountHandler) that feeds the RAM window. It mirrors

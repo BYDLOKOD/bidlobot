@@ -1,9 +1,9 @@
 package monthstats
 
 import (
-	"html"
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"sort"
 	"strings"
@@ -12,13 +12,12 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
-
 // Service renders the legacy chat-export.org monthly nominations and owns
 // the seal/memoization lifecycle: a past (immutable) month is rendered
 // once and cached; the in-progress month is rendered fresh from the
-// DB+buffer merge every call. A cached summary is auto-invalidated when a
-// later import advances MonthState.UpdatedAt, so no explicit cache-bust
-// is needed on re-import.
+// DB+buffer merge every call. A cached summary is auto-invalidated when
+// a later write advances MonthState.UpdatedAt, so no explicit cache-bust
+// is needed.
 type Service struct {
 	store   Store
 	buffer  *Buffer

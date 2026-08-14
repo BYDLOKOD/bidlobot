@@ -42,7 +42,6 @@ func TestFormatDate(t *testing.T) {
 	}
 }
 
-
 func TestUserDisplay(t *testing.T) {
 	// Inert by design: the handle is shown WITHOUT '@' so a stats or
 	// game line never becomes a Telegram mention/notification.
@@ -71,12 +70,5 @@ func TestUserDisplayFull(t *testing.T) {
 	}
 	if strings.ContainsRune(UserDisplayFull("alice", "Alice"), '@') {
 		t.Fatal("UserDisplayFull must never emit a literal @-mention")
-	}
-}
-
-func TestTodayUTC(t *testing.T) {
-	today := TodayUTC()
-	if today.Hour() != 0 || today.Minute() != 0 || today.Second() != 0 {
-		t.Fatal("TodayUTC should be midnight")
 	}
 }
