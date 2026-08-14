@@ -165,16 +165,29 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 	}
 	// NewReaction empty = the user removed their reaction. No reversal.
 	if len(reaction.NewReaction) == 0 {
+		r.log.Info("rep reaction: removal ignored",
+			"chat_id", reaction.Chat.ID, "message_id", reaction.MessageID, "user_id", reaction.User.ID)
 		return nil
 	}
 
 	kind, tracked := repEmojiToKind(reaction.NewReaction)
+	r.log.Info("rep reaction update",
+		"chat_id", reaction.Chat.ID,
+		"message_id", reaction.MessageID,
+		"user_id", reaction.User.ID,
+		"new", reactionEmojis(reaction.NewReaction),
+		"old", reactionEmojis(reaction.OldReaction),
+		"kind", kindName(kind),
+		"tracked", tracked,
+	)
 	if !tracked {
 		return nil // custom (premium) emoji or untracked reaction
 	}
 
 	author, ok := r.index.Lookup(msgKey{chatID: reaction.Chat.ID, msgID: reaction.MessageID})
 	if !ok {
+		r.log.Info("rep reaction: author not indexed",
+			"chat_id", reaction.Chat.ID, "message_id", reaction.MessageID, "user_id", reaction.User.ID)
 		return nil // message not seen while running
 	}
 	if author.isBot {
@@ -252,6 +265,26 @@ func repEmojiToKind(rs []telego.ReactionType) (kind reputation.Kind, tracked boo
 		}
 	}
 	return 0, false
+}
+
+// reactionEmojis extracts the plain emoji strings from a reaction list
+// (custom/premium reactions are skipped) for diagnostic logging.
+func reactionEmojis(rs []telego.ReactionType) []string {
+	var out []string
+	for _, rt := range rs {
+		if e, ok := rt.(*telego.ReactionTypeEmoji); ok {
+			out = append(out, e.Emoji)
+		}
+	}
+	return out
+}
+
+// kindName renders a reputation kind for logs.
+func kindName(k reputation.Kind) string {
+	if k == reputation.KindRoast {
+		return "roast"
+	}
+	return "praise"
 }
 
 // repDisplay renders an inert, HTML-escaped display name for the rep
