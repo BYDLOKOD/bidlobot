@@ -5,8 +5,9 @@ package bot
 // A 👍 (like) reaction on a supergroup message gives +rep to the message
 // author; 👎 (dislike) or 🤡 (clown_face) gives -rep. Several reactions
 // landing within repBatchWindow are flushed as ONE combined chat message
-// listing all of them (no per-reaction spam). Removing a reaction does
-// NOT undo the rep (no reversal).
+// in the classic /praise /roast style, each entry carrying the updated
+// balances (no per-reaction spam, but the balance change is always
+// visible). Removing a reaction does NOT undo the rep (no reversal).
 //
 // Author attribution problem: MessageReactionUpdated carries only
 // chat_id + message_id + who reacted - never the message author. The bot
@@ -19,7 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"log/slog"
+	"math/rand/v2"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -164,7 +168,7 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 		return nil
 	}
 
-	kind, emoji, tracked := repEmojiToKind(reaction.NewReaction)
+	kind, tracked := repEmojiToKind(reaction.NewReaction)
 	if !tracked {
 		return nil // custom (premium) emoji or untracked reaction
 	}
@@ -190,7 +194,8 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 		return nil
 	}
 
-	if _, err := r.store.Apply(context.Background(), absChat, reaction.User.ID, author.userID, kind, actorAdmin, targetAdmin); err != nil {
+	res, err := r.store.Apply(context.Background(), absChat, reaction.User.ID, author.userID, kind, actorAdmin, targetAdmin)
+	if err != nil {
 		switch {
 		case errors.Is(err, reputation.ErrSelfTarget),
 			errors.Is(err, reputation.ErrInsufficientBalance),
@@ -205,9 +210,12 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 	}
 
 	r.batch.Add(reaction.Chat.ID, repEvent{
-		emoji:  emoji,
-		delta:  repDelta(kind, targetAdmin),
-		target: shared.UserDisplay(author.username, author.firstName),
+		kind:          kind,
+		actor:         repDisplay(reaction.User.Username, reaction.User.FirstName, reaction.User.ID),
+		target:        repDisplay(author.username, author.firstName, author.userID),
+		delta:         repDelta(kind, targetAdmin),
+		actorBalance:  res.ActorBalance,
+		targetBalance: res.TargetBalance,
 	})
 	return nil
 }
@@ -230,7 +238,7 @@ func (r *repReactor) isAdmin(absChatID, userID int64) (bool, bool) {
 // repEmojiToKind maps the first tracked emoji in NewReaction to a
 // reputation kind. Returns tracked=false for custom (premium) emoji and
 // untracked reactions.
-func repEmojiToKind(rs []telego.ReactionType) (kind reputation.Kind, emoji string, tracked bool) {
+func repEmojiToKind(rs []telego.ReactionType) (kind reputation.Kind, tracked bool) {
 	for _, rt := range rs {
 		e, ok := rt.(*telego.ReactionTypeEmoji)
 		if !ok {
@@ -238,12 +246,23 @@ func repEmojiToKind(rs []telego.ReactionType) (kind reputation.Kind, emoji strin
 		}
 		switch e.Emoji {
 		case emojiLike:
-			return reputation.KindPraise, e.Emoji, true
+			return reputation.KindPraise, true
 		case emojiDislike, emojiClown:
-			return reputation.KindRoast, e.Emoji, true
+			return reputation.KindRoast, true
 		}
 	}
-	return 0, "", false
+	return 0, false
+}
+
+// repDisplay renders an inert, HTML-escaped display name for the rep
+// report, falling back to the numeric ID when neither handle nor name
+// is known (mirrors the /praise command rendering).
+func repDisplay(username, firstName string, userID int64) string {
+	d := shared.UserDisplay(username, firstName)
+	if d == "" {
+		return strconv.FormatInt(userID, 10)
+	}
+	return html.EscapeString(d)
 }
 
 // repDelta mirrors the balance math in storage.ReputationRepo.Apply so
@@ -264,9 +283,12 @@ func repDelta(kind reputation.Kind, targetIsAdmin bool) int {
 
 // repEvent is one credited rep change, accumulated for the batcher.
 type repEvent struct {
-	emoji  string
-	delta  int
-	target string
+	kind          reputation.Kind
+	actor         string // HTML-escaped inert display
+	target        string // HTML-escaped inert display
+	delta         int
+	actorBalance  int
+	targetBalance int
 }
 
 // repBatcher accumulates rep events per chat and flushes ONE combined
@@ -326,22 +348,37 @@ func (b *repBatcher) flush(chatID int64) {
 
 	text := composeRepMessage(events)
 	if _, err := b.sender.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Text:   text,
+		ChatID:    telego.ChatID{ID: chatID},
+		Text:      text,
+		ParseMode: telego.ModeHTML,
 	}); err != nil {
 		b.log.Warn("rep batcher send failed", "chat_id", chatID, "error", err)
 	}
 }
 
-// composeRepMessage renders the combined rep report. The actor is not
-// listed - the emoji plus delta is enough.
+// composeRepMessage renders the combined rep report in the classic
+// /praise /roast style, one block per credited reaction. actor/target
+// must already be HTML-escaped; send the result with ParseMode HTML.
 func composeRepMessage(events []repEvent) string {
 	var b strings.Builder
-	b.WriteString("Репутация:\n")
-	for _, e := range events {
-		fmt.Fprintf(&b, "%s %s %+d\n", e.emoji, e.target, e.delta)
+	for i, e := range events {
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		tmpl := praiseTemplates[rand.IntN(len(praiseTemplates))]
+		if e.kind == reputation.KindRoast {
+			tmpl = roastTemplates[rand.IntN(len(roastTemplates))]
+		}
+		body := strings.Replace(tmpl, "%s", e.target, 1)
+		if e.kind == reputation.KindRoast {
+			fmt.Fprintf(&b, "%s\n\nлови %d, чучело, от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>",
+				body, e.delta, e.actor, e.actor, e.actorBalance, e.target, e.targetBalance)
+			continue
+		}
+		fmt.Fprintf(&b, "%s\n\nдержи %+d от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>",
+			body, e.delta, e.actor, e.actor, e.actorBalance, e.target, e.targetBalance)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return b.String()
 }
 
 // repAuthorIndexMiddleware feeds the rep reactor's author index from the

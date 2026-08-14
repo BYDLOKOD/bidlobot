@@ -85,9 +85,9 @@ func TestRepEmojiToKind(t *testing.T) {
 			} else {
 				rs = []telego.ReactionType{&telego.ReactionTypeCustomEmoji{CustomEmojiID: "5378452354"}}
 			}
-			kind, emoji, tracked := repEmojiToKind(rs)
-			if tracked != c.wantTrack || (tracked && (kind != c.wantKind || emoji != c.emoji)) {
-				t.Fatalf("repEmojiToKind(%q) = kind %v emoji %q tracked %v", c.emoji, kind, emoji, tracked)
+			kind, tracked := repEmojiToKind(rs)
+			if tracked != c.wantTrack || (tracked && kind != c.wantKind) {
+				t.Fatalf("repEmojiToKind(%q) = kind %v tracked %v", c.emoji, kind, tracked)
 			}
 		})
 	}
@@ -321,15 +321,15 @@ func TestRepBatcherFlushesCombinedMessage(t *testing.T) {
 	r := newRepBatcher(sender, testLogger())
 	r.window = 30 * time.Millisecond
 
-	r.Add(-100, repEvent{emoji: emojiLike, delta: 3, target: "alice"})
-	r.Add(-100, repEvent{emoji: emojiDislike, delta: -1, target: "bob"})
+	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3, actorBalance: 10, targetBalance: 13})
+	r.Add(-100, repEvent{kind: reputation.KindRoast, actor: "dave", target: "bob", delta: -1, actorBalance: 5, targetBalance: 2})
 	texts := waitForSends(t, sender, 1)
 
-	if !strings.Contains(texts[0], "Репутация:") {
-		t.Fatalf("combined message must have header, got %q", texts[0])
+	if !strings.Contains(texts[0], "держи +3 от carol.") || !strings.Contains(texts[0], "Баланс: carol: 10, alice: 13") {
+		t.Fatalf("combined message missing praise entry, got %q", texts[0])
 	}
-	if !strings.Contains(texts[0], "👍 alice +3") || !strings.Contains(texts[0], "👎 bob -1") {
-		t.Fatalf("combined message missing entries, got %q", texts[0])
+	if !strings.Contains(texts[0], "лови -1, чучело, от dave.") || !strings.Contains(texts[0], "Баланс: dave: 5, bob: 2") {
+		t.Fatalf("combined message missing roast entry, got %q", texts[0])
 	}
 }
 
@@ -338,7 +338,7 @@ func TestRepBatcherSplitsWindows(t *testing.T) {
 	r := newRepBatcher(sender, testLogger())
 	r.window = 30 * time.Millisecond
 
-	r.Add(-100, repEvent{emoji: emojiLike, delta: 3, target: "alice"})
+	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3, actorBalance: 10, targetBalance: 13})
 	texts := waitForSends(t, sender, 1)
 	if !strings.Contains(texts[0], "alice") {
 		t.Fatalf("first window message wrong: %q", texts[0])
@@ -346,7 +346,7 @@ func TestRepBatcherSplitsWindows(t *testing.T) {
 
 	// Second event lands after the window flushed -> new window, new message.
 	time.Sleep(60 * time.Millisecond)
-	r.Add(-100, repEvent{emoji: emojiLike, delta: 3, target: "carol"})
+	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "carol", delta: 3, actorBalance: 10, targetBalance: 16})
 	texts = waitForSends(t, sender, 2)
 	if !strings.Contains(texts[1], "carol") {
 		t.Fatalf("second window message wrong: %q", texts[1])
@@ -358,8 +358,8 @@ func TestRepBatcherSeparatesChats(t *testing.T) {
 	r := newRepBatcher(sender, testLogger())
 	r.window = 30 * time.Millisecond
 
-	r.Add(-100, repEvent{emoji: emojiLike, delta: 3, target: "alice"})
-	r.Add(-200, repEvent{emoji: emojiDislike, delta: -1, target: "bob"})
+	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3, actorBalance: 10, targetBalance: 13})
+	r.Add(-200, repEvent{kind: reputation.KindRoast, actor: "dave", target: "bob", delta: -1, actorBalance: 5, targetBalance: 2})
 	texts := waitForSends(t, sender, 2)
 	if len(texts) != 2 {
 		t.Fatalf("two chats must produce two messages, got %d: %v", len(texts), texts)
