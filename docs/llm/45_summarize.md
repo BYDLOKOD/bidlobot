@@ -1,191 +1,168 @@
 ---
 id: summarize
 kind: spec
+touches:
+  - internal/bot/summarize.go
+  - internal/bot/deferred.go
+  - internal/domain/summarize/
+  - internal/storage/deferred_repo.go
+written: 2026-05-15
+updated: 2026-05-16
 ---
 
 # Chat summarization (`/summarize`)
 
-Admin-only, opt-in. An LLM (Zhipu GLM) condenses the recent chat into a
-short Russian digest posted publicly in the group. Added 2026-05-15 at
-the owner's explicit request; reconciled against the dropped "YouTube
-Summary" rationale in [10_scope.md](10_scope.md).
+Admin-only, **always on**. An LLM (DeepSeek V4 Flash via the OMP/Pi
+CLI) condenses the recent chat into a short Russian digest posted
+publicly in the group. Migrated 2026-07 from the Zhipu GLM HTTP
+provider to the local `omp` CLI (commits caa8f55, 848ad21, 874b198).
+No opt-in toggle: the feature is part of the image; a missing `omp`
+binary is a **startup failure** (`exec.LookPath` in main.go, `os.Exit(1)`).
 
 ## Hard constraint that shapes everything
 
 The Telegram **Bot API cannot read history**: no `getChatHistory`,
-consumed `getUpdates` are discarded within 24h, never refetchable
-(verified against core.telegram.org/bots/api). A bot can only summarize
-what it *kept* as messages streamed by. So "last N" means **the last N
-this process heard since it started** - not retroactive history. This is
-inherent, not a TODO.
+consumed `getUpdates` are discarded within 24h, never refetchable. A
+bot can only summarize what it *kept* as messages streamed by. So
+"last N" means **the last N this process heard since it started** -
+not retroactive history. This is inherent, not a TODO. Combined with
+the privacy model, the recorder fills only when the bot sees message
+content (privacy OFF).
 
 ## Storage model: RAM-only ring buffer
 
 `internal/domain/summarize.Buffer`. Per-chat ring, **never persisted**:
-not in bbolt, not in `bidlobot-backup`, gone on restart by design. Raw
-member text never touches disk. Bounds (defaults): 2000 msgs/chat, 4 MiB
-text/chat, 256 distinct chats (LRU-evicted), oldest-evicted on overflow.
+not in bbolt, not in backups, gone on restart by design. Raw member
+text never touches disk. Bounds: 2000 msgs/chat, 4 MiB text/chat, 256
+distinct chats (LRU-evicted), oldest-evicted on overflow.
 
-Fed by a passive middleware (`summarizeRecorder`) mirroring
-`monthstats.ExtractSample`'s predicate exactly - non-bot, not anonymous
-admin, no `sender_chat`, has text/caption - and additionally skipping
-the bot's own `/`-commands so a `/summarize` never pollutes the next
-transcript. Wired only when the feature is configured.
+Fed by a passive middleware (`summarizeRecorder`) mirroring the stats
+predicate exactly (non-bot, not anonymous admin, no `sender_chat`, has
+text/caption), additionally skipping the bot's own `/`-commands so a
+`/summarize` never pollutes the next transcript. Registered among the
+passive observers BEFORE the sanitizer/repost middlewares so it sees
+the original human message.
 
 ## Invocation & authorization
 
 - Public supergroup command `/summarize [N] [questions...]`, alias
-  `/итог [N] [questions...]`. The alias is matched by
-  `textCommandPredicate`, **not** `th.CommandEqual`: telego's
-  CommandEqual compiles to an ASCII-only RE2 `\w` regex that never
-  matches Cyrillic. Typed-only (setMyCommands also rejects non-ASCII
-  names, so it stays out of the slash menu). `N` defaults to 200
-  (first token after command/`@bot` parsed as int; if not a number,
-  everything is treated as questions), clamped to `[1, 4000]` and to
-  the live window size. Everything after `N` (or after the command if
-  no `N` given) is the **questions text**, passed to the LLM as
-  additional instructions after a `---` separator. Questions are
-  sanitized via `sanitizeLine` (collapsed to single line, no format
-  injection).
+  `/итог`. The alias is matched by `textCommandPredicate`, not
+  `th.CommandEqual` (ASCII-only RE2 - never matches Cyrillic).
+  Typed-only (setMyCommands rejects non-ASCII names). `N` defaults to
+  200 (first token after command/`@bot` parsed as int; if not a
+  number, everything is treated as questions), clamped to [1, 4000]
+  and to the live window size. Everything after `N` (or after the
+  command if no `N`) is the **questions text**, passed to the LLM as
+  additional instructions after a `---` separator; sanitized via
+  `sanitizeLine` (no format injection).
 - Admin-only via `shared.AdminCache` (getChatAdministrators, 60s TTL,
-  re-checked every call) - the project standard. Non-admins get **no
-  reply** (anti-spam). Anonymous admins are told to disable anonymous
-  mode (no `From.ID` to match - same limit the DM moderation surface
-  documents).
-- Cost controls on a paid API: per-admin 90s cooldown via `gateMsg`
-  (silent drop); **response cache** (RAM-only, 10-minute TTL,
-  `Config.CacheTTL`) keyed by `(chatID, lastMsgID, N, questionsHash)` -
-  a cache hit returns the stored result directly without acquiring the
-  single-flight slot, the global budget, or calling GLM (the `gateMsg`
-  cooldown still applies since it fires before the handler); per-chat
-  single-flight (a second `/summarize` while one runs replies "уже
-  собираю"); and a **process-wide ceiling** across all chats/admins
-  (`GlobalAllow`, default 40 calls / rolling hour) - the single-flight
-  is per-chat only, so without the global cap an admin in many chats (or
-  a compromised account) is an unbounded financial DoS. Checked after
-  the per-chat slot so a busy chat never burns global budget. The cache
-  auto-invalidates when new messages arrive (different `lastMsgID`) or
-  the TTL expires; different `N` or different questions are separate
-  keys.
-- The expensive call runs in a tracked background goroutine
-  (`App.InFlight()` + app context, like the cleanup executor): a
-  placeholder message is posted, then `EditMessageText`-swapped in place
-  for the result - one public artifact, never two; SIGTERM cancels it
-  cleanly inside the shutdown budget. Cache hits skip the placeholder
-  dance entirely and reply inline.
+  re-checked every call). Non-admins get **no reply** (anti-spam).
+  Anonymous admins are told to disable anonymous mode.
+- Cost controls: per-admin 30s cooldown (`summarizeCooldown`, silent
+  drop); **response cache** (RAM-only, 10-minute TTL) keyed by
+  `(chatID, lastMsgID, N, questionsHash)`; per-chat single-flight
+  (second call replies "уже собираю"); **process-wide ceiling 40
+  calls / rolling hour** across all chats/admins (`GlobalAllow`) - a
+  compromised admin is not an unbounded financial DoS. The expensive
+  call runs in a tracked background goroutine (`App.inFlight` + app
+  context): a placeholder message is posted, then
+  `EditMessageText`-swapped in place for the result; SIGTERM cancels
+  it inside the shutdown budget.
 
-## Token budget & provider
+## Provider: OMP/Pi CLI
 
-- GLM-5 window is 200K (input+output combined). Input budget default
-  **120K** est. tokens (config `Config.InputBudgetTokens`), with margin
-  for output and for the estimator under-counting code-dense windows.
-  The buffer cap and `N` bind first.
-- Token estimate is **rune-based** (~1 token / 2 runes). The
-  load-bearing point is rune- not byte-based (a byte chars/4 heuristic
-  would mis-budget Russian badly). It is NOT a guaranteed upper bound:
-  code/URLs/snake_case can exceed 0.5 token/rune, so a code-dense window
-  can still under-count - hence the budget margin and the provider's own
-  context-length 400 as the hard backstop -> mapped to "lower N".
-- Provider: `internal/shared/glm`, OpenAI-compatible
-  `POST {base}/chat/completions`, `Authorization: Bearer {id}.{secret}`
-  (no JWT - verified docs.bigmodel.cn / z.ai, May 2026). Base/model
-  configurable. Two endpoint families, **the key type decides which**:
-  general pay-as-you-go `https://open.bigmodel.cn/api/paas/v4` (code
-  defaults, glm-5) vs a **GLM Coding Plan** subscription key, which
-  only works on the coding endpoint
-  `https://api.z.ai/api/coding/paas/v4` (glm-4.6 etc.) - the general
-  endpoint returns 1113 for it. The deployed key is a Coding Plan key;
-  `GLM_BASE_URL`/`GLM_MODEL` are set accordingly and a real completion
-  is **verified live** (glm-4.6, this session). Retry: 429 once
-  (Retry-After honored), 5xx bounded ladder; tighter than Telegram's
-  because each call is expensive.
+`internal/domain/summarize/pi_runner.go` runs the `omp` binary
+(`PI_BINARY`, default `omp`; `PI_MODEL` default
+`deepseek/deepseek-v4-flash`) with `--mode json --no-session
+--no-tools --no-lsp --no-extensions --no-skills --no-rules
+--thinking=minimal -p --system-prompt <sp> --model <model>`. The
+transcript is passed as an anonymous memfd (`unix.MemfdCreate`) via fd
+3 - nothing on disk, no temp file. Output is parsed as NDJSON:
+`message_end` events, cost from `message.usage.cost.total`. stderr is
+discarded (may carry provider details). **Memory bound**: per-event
+scanner cap 4 MiB (`maxOMPJSONEventBytes`) - a code-dense transcript
+cannot OOM the process.
+
+The provider credential (`DEEPSEEK_API_KEY`) is read by the `omp` CLI
+from its own environment - the Go binary never sees, parses, or logs
+it. Compose forwards it from the host env ([70_deployment.md](70_deployment.md)).
+
+## Token budget
+
+Input budget 120K estimated tokens (rune/2 estimate - deliberately
+rune- not byte-based; a bytes/4 heuristic mis-budgets Russian badly),
+max output 2048, per-call timeout 180s. NOT a guaranteed upper bound:
+code/URLs can exceed 0.5 token/rune, so the provider's own context
+limit is the hard backstop (mapped to "lower N").
+
+## Weighted digest with cost (848ad21)
+
+The system prompt (`prompt.go`) instructs relevance-weighted
+selection: threads contributing <5% of the transcript are omitted
+unless they carry a decision/action/high-impact fact; 2-4 paragraphs
+<1800 chars; questions answered after a `---` separator. The footer
+discloses provenance + price:
+
+```
+итог M сообщений (HH:MM-HH:MM МСК), сгенерировано DeepSeek V4 Flash
+via Pi по запросу @X
+расчетная стоимость: $Y
+```
+
+Cost is 4-decimal from provider usage metadata; cached summaries keep
+their original generation cost.
 
 ## Output
 
 Plain text only (no ParseMode): the model is untrusted and the result
-is posted publicly - markup/entities from it must not be interpreted,
-and this also avoids the double-escape footgun. Plain text alone is not
-enough, though: Telegram still auto-links a bare `@username`, so a
-member could steer the summary into mass-pinging the chat. The
-transcript therefore feeds plain names (no leading `@`) and the final
-body+footer is run through `defuseMentions` (a U+2060 WORD JOINER after
-every `@`, invisible, breaks the mention parse). Russian, sectioned
-(Кратко / Темы / Решения / Ссылки / Вопросы / Ответы, empties omitted;
-Ответы appears only when questions were provided), capped
-~2800 chars by the prompt and hard-truncated at 3500 runes. Footer
-discloses provenance: `- итог M сообщений (HH:MM-HH:MM UTC),
-сгенерировано внешним AI (GLM) по запросу @admin`.
+is posted publicly - markup/entities from it must not be interpreted.
+Telegram still auto-links a bare `@username`, so the transcript feeds
+plain names (no leading `@`) and the final body+footer is run through
+`defuseMentions` (U+2060 WORD JOINER after every `@`, invisible,
+breaks the mention parse). Russian, sectioned, hard-truncated at 3500
+runes.
 
-## Error taxonomy (user-facing, Russian, no swallowing)
+## Error taxonomy (user-facing, Russian)
 
-| Cause | glm sentinel | Admin sees |
-|-------|--------------|------------|
-| no/invalid key, 401/403 | `ErrAuth` | ключ GLM отклонён |
-| **no funds (code 1113)** | `ErrQuota` | нет средств, пополните баланс |
-| throttled 429 | `ErrRateLimited` | перегружен, позже |
-| input too large | `ErrContextTooLong` | уменьшите N |
+| Cause | Sentinel | Admin sees |
+|-------|----------|------------|
+| provider/LLM failure | `ErrProviderFailure` | временная ошибка |
 | ctx deadline | `ErrTimeout` | не успел, меньшее N |
-| 5xx / empty / other | `ErrProvider`/`ErrEmpty` | временная ошибка |
 | empty window | `ErrNoMessages` | пока нечего суммировать |
+| already running (single-flight) | `ErrBusy` | уже собираю |
+| not configured (unwired test app) | `MsgSummarizeNotConfigured` | не настроено |
 
-`ErrQuota` is distinct on purpose: the provider returns "no resource
-package" (code 1113) as **HTTP 429**, indistinguishable from real
-throttling by status; treating it as transient ("try later") or
-retrying it would both be wrong - it is terminal and actionable. Note
-1113 has **two** causes: (a) a genuinely exhausted account/plan, or
-(b) a key pointed at the wrong endpoint family (a Coding Plan key on
-the general endpoint, or vice-versa). An operator hitting persistent
-1113 should first verify `GLM_BASE_URL` matches the key type before
-assuming the plan is empty.
+The old GLM sentinels (`ErrAuth`/`ErrQuota`/`ErrRateLimited`/
+`ErrContextTooLong` and the 1113/Coding-Plan lore) are gone with the
+provider. `ErrSummarizeAuth/Quota/RateLimited/TooLong` strings remain
+in `text/messages.go` but are no longer produced.
+
+## Deferred retry
+
+On provider failure the job is persisted to the **per-user deferred
+queue** (`deferred_jobs`, type `summarize`, payload
+`SummarizePayload{N, Questions, PlaceholderID, Requester}`) - the
+placeholder stays up. The requester runs `/flush` to retry
+(`retrySummarize` re-runs the summary and edits the placeholder with a
+25s edit timeout). Success deletes the job. See
+[60_architecture.md](60_architecture.md) "Deferred queue".
 
 ## Privacy
 
-`/summarize` sends recent member message text to an **external provider
-(Zhipu, China)** over TLS. This is a deliberate, owner-approved tradeoff
-for one admin-only feature, mitigated by: RAM-only (no disk/backup),
-opt-in (off without the key), explicit in-message provenance footer,
-key never logged. Operators should disclose this to their community.
+`/summarize` sends recent member message text to an external provider
+(DeepSeek) over TLS via the omp CLI. Deliberate, owner-approved
+tradeoff for one admin-only feature, mitigated by: RAM-only window (no
+disk/backup), explicit in-message provenance + cost footer, key never
+seen/logged by the bot, memfd transcript (no temp file). Operators
+should disclose this to their community. The recorder needs privacy
+OFF to see message content.
 
-## Topic attribution
-
-The Темы section instructs the model to note key participants (names as
-they appear in the transcript) in parentheses for each topic:
-
-```
-Темы:
-- деплой новой версии (user1, user2): обсудили сроки, решили катить в пятницу
-- баг в авторизации (user3): описал проблему, пока без решения
-```
-
-This is prompt-level guidance, not enforced structurally; the model may
-occasionally omit attributions for topics with many participants or
-unclear ownership.
-
-## Documented limitations (v1, not silent)
+## Documented limitations (v1)
 
 1. **Forward-only / restart-volatile.** Only messages heard since
    process start; redeploy/crash empties the window.
-2. **Edits & deletions not tracked.** The bot does not subscribe to
-   `edited_message` (consistent with the rest of the codebase, e.g. the
-   YouTube sanitizer); deleted messages stay in the window until
-   evicted. `Buffer.Update` exists for a future opt-in.
+2. **Edits & deletions not tracked.** No `edited_message` subscription;
+   deleted messages stay in the window until evicted.
 3. **Anonymous admins cannot invoke** (no identifiable `From.ID`).
-4. **Times are UTC** in the transcript and footer (no per-chat tz).
-5. **Verified end-to-end live** (glm-4.6 on the GLM Coding Plan
-   endpoint, this session - real completion returned). An earlier
-   "blocked by zero balance" reading was a **misdiagnosis**: the key is
-   a Coding Plan key and the general endpoint was being called, which
-   returns 1113. Correct config is in `GLM_BASE_URL`/`GLM_MODEL`.
-6. **Coding-endpoint ToS caveat.** z.ai documents
-   `api/coding/paas/v4` as for *supported coding tools*; driving it
-   from this bot is outside that intended use and per community reports
-   can risk the account. The ToS-clean alternative is a standard
-   pay-as-you-go key on the general endpoint (costs per token). Kept
-   configurable so the operator owns this choice.
-
-## Config
-
-`GLM_API_KEY` (empty = feature off, bot still starts), `GLM_BASE_URL`,
-`GLM_MODEL` - see [70_deployment.md](70_deployment.md). Key lives only
-in the gitignored env file; rotate if ever exposed (env-var design makes
-rotation a one-line change, no code touch).
+4. **Times are MSK** in the transcript and footer (no per-chat tz).
+5. **Process-wide budget** (40/h) can throttle legit multi-chat use.

@@ -1,19 +1,32 @@
 ---
 id: telegram
 kind: guide
+touches:
+  - internal/shared/telegram.go
+  - internal/shared/tgclient/
+  - internal/bot/cooldown.go
+  - internal/bot/setup.go
+  - internal/bot/app.go
+  - internal/bot/middleware.go
+  - internal/bot/membership.go
+  - internal/bot/captcha.go
+  - internal/bot/routes.go
+  - internal/storage/migrate.go
+written: 2026-05-14
+updated: 2026-05-15
 ---
 
 # Telegram API Reference
 
 Behavior specifics relevant to BidloBot. Not a full API reference - only project-relevant details.
 
-See also: [30_stats.md](30_stats.md), [40_moderation.md](40_moderation.md), [60_architecture.md](60_architecture.md).
+See also: [PRD.md](PRD.md), [30_stats.md](30_stats.md), [60_architecture.md](60_architecture.md).
 
 ## Chat types
 
 | Type | Bot behavior |
 |------|-------------|
-| `private` | Registration FSM, `/help`, `/cancel` |
+| `private` | `/help` `/start` (same help text), `/chats` (owner console) |
 | `group` | Rejected: "Add the bot to a supergroup." |
 | `supergroup` | Full functionality |
 | `channel` | Ignored |
@@ -26,46 +39,55 @@ Messages from anonymous admins arrive with `from.id == 1087968824` (GroupAnonymo
 
 Detection: `from.id == 1087968824` or `from.is_bot == true && from.username == "GroupAnonymousBot"`.
 
-- Stats: not counted
-- Moderation commands: rejected ("Moderation commands are not available in anonymous admin mode.")
-- Profile commands: rejected ("This command requires a non-anonymous account.")
+- Stats: not counted; content middlewares skip; summarize recorder skips.
+- `/summarize`: rejected - anonymous admins cannot invoke (no identifiable `From.ID`).
+- Captcha: never fires for anonymous-admin joins.
 
 ## Linked channel messages
 
-Auto-forwarded from linked channel. `sender_chat` field present instead of `from`. Bot ignores entirely.
+Auto-forwarded from linked channel. `sender_chat` field present instead of `from`. Bot ignores entirely (not counted, not sanitized, not reposted).
 
 ## Deep linking
 
-Format: `t.me/{bot}?start={payload}`
-
-Payload constraints: max 64 chars, `A-Za-z0-9_-`. Bot encodes `reg_{abs_chat_id}` or `upd_{abs_chat_id}`.
-
-Flow: user clicks -> Telegram opens DM -> user presses START (if first time) -> bot receives `/start {payload}`.
-
-If user hasn't started bot before: Telegram shows bot description + START button. Payload preserved until START pressed. Bot cannot message first - 403 "bot can't initiate conversation".
+Not used anymore (the profile FSM with `reg_`/`upd_` payloads was archived with the bio domain).
 
 ## Bot command scopes
 
-Set via `setMyCommands` at startup:
+Set via `setMyCommands` at startup (`setup.go`):
 
 | Scope | Commands |
 |-------|---------|
-| `BotCommandScopeAllPrivateChats` | /help, /cancel |
-| `BotCommandScopeAllGroupChats` | /register, /profile, /update, /stats, /help |
-| `BotCommandScopeAllChatAdministrators` | all commands including /warn, /warns, /mute, /unmute, /ban, /unban |
+| `BotCommandScopeAllGroupChats` | stats, summarize, dice, battle, quiz, poll, 8ball, roast, praise, rep, reptop, guess, hangman, duel, trivia, refs, refreg, flush |
+| `BotCommandScopeAllChatAdministrators` | group commands + refreport |
+| `BotCommandScopeChat(owner)` | start, help, chats |
 
-Telegram resolves most-specific scope per user. Command menu visibility only - bot must validate permissions server-side.
+Telegram resolves most-specific scope per user. Cyrillic aliases
+(`/итог`, `/ref`, `/ref-reg`) are typed-only: `setMyCommands` rejects
+non-ASCII names. Command menu visibility only - the bot validates
+permissions server-side (AdminCache for `/summarize`/`/refreport`).
 
 ## Bot onboarding
 
 On `my_chat_member` update (bot added to chat):
-1. Admin status (`administrator`) -> silently start working
-2. Not admin -> "I need administrator rights to function. Please promote me with 'Restrict Members' permission."
-3. Regular group (not supergroup) -> "I only work in supergroups. Please upgrade this group."
+
+1. Actor != `BOT_OWNER_ID` -> immediate `LeaveChat` + owner DM notice
+   "Unauthorized bot admission rejected" (suppressed after 2 lifetime
+   attempts per actor). Owner-gated installation.
+2. Owner, admin status (`administrator`) -> "BidloBot подключён..." message, start working.
+3. Owner, member (not admin) -> "I need administrator rights to function. Please promote me with 'Restrict Members' permission."
+4. Regular group (not supergroup) -> "I only work in supergroups. Please upgrade this group."
+
+## New-member captcha
+
+On `chat_member` (`left|kicked -> member`) with `CAPTCHA_ENABLED`:
+mute newcomer, post `a + b = ?` inline challenge (4 buttons). Wrong
+answer -> ban+unban kick (rejoinable). Correct -> unmute + async
+welcome animation with onboarding questions. Unanswered ->
+`CAPTCHA_TIMEOUT` sweep kicks. Details: [65_admission.md](65_admission.md).
 
 ## Edited messages
 
-Bot does not process `edited_message` updates. Standard behavior.
+Bot does not process `edited_message` updates (not subscribed). Standard behavior.
 
 ## Mentions without command
 
@@ -75,9 +97,9 @@ Bot does not process `edited_message` updates. Standard behavior.
 
 Inline keyboards use `callback_data` (max 64 bytes). Bot must always call `answerCallbackQuery` to dismiss spinner, even on error.
 
-Callback queries work from group messages - `callback_query.message.chat.id` contains the group ID.
+Callback ordering matters (first-match-wins): captcha `cap:` -> referral `rf:` -> owner chats `oc:` -> `v1:` catch-all dispatcher.
 
-Timeout: ~10-15 seconds. After that, query ID becomes invalid.
+Callback queries work from group messages - `callback_query.message.chat.id` contains the group ID. Timeout ~10-15s.
 
 ## Rate limits
 
@@ -85,20 +107,11 @@ Outgoing: bot limits itself to 15 messages/min per chat (below Telegram's 20/min
 
 Telegram 429 error: respect `retry_after` field (seconds) + 10% jitter. `retry_after` is per-chat since Feb 2025.
 
-Per-user command cooldown (`internal/bot/cooldown.go`, applied by
-`gateMsg` to games + `/stats` + `/summarize`): a user may trigger a
-given command once per its window (5-30s). An over-frequency call is
-dropped (handler not run) but is **not** fully silent: exactly **one**
-"slow down" notice is sent per window per (user,command) - bounded so a
-flooder cannot amplify (<=1 result + <=1 notice per window, then silence),
-while a normal user still gets feedback instead of assuming the bot is
-broken. A fresh allowed call resets the notice state. The notice goes
-through the rate-limited sender; absent sender (minimal/test app) -> no
-notice, drop stays silent.
+Per-user command cooldown (`internal/bot/cooldown.go`, applied by `gateMsg` to games, `/stats`, `/summarize`, `/refs*`, `/flush`): a user may trigger a given command once per its window (5-30s). An over-frequency call is dropped (handler not run) but is **not** fully silent: exactly **one** "slow down" notice is sent per window per (user,command) - bounded so a flooder cannot amplify, while a normal user still gets feedback. A fresh allowed call resets the notice state. The notice goes through the rate-limited sender; absent sender (minimal/test app) -> no notice, drop stays silent.
 
 ## Message formatting
 
-HTML parse mode. Escape `<`, `>`, `&` in user-provided text. Max message length: 4096 chars.
+HTML parse mode. Escape `<`, `>`, `&` in user-provided text. Max message length: 4096 chars. Summary output is plain text (no ParseMode) + `defuseMentions` (U+2060 after `@`).
 
 ## Error handling
 
@@ -117,7 +130,7 @@ On `"not enough rights"` mid-operation: invalidate admin cache, re-check via `ge
 ## Group migration
 
 On `migrate_to_chat_id` in API response:
-1. Update all DB records from old abs(chat_id) to new abs(chat_id)
+1. Update DB records from old abs(chat_id) to new abs(chat_id) - stats, members, chats, warnings, monthstats, dailystats, referrals are rekeyed. Known gap: reputation/captcha/deferred/admission/gracekick/game leaderboards are NOT rekeyed ([60_architecture.md](60_architecture.md)).
 2. Retry original API call with new chat_id
 3. Log migration
 4. Invalidate admin cache for old chat_id
@@ -132,10 +145,12 @@ Signal: SIGTERM or SIGINT.
 4. Close DB connection
 5. Exit
 
+Heavy media goroutines (TikTok/xpost/captcha welcome) are NOT tracked - best-effort, may be lost on shutdown.
+
 ## Logging
 
 Structured JSON. Fields: `chat_id`, `user_id`, `command`, `duration_ms`, `error`.
 
-Levels: ERROR (API/DB failures), WARN (rate limits, permission issues), INFO (commands), DEBUG (messages).
+Levels: ERROR (API/DB failures), WARN (rate limits, permission issues, slow handlers >100ms), INFO (commands), DEBUG (messages).
 
-Never log: message text, profile content, bot token.
+Never log: message text, profile content, bot token, `DEEPSEEK_API_KEY` (the omp CLI reads it from env; the Go binary never sees it).

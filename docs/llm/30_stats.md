@@ -1,11 +1,21 @@
 ---
 id: stats
 kind: spec
+touches:
+  - internal/domain/stats/
+  - internal/domain/monthstats/
+  - internal/storage/stats_repo.go
+  - internal/storage/monthstats_repo.go
+  - internal/bot/middleware.go
+  - internal/bot/routes.go
+  - internal/shared/format.go
+written: 2026-05-14
+updated: 2026-05-16
 ---
 
 # Chat Statistics
 
-See also: [10_scope.md](10_scope.md), [50_telegram.md](50_telegram.md).
+See also: [PRD.md](PRD.md), [50_telegram.md](50_telegram.md).
 
 ## Requirement
 
@@ -61,7 +71,9 @@ Top Contributors
 ```
 Handles are shown WITHOUT a leading `@` - see Formatting.
 
-**`/stats today`** - UTC 00:00 boundary
+**`/stats today`** - Europe/Moscow calendar-day boundary (the chat's
+day, not UTC - `moscowDay` in buffer.go; the daily counters persist in
+the `stats_daily` bucket, keyed `d:<absChat>:<YYYY-MM-DD>`)
 ```
 Today's Activity
 Messages: 127
@@ -123,12 +135,16 @@ Last seen: Today
 
 A parallel engine (`internal/domain/monthstats`, bbolt buckets
 `stats_month` / `stats_month_idx` / `stats_month_state` /
-`stats_month_summary`) reproduces the legacy chat-export.org per-calendar-
-month report. It is independent of the lifetime `stats` model above (that
-stays unchanged): both the live message handler and the history importer
-feed the same additive per-(chat, "YYYY-MM", user) counters through one
+`stats_month_summary` / `stats_month_imported_ids`) reproduces the
+legacy chat-export.org per-calendar-month report. It is independent of
+the lifetime `stats` model above (that stays unchanged): both the live
+message handler and (historically) the removed history importer feed
+the same additive per-(chat, "YYYY-MM", user) counters through one
 counting contract (`monthstats.ExtractSample`), so a chat's monthly
-numbers converge regardless of how the data arrived.
+numbers converge regardless of how the data arrived. Since the import
+surface was removed (caa8f55) the engine is live-fed only; the
+`stats_month_imported_ids` dedupe bucket remains for a future import
+path.
 
 **Counted dimensions per user per month:** message count, rune count
 (code points of text+caption), and entity-type tallies for
@@ -165,6 +181,9 @@ importer skips export rows with `id <= ImportHWM` and rows with
 `ts >= LiveTrackStart` **only when `LiveTrackStart` is non-zero** (a chat
 with no live data yet - e.g. the bot not added - imports everything), so
 every message is counted exactly once across the live and import paths.
+(The importer machinery lives in `internal/histimport`, still in-tree but
+**unwired** since caa8f55 - the dedupe state remains correct if an import
+path is ever re-added.)
 
 **Commands.** `/stats months` lists months with data (newest first);
 `/stats month [YYYY-MM]` renders one month's board (default: the newest

@@ -1,212 +1,79 @@
----
-id: handoff
-kind: guide
----
+# Handoff - 2026-08-16 (xpost v2 + docs v3 session)
 
-# Handoff: next-session action plan
+## 1. State (what is true right now)
 
-Last rewritten 2026-05-16, end of the privacy-leak + owner-feedback
-session. Everything below is post-scrub, post-deploy reality. The
-cleanup-campaign baseline (2026-05-15) is unchanged and still current.
+- Working tree (NOT committed, NOT deployed): X-post rework + docs v3
+  migration. 31 modified + ~10 untracked files; `xshot/` deleted.
+- **X-post v2** (`internal/bot/xpost.go`, rewritten): a status URL in a
+  supergroup message becomes ONE bot message - tweet text as caption,
+  native photos/videos (sendMediaGroup / single send / text-only),
+  canonical link - then the original is deleted. Failures keep the
+  original + decline phrase (repost-first contract, same as TikTok).
+  Data source: public FixTweet API `api.fxtwitter.com` called directly
+  from the bot; videos downloaded from twimg with a host allowlist and
+  best-fitting-variant selection (bitrate x duration vs the 50 MiB
+  upload cap). Photos pass through as URLs (Telegram fetches), with a
+  download+upload fallback retry.
+- **SendMediaGroup** added to `internal/shared/tgclient` (rate-limited)
+  and the `youtubeMediaSender` interface + `textOnlySender` stub +
+  `recYTSender` test fake.
+- **xshot sidecar gone**: `xshot/` dir deleted, compose is a single
+  `bot` service, no depends_on.
+- **docs/llm on v3**: PRD.md (DRAFT - freeze pending owner approval),
+  ROADMAP.md (E1-E6 done, E7 xpost v2 active, E8-E11 open), TODO.md
+  (this batch, evidence filled), all specs carry v3 frontmatter with
+  verified touches, validate.sh replaced with the v3 script.
+  10_scope.md was deleted 2026-08-16 - fully absorbed into PRD.md
+  (git history preserves it).
+- Verified green: `go build ./...`, `go vet` (bot + tgclient), full
+  `go test -race ./...` (zero FAIL, includes 10 ProcessXPost pipeline
+  tests). `gofmt -l` clean except 4 PRE-EXISTING files not touched by
+  this session (gracekick.go, reputation/domain.go + 2 test-adjacent).
 
-## State (what is true right now)
+## 2. Negatives (what does NOT exist)
 
-- **History was scrubbed and force-pushed** (owner-authorized).
-  `origin/master` + `origin/feat/monthly-stats-dm-import-games-yt` were
-  rewritten by `git filter-repo` and force-pushed. A fresh clone of
-  origin has **0 residual** PII/infra across all refs; the only
-  author/committer identity is the GitHub noreply. **All old SHAs are
-  orphaned** - any clone must `git fetch && git reset --hard
-  origin/master` (`git pull --ff-only` is impossible post-rewrite).
-  Pre-scrub recoverable backup off-repo
-  (`~/doxme-preScrub-backup-*.{git,bundle}`; rollback = one
-  `git push --force --mirror`). Method + residual-risk in
-  [devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md).
-- **Deployed and healthy.** The host clone was realigned to the
-  rewritten `origin/master` and rebuilt; container `bidlobot` =
-  `running / health=healthy / restarts=0`, all four startup log lines
-  seen, already processing live community updates. The pre-deploy
-  container had been `unhealthy` on an old feat-branch build - the
-  redeploy cleared it. The fixed code (below) is live.
-- `/summarize` **enabled** (2026-05-16): GLM_API_KEY/BASE_URL/MODEL
-  copied from local `.env` to host env, container recreated; startup
-  logs `chat summarization enabled model=glm-4.6`; a live GLM probe
-  returned a real completion (Coding-Plan endpoint, no 1113). Host env
-  backed up (`env.bak.*`). Cleanup campaign wired, command-driven,
-  nothing auto-active. No DB migration.
-- **Bot runs Telegram privacy ON** (`can_read_all_group_messages=False`,
-  verified via getMe). It only receives commands / @mentions / replies
-  - **NOT plain group messages**. Deliberate import-driven-model
-  choice, but it means the YouTube-si= sanitizer and live message
-  stats structurally cannot fire (see Next).
-- `go build ./...`, `go test ./...` (all packages ok, 0 failures),
-  `go vet`, `gofmt`, `validate.sh` green at the rewritten HEAD.
-- Cleanup model: DM `/cleanup <period>` confirm **seeds** a per-chat
-  campaign (proven-stale only; never the no-evidence gap) - no kick on
-  confirm. The daily scheduler then publicly @-tags a batch, grace
-  `CLEANUP_GRACE` (72h), spares anyone who writes/reacts, kicks the
-  still-silent. `/cleanup stop` cancels; re-run while active refused.
+- No commit, no push, no deploy of this work (owner gates both).
+- No deferred/retry queue for xpost failures (decline only; TikTok
+  keeps its queue). ROADMAP E11.
+- xpost caption format (`sender / author / text / canonical url`) NOT
+  yet owner-approved - approval task in TODO.
+- PRD not frozen (DRAFT pending owner approval).
+- No browser/renderer anywhere - nothing replaces xshot's card look
+  (stats/likes are gone from reposts by design).
 
-## Shipped & live this session (verified)
+## 3. Queue
 
-opus-critic-reviewed; a real BLOCKER (a third-party member id still
-reachable from master pre-force-push) was caught and resolved, full
-re-verify clean.
+- TODO.md: 3 open items - PRD freeze approval, caption-format
+  approval, VM100 deploy.
+- ROADMAP E7 (xpost v2 ship) blocks only on those; E8 (docs v3
+  completion) blocks on the freeze; E9-E11 are open carry-overs.
 
-1. **Stats/games `@`-mention -> inert.** `shared.UserDisplay` /
-   `UserDisplayFull` render the handle WITHOUT `@` (never
-   `tg://user?id=` / `text_mention`); `resolveQuipTarget` too. Covers
-   `/stats*`, monthly nominations, all games, YouTube attribution.
-   gracekick's own `mention()` untouched (the sole sanctioned
-   notifier). `30_stats.md` corrected.
-2. **Import-only name no longer leaks the operator's contacts.** the
-   resolver blanks `FirstName` for `KnownVia==SourceImport` -> neutral
-   `User <id>`; self-heals on live write. **S1:** `KnownVia`
-   precedence made monotonic in `storage.UpsertMember` so a re-import
-   (the planned BYDLOKOD backfill) won't downgrade a healed member.
-   `35_history_import.md` corrected.
-3. **`/duel` validates membership.** `DuelHandler` resolves the
-   opponent via `GetMemberByUsername` in THIS chat or refuses (no
-   dice, inert rejection - a lurking member is not pinged). The duel
-   does not notify the challenged member (inert; owner may revisit).
-4. **Game content** (replayability): 8ball 20->~65, roast/praise
-   15->40, hangman 44->156 (+ full-pool invariant test), trivia
-   26->46, snippets 12->23. Quality/correctness-first, NOT a literal
-   20x on Q&A pools - owner can ask for more volume in the safe pools.
+## 4. Read order
 
-## Negatives / not done
+1. PRD.md -> ROADMAP.md -> TODO.md
+2. 57_xpost.md (xpost v2 contract)
+3. 60_architecture.md (middleware order - xpost sits after tiktok)
+4. 70_deployment.md (single-service compose)
 
-- **Telegram behaviour not machine-verified.** Inert render, `/duel`
-  rejection, cleanup tag/kick, GLM `/summarize` are logic-tested only -
-  Claude cannot drive Telegram. The bot is live; operator should
-  eyeball `/stats top` (no pings) and `/duel @stranger` (refused).
-- **Creds not rotated.** Owner accepted the
-  `TG_BOT_TOKEN`/`GLM_API_KEY` transcript-compromise risk
-  (2026-05-16); the scrub never touched them (never in git). Rotation
-  stays advisable, owner's deferred call, one-line host `env` change.
-- **GitHub-side cache** of pre-scrub commits not purged (needs GitHub
-  Support); inherent to any post-facto scrub - treat the leaked data
-  as already harvested.
-- S4 (accepted tradeoff): one corrupt bbolt membership row keeps a
-  campaign non-empty so `/cleanup` re-run is refused; escape is
-  `/cleanup stop`.
-
-## Next (open, independent - owner's call)
-
-- **Operator smoke test the live bot** (~5 min): in the chat, `/stats
-  top` must list names with **no `@`** and ping nobody; `/duel
-  @not_a_member` must be refused; `/duel @member` works.
-- **YouTube-si= sanitizer doesn't fire** - ROOT CAUSE FOUND
-  (2026-05-16, corrects an earlier wrong "missing Delete-right"
-  guess): it IS implemented (`youtube_sanitizer.go:443-456`,
-  repost-then-delete, registered `routes.go:73`) but the bot runs
-  **privacy ON**, so plain messages (a bare YouTube link) never reach
-  it - 0 sanitizer activity in 12h on a 200-person chat confirms.
-  Fundamental tension: the sanitizer needs privacy OFF; the
-  cleanup/import model wants privacy ON; Telegram privacy is
-  all-or-nothing. To enable: @BotFather `/setprivacy` -> Disable, then
-  **remove + re-add the bot** (Telegram re-evaluates privacy only on
-  re-join); cost = all message content then transits the bot. Owner's
-  operating-model decision; do NOT treat as a code bug.
-- **BYDLOKOD backfill: DONE** (owner-confirmed 2026-05-16; bot is in
-  the chat, history imported; re-import is idempotent if topping up).
-- **TikTok video repost (wishlist, owner ask 2026-05-26, NOT
-  implemented).** On a supergroup message carrying a TikTok video
-  link, the bot should fetch the video without watermark, repost
-  attributed to the original sender (display name inert per
-  `command-output-no-third-party-ping` - no `@`, no
-  `tg://user?id=`), then delete the original. Same shape as the
-  YouTube `si=` sanitizer
-  ([55_youtube_sanitizer.md](55_youtube_sanitizer.md),
-  `internal/bot/youtube_sanitizer.go`) - passive supergroup
-  middleware after the membership/stats observers,
-  repost-then-delete. **Same privacy gate** as the YT sanitizer
-  above: privacy ON -> a bare TikTok link never reaches the bot,
-  so shipping needs the identical `/setprivacy` Disable + bot
-  remove-and-re-add (one switch unblocks both features). Open
-  choices to settle with owner before coding: (a)
-  download-no-watermark via an external service (tikwm /
-  yt-dlp's TikTok extractor) vs. download + ffmpeg crop -
-  service-side is simpler but adds a network/legal dependency,
-  crop-side is self-contained but needs ffmpeg in the image and
-  risks clipping captions; (b) Telegram bot upload ceiling
-  (~50 MB) caps long/HD clips - decline-with-note, never silent
-  drop; (c) inherits the YT sanitizer's documented gaps
-  (`edited_message`, media-group siblings). No spec yet - write
-  `56_tiktok_repost.md` when picked up.
-- Optional: more game-content volume in the safe pools; rotate creds;
-  ask GitHub Support to expire cached pre-scrub commits.
-
-## Read order
-
-1. `handoff.md` (this).
-2. [40_moderation.md](40_moderation.md) - the campaign spec.
-3. [70_deployment.md](70_deployment.md) - Upgrade + Rollback.
-4. [10_scope.md](10_scope.md) - scope, the public-campaign privacy
-   exception, env.
-5. [devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md)
-   (the scrub; + 06/05 for the cleanup-campaign rationale).
-6. memory: `infra` (deploy host/access - NOT in repo),
-   `command-output-no-third-party-ping`, `ux_moderation_privacy`,
-   `bydlokod-import-workflow`, `project_direction`.
-
-## Smoke test (run before touching anything)
-
-From the repo root:
+## 5. Smoke test (run before touching anything)
 
 ```sh
-go build ./...                              # silent, exit 0
-go test ./... 2>&1 | grep -cE '^ok '        # all packages ok
-go test ./... 2>&1 | grep -E 'FAIL|panic' | grep -v 'no test'   # -> none
-go vet ./... ; gofmt -l internal/ cmd/      # both -> no output
-bash docs/llm/validate.sh                   # -> OK
-git fetch origin && git rev-list --left-right --count origin/master...master
-#   -> "0	0"  (local == rewritten origin/master). History was
-#   force-pushed once; if a clone shows divergence it is on orphaned
-#   pre-scrub history -> git reset --hard origin/master.
+go build ./... && go test -race ./...   # expect: zero FAIL lines
+cd docs/llm && ./validate.sh            # expect: exit 0
 ```
 
-Deploy host (private `infra` memory has path/access; NOT in repo):
-realign with `git fetch && git reset --hard origin/master` then
-`docker compose up -d --build`; `docker compose logs -f bot` must show,
-in order: `starting build=...` -> `authenticated bot=...
-can_read_all=<bool>` -> `health server listening addr=:8080` -> `bot
-started, polling for updates`. `can_read_all=false` is privacy ON and
-expected. `docker inspect bidlobot` health must reach `healthy`.
+After deploy (owner OK): post an X status link in the prod chat ->
+expect exactly ONE bot message (caption + media + canonical link) and
+the original deleted; logs show `xpost: reposted photos=... videos=...`.
 
-## Project-specific anti-patterns
+## 6. Agent errors
 
-1. NEVER seed/tag/kick `Preview.NoEvidence` or any
-   unresolved/not-present/protected member. Proven-stale only.
-2. `/cleanup` confirm must SEED, never kick immediately. Do not
-   reintroduce an immediate-kick path or re-register a public cleanup
-   executor (it was deliberately removed).
-3. "Active since" comparisons are inclusive (`seenAtOrAfter`, `>=`) -
-   Telegram timestamps are second-granular; strict `>` kicks a member
-   who responded in the boundary second.
-4. Never persist a `tagged` record before the public announce
-   succeeded (else a kick without a delivered warning).
-5. Keep `RunDaily`'s 3-phase per-chat lock: throttled kick loop OUTSIDE
-   the lock; phase C re-lists so a concurrent `/cleanup stop`
-   resurrects nothing.
-6. Do not re-`EscapeHTML` `mention`/`UserDisplayFull` output. Telegram
-   length is UTF-16 units (`utf16Len`). All public sends via the
-   rate-limited `tgclient`. `cleanup.ParsePeriod` is the one period
-   parser.
-7. `handoff.md` is rewritten each session, never appended. Specs change
-   in the same commit as the code. Devlogs are append-only (a
-   speculative same-session entry may be corrected to what actually
-   happened - devlog 07 was).
-8. No user-triggered command may emit `@handle` / `tg://user?id=` /
-   `text_mention` for a third party, and every targeted command (games,
-   moderation) must validate the target is a member of THIS chat. The
-   only sanctioned member-notifying output is the owner-approved
-   gracekick tag. (`command-output-no-third-party-ping`)
-9. Never commit personal data or secrets - no real bios, no exported
-   chat data, no personal chat ids, no keys. Test fixtures are
-   synthetic. The БЫДЛОКОД export is never committed
-   (`bydlokod-import-workflow`).
-10. Never write infra coordinates (server IP / hostname / host paths /
-    ssh lines / topology) into `docs/` or any tracked file. Use
-    `<deploy-host>` and keep the real values in the private `infra`
-    memory only - same finding bar as a leaked secret.
+- First test filter `'TestXPost'` did not match `TestProcessXPost*`
+  names (substring), so pipeline tests first ran only in the full
+  suite and caught a real bug: the test helper registered the media
+  allowlist key as host:port while the code looked up hostname().
+  Fixed in the helper; production paths unaffected.
+- The fix-unicode extension rewrote the U+2026 ellipsis in
+  truncateUTF16 into three ASCII dots, breaking UTF-16 budget math
+  (tests caught the +2 overflow). Marker is now explicitly "..." with
+  a 3-unit reserve.

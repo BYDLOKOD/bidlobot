@@ -1,117 +1,116 @@
 ---
 id: deployment
 kind: guide
+touches:
+  - Dockerfile
+  - docker-compose.yml
+  - deploy/backup.sh
+  - deploy/env.example
+  - scripts/backup.sh
+  - .github/workflows/ci.yml
+  - .omp/skills/bidlobot-deploy/scripts/deploy.sh
+  - .omp/skills/bidlobot-deploy/scripts/status.sh
+  - cmd/bidlobot/
+written: 2026-05-14
+updated: 2026-08-16
 ---
 
 # Deployment
 
-Production runs as a docker-compose stack. Single replica, named
-volume for bbolt, internal healthcheck (no host port published),
-non-root container with tini as PID 1.
+Production runs as a docker-compose stack with a **single service**:
+`bot` (the Go binary). Single bot replica (Telegram allows exactly one
+getUpdates poller per token). Named volume for bbolt, internal
+healthcheck (no host ports published), non-root container with tini as
+PID 1. Revised 2026-08-16 (xpost rework: the `xshot` Puppeteer sidecar
+was retired; the bot resolves X posts via the FixTweet API and
+downloads twimg media directly).
 
 ## Prerequisites
 
 - Linux host with Docker 24+ and Compose v2 (`docker compose version`).
 - A bot token from `@BotFather`.
-- `/setinline` Enabled with a placeholder string.
-- `/setprivacy` is a deliberate operating choice, NOT a hard
-  prerequisite (see [35_history_import.md](35_history_import.md)
-  "Operating model"):
-  - **Privacy ON (default, recommended for periodic cleanup):** bot
-    sees only commands / @-mentions / replies. Live message stats are
-    limited, but the import-driven periodic model needs no message
-    feed. Keep the bot **admin** so reactions still flow.
-  - **Privacy OFF + bot re-added:** bot sees every message -> full
-    live `LastMessageAt`/stats, no import needed, at the cost of all
-    message content transiting the bot. Choose this only for
-    continuous (non-periodic) live stats.
+- The **owner's Telegram user ID** (`BOT_OWNER_ID`) - required at
+  startup; only this user may add the bot to a chat.
+- `/setinline` Enabled with a placeholder string (read-only launcher).
+- `/setprivacy` - a **hard prerequisite now**: the content features
+  (YouTube `si=` sanitizer, TikTok repost, X-post repost, summarize
+  recorder) all read full message text, so privacy must be **OFF**
+  (`@BotFather` -> `/setprivacy` -> Disable) and the bot **removed +
+  re-added** to every chat (privacy is cached at join). With privacy
+  ON the bot only sees commands/@-mentions/replies, and all content
+  middlewares are silent.
 
 ## Image
 
 `Dockerfile` in the repo root. Multi-stage:
 
-- `golang:1.26-alpine` build stage. `CGO_ENABLED=0` because every
-  dependency is pure Go. Build cache mounted via BuildKit so warm
-  builds stay fast.
-- `alpine:3.20` runtime. Ships `bidlobot`, `bidlobot-backup`, and
-  `bidlobot-probe` into `/usr/local/bin`. Adds `ca-certificates`,
-  `tzdata`, `wget` (for the healthcheck), `tini` (PID 1).
-- Runs as `bidlobot` (UID 65532), `WORKDIR /var/lib/bidlobot`. A
-  baked `.keep` marker forces a fresh named volume to inherit the
-  image's `0750 bidlobot:bidlobot` ownership.
-- `HEALTHCHECK` polls `http://127.0.0.1:8080/health` over the container
-  loopback every 30 s, with 60 s start-period to absorb slow Telegram
-  cold starts.
+- `golang:1.26-alpine` build stage. `CGO_ENABLED=0` (every Go
+  dependency is pure Go). Build cache via BuildKit. Builds `bidlobot`,
+  `bidlobot-backup`, `bidlobot-probe` into `/out`.
+- `debian:bookworm-slim` runtime. Installs `bash ca-certificates curl
+  ffmpeg tini tzdata unzip wget` (ffmpeg/ffprobe for the TikTok
+  audio check), **yt-dlp pinned release** (2026.07.04, sha256-checked
+  at build; a newer release can be pinned via `YT_DLP_VERSION` arg),
+  and **Bun 1.3.14 + `@oh-my-pi/pi-coding-agent` 16.3.6** (the `omp`
+  CLI on PATH, version-checked at build). Runs as `bidlobot` (UID
+  65532), `WORKDIR /var/lib/bidlobot`, tini as PID 1, HEALTHCHECK on
+  the loopback `/health`.
 
-`docker compose build` produces `bidlobot:latest`. Tag explicitly with
-`VERSION=v1.0.0 docker compose build` to bake the version into both
-the image tag and the `--version` banner via ldflags.
+The `bidlobot-backup` binary stays in the image but cannot snapshot a
+running bot (bbolt exclusive flock) - use `deploy/backup.sh`
+(stop/cp/start) instead.
 
 ## Compose stack
 
 `docker-compose.yml`:
 
-- Single service `bot`. `container_name: bidlobot`.
-- `restart: unless-stopped`.
-- `env_file: ./env` -- compose reads the env file alongside the
-  compose YAML. On the deploy host this lives at `/opt/bidlobot/env`.
-- `volumes: bidlobot-data:/var/lib/bidlobot` -- bbolt persists across
-  container recreate.
-- `stop_grace_period: 30s` -- App.ShutdownTimeout (10 s) for handler
-  drain + 10 s for in-flight WaitGroup + 10 s slack for `bbolt.Close`.
-- `healthcheck: wget /health` -- internal only. The host's 8080 / 8081
-  are deliberately unmapped because they are usually occupied by other
-  services on the deploy host.
-- Resource caps: 256 MB memory, 0.5 CPU. Comfortably above the bot's
-  steady-state footprint.
-- JSON log rotation: 10 MB x 5 files = 50 MB ceiling per container.
+- **bot**: `container_name: bidlobot`, `restart: unless-stopped`,
+  `env_file: ./env` (on the deploy host: `/opt/bidlobot/env`) **plus**
+  `environment: - DEEPSEEK_API_KEY` (taken from the host shell env -
+  the omp CLI reads it directly, the Go binary never sees it).
+  `volumes: bidlobot-data:/var/lib/bidlobot`; `stop_grace_period: 30s`
+  (10s handler drain + 10s in-flight + 10s bbolt close slack);
+  healthcheck `wget --spider http://127.0.0.1:8080/health` every 30s,
+  60s start-period; resource caps 256 MB / 0.5 CPU; JSON log rotation
+  10 MB x 5.
+
+Host ports 8080/8081 are deliberately unmapped (occupied by other
+services on the deploy host); all probes go over container loopback.
 
 ## Environment
 
 Required:
 
-- `TG_BOT_TOKEN` -- format `\d+:[A-Za-z0-9_-]{35,}`. The bot validates
-  this at startup and exits non-zero on bad shape.
+- `TG_BOT_TOKEN` -- format `\d+:[A-Za-z0-9_-]{35,}`; validated at
+  startup, exit non-zero on bad shape.
+- `BOT_OWNER_ID` -- positive int64 Telegram user id. Only this user
+  may add the bot to a supergroup; a non-owner add triggers an
+  immediate `LeaveChat` + owner DM notice. Missing/invalid ->
+  startup error.
 
 Optional:
 
-- `LOG_LEVEL` -- `debug` | `info` | `warn` | `error`, default `info`.
+- `LOG_LEVEL` -- debug|info|warn|error, default `info`.
 - `DB_PATH` -- bbolt directory. Container default `/var/lib/bidlobot`.
-  Do not override unless you also rewire the volume mount.
-- `HEALTH_PORT` -- container port for `/health` and `/version`,
-  default `8080`. `0` disables the listener (and breaks the compose
-  healthcheck unless you also rewrite the `test:` field).
-- `RECORD_UPDATES` -- JSONL path inside the container; if set, every
-  incoming update is appended for offline replay. Ship as a bind mount
-  if you need to pull recordings from the host.
-- `GLM_API_KEY` -- enables the optional `/summarize` chat summarization
-  (Zhipu GLM). Empty/unset disables the whole feature; the bot starts
-  normally and `/summarize` replies "not configured" to admins.
-  `GLM_BASE_URL`/`GLM_MODEL` overrides select the endpoint family:
-  defaults are the general pay-as-you-go
-  `https://open.bigmodel.cn/api/paas/v4` + `glm-5` (needs a funded
-  account); a **GLM Coding Plan** key instead requires
-  `GLM_BASE_URL=https://api.z.ai/api/coding/paas/v4` + e.g.
-  `GLM_MODEL=glm-4.6` (the general endpoint returns code 1113 for a
-  coding-plan key). Persistent 1113 = wrong endpoint for the key type
-  OR an exhausted plan - check `GLM_BASE_URL` first. The coding
-  endpoint is documented by z.ai as for supported coding tools; using
-  it for this bot is an operator/ToS decision. See
-  [45_summarize.md](45_summarize.md).
+- `HEALTH_PORT` -- /health + /version port, default `8080`; `0`
+  disables the listener (breaks the compose healthcheck unless
+  rewritten).
+- `PI_BINARY` / `PI_MODEL` -- the summarize provider CLI + model.
+  Defaults `omp` and `deepseek/deepseek-v4-flash`. The `omp` binary is
+  inside the image; a missing binary is a startup failure.
+- `DEEPSEEK_API_KEY` -- provider credential for the omp CLI. NOT read
+  by the Go binary; compose forwards it from the host environment.
+  `deploy.sh` pipes it from `pass show token/deepseek` over SSH.
+- `CAPTCHA_ENABLED` (default false) / `CAPTCHA_TIMEOUT` (default `1m`,
+  1m..30m) -- new-member math captcha + welcome animation.
+- `CLEANUP_DAILY_AT` / `CLEANUP_GRACE` / `CLEANUP_DAILY_BATCH` --
+  legacy gracekick tuning, still validated, **but the scheduler is
+  idle** (no `/cleanup` command exists to seed a campaign). Harmless
+  to keep or drop.
 
-Inactive-cleanup campaign (all optional; only **tune** the lifecycle).
-There is **no enable flag**: the campaign is started per-chat by an
-admin's DM `/cleanup <period>` confirm and stopped by `/cleanup stop`.
-The daily scheduler is always running but does nothing until a campaign
-exists. The period is the `/cleanup` argument, not env. Bad explicitly-
-set values fail `--check-config` / startup; unset = safe default.
-
-- `CLEANUP_DAILY_AT` -- UTC `HH:MM` the daily campaign tick fires.
-  Default `10:00`. Bad explicit value (e.g. `99:99`) is rejected.
-- `CLEANUP_GRACE` -- delay between the public tag and the kick. Default
-  `72h` (the owner's 3-day decision). Must parse within 1h .. 720h.
-- `CLEANUP_DAILY_BATCH` -- max members publicly tagged per chat per day.
-  Default `15`. Range 1 .. 50.
+Removed env (no longer read; stale values are ignored): `GLM_API_KEY`,
+`GLM_BASE_URL`, `GLM_MODEL`, `RECORD_UPDATES`, `CLEANUP_DAILY_ENABLED`,
+`CLEANUP_DAILY_THRESHOLD`.
 
 ## First deploy
 
@@ -120,7 +119,7 @@ set values fail `--check-config` / startup; unset = safe default.
 git clone https://github.com/veschin/bidlobot.git /opt/bidlobot
 cd /opt/bidlobot
 cp deploy/env.example env
-$EDITOR env  # set TG_BOT_TOKEN
+$EDITOR env  # set TG_BOT_TOKEN + BOT_OWNER_ID
 
 docker compose up -d --build
 docker compose logs -f bot
@@ -133,176 +132,100 @@ Expect, in order:
 3. `health server listening addr=:8080`
 4. `bot started, polling for updates`
 
-`can_read_all=false` is privacy ON - expected and fine for the
-import-driven periodic model. Only flip BotFather + restart if you
-deliberately want continuous live message stats (see Prerequisites).
+`can_read_all=true` is required for the content features (privacy OFF
++ re-add). If it reads `false`, flip BotFather privacy and re-add the
+bot.
 
 ## Upgrade (routine)
 
-`origin/master` is the deploy ref. Prod last ran `6942061`; current
-`origin/master` is `f203fc9` (evidence-graded `/cleanup` + the
-command-started cleanup campaign + `/summarize`). Standard upgrade:
+`origin/master` is the deploy ref. Standard upgrade:
 
 ```sh
-# On the deploy host
 cd /opt/bidlobot
 git fetch origin && git checkout master && git pull --ff-only
 docker compose up -d --build
 docker compose logs -f bot
 ```
 
-Verifiable upgrade facts for this release:
+Deploy helper: `.omp/skills/bidlobot-deploy/scripts/deploy.sh`
+(git push -> SSH with `DEEPSEEK_API_KEY` from `pass show
+token/deepseek` -> `docker compose up -d --build` -> health wait) and
+`status.sh` (env + container status). NOTE: `status.sh` still greps
+`GLM_` in the host env - stale, cosmetic only.
 
-- **Nothing auto-activates.** The cleanup campaign starts only on an
-  admin DM `/cleanup <period>` confirm; `/summarize` is inert unless
-  `GLM_API_KEY` is set. A fresh deploy with no admin action and no
-  `GLM_API_KEY` behaves exactly like the old binary.
-- **No DB migration.** The new bbolt bucket `gracekick` is created
-  idempotently at open (`CreateBucketIfNotExists`); existing buckets
-  and keys are untouched. Rollback stays forward-compatible (see
-  Rollback).
-- **Dropped env vars are harmless.** `CLEANUP_DAILY_ENABLED` and
-  `CLEANUP_DAILY_THRESHOLD` no longer exist; if the prod `env` still
-  sets them they are simply ignored (unknown env = no error). The
-  cleanup period is now the `/cleanup <period>` argument, not env.
-- `--check-config` still validates `CLEANUP_DAILY_AT` / `CLEANUP_GRACE`
-  / `CLEANUP_DAILY_BATCH` only when explicitly set to a bad value.
+Verifiable upgrade facts:
+
+- **New buckets are idempotent** (`CreateBucketIfNotExists`), no DB
+  migration step. Rollback stays forward-compatible (unknown buckets
+  ignored by older binaries).
+- The image build pins yt-dlp and omp versions; a build failure
+  (sha256 mismatch, missing binary) fails CI / the deploy build before
+  it reaches prod.
 
 ## Health and version
 
 ```sh
-# Internal probe (compose healthcheck does this every 30 s)
 docker exec bidlobot wget -qO- http://127.0.0.1:8080/health
-
-# Build banner without execing
 docker exec bidlobot bidlobot --version
 ```
 
-`/health` returns `200 {"status":"ok"}` when:
-
-- The bbolt instance accepts a no-op view transaction.
-- The most recent update arrived within 5 minutes (or the bot is
-  still inside its startup grace).
-- A cached `getMe` (TTL 60 s) returned successfully.
-
-`/version` returns build info including the commit hash injected at
-build time via `-X main.version=... -X main.commit=...`.
+`/health` returns `200 {"status":"ok"}` when: bbolt accepts a no-op
+view tx; the most recent update arrived within 5 min (or startup
+grace); a cached `getMe` (TTL 60s) succeeded. `/version` returns build
+info (commit hash via `-X main.version=... -X main.commit=...`).
 
 ## Backup
 
 `deploy/backup.sh` -- host-side stop / cp / start. Resolves the
-volume mount path via `docker volume inspect bidlobot-data`, copies
-`bidlobot.db`, then restarts the bot. Trades ~10 s downtime for a
-guaranteed-consistent snapshot.
-
-Cron suggestion (root):
+volume mount via `docker volume inspect bidlobot-data`, copies
+`bidlobot.db`, restarts the bot. ~10s downtime for a guaranteed-
+consistent snapshot. Cron suggestion (root):
 
 ```cron
-# Hot snapshot at 03:17 UTC daily, retain 7 newest by mtime.
 17 3 * * * /opt/bidlobot/deploy/backup.sh >>/var/log/bidlobot-backup.log 2>&1
 ```
 
-Default destination: `/var/backups/bidlobot/bidlobot-YYYYMMDD-HHMMSS.db`,
-configurable via `BIDLOBOT_BACKUP_DIR`. Failed runs exit nonzero so
-cron alerts.
-
-> The earlier sidecar-style `bidlobot-backup` binary (still in the
-> image, callable via `docker exec bidlobot bidlobot-backup`) cannot
-> snapshot a running bot: bbolt holds an exclusive flock and the
-> backup binary's read-only open times out. Use it only after stopping
-> the bot.
-
-## History import (cleanup + monthly-stats bootstrap)
-
-On a fresh deploy the bot only knows users it observed live, so
-`/cleanup 6mo` finds nobody and `/stats month` is empty for pre-bot
-months. History is seeded **in-process via a DM `/import`** - no
-server access, no container exec, no restart. Full rationale + schema
-in [35_history_import.md](35_history_import.md).
-
-Operator/admin procedure (entirely inside Telegram):
-
-1. Add the bot to the chat as admin with the right to restrict
-   members (required before `/import` - the DM console only manages
-   chats the bot administers).
-2. Telegram Desktop -> open the chat -> `⋯ -> Export chat history ->
-   Format: JSON`.
-3. Compress the export to `.gz` or `.zip` if it exceeds ~20 MB (the
-   Bot API caps a bot file download at 20 MB; a real export is ~31 MB
-   raw / ~4 MB gzipped). An uncompressed file under 20 MB also works.
-4. In a private chat with the bot send `/import`, then send the export
-   file. The bot auto-detects/decompresses and seeds both the
-   membership table (for `/cleanup`) and the monthly statistics (for
-   `/stats month`).
-
-Import is idempotent (per-chat message-id high-water-mark + atomic
-state write), so re-sending the same or an overlapping export never
-double-counts; date-sliced multiple sends accumulate. The import
-shares the bot's already-open bbolt handle, so there is no flock
-conflict and the bot keeps running throughout (that flock conflict was
-the only reason the removed standalone import binary required stopping
-the bot).
+Default destination `/var/backups/bidlobot/...`, configurable via
+`BIDLOBOT_BACKUP_DIR`. Failed runs exit nonzero so cron alerts.
 
 ## Logs
 
-Structured JSON to stdout, captured by Docker's `json-file` driver.
+Structured JSON to stdout, Docker `json-file` driver.
 
 ```sh
 docker compose logs -f bot
 docker compose logs --since 1h bot | jq 'select(.level=="ERROR")'
 ```
 
-What never leaks into logs:
-
-- `TG_BOT_TOKEN` (telego's default replacer redacts; do not enable
-  telego `WithDebug`, which prints raw payloads).
-- `GLM_API_KEY` -- the glm client logs only model / status / token
-  usage, never the key or the transcript.
-- Message text -- only `chat_id`, `user_id`, command, duration_ms.
-  (The `/summarize` feature *sends* recent message text to the external
-  GLM provider over TLS to produce the summary - see the privacy note
-  in [45_summarize.md](45_summarize.md) - but never writes it to disk
-  or logs.)
-
-What does:
-
-- Authentication, BotFather flag state.
-- Per-handler dispatch durations, API errors verbatim.
-- Rate-limiter drops (`chat_id` + drop reason).
-- Pending GC removed-count.
-
-For longer retention forward the journal to a central log store via
-`vector` or `systemd-journal-upload`.
+What never leaks into logs: `TG_BOT_TOKEN` (telego's default replacer
+redacts; never enable `WithDebug`), `DEEPSEEK_API_KEY` (the omp CLI
+reads it from env; the Go binary never logs it), message text (only
+chat_id/user_id/command/duration_ms). The `/summarize` feature *sends*
+recent message text to the external DeepSeek provider via omp (privacy
+note in [45_summarize.md](45_summarize.md)) but never writes it to
+disk or logs (memfd transcript, no temp file).
 
 ## CI
 
-`.github/workflows/ci.yml`:
-
-- `go vet`, `go test -race -cover`, `go build` on every push and PR.
-- `docker buildx build` (no push) so a Dockerfile regression fails
-  CI before it bites a deploy.
-- `gitleaks` scan to catch accidentally-committed env files or
-  hard-coded tokens.
-
-Coverage uploaded as artifact (7-day retention).
+`.github/workflows/ci.yml`: `go vet`, `go test -race -cover`, `go
+build` on push/PR; `docker buildx build` (no push) so Dockerfile
+regressions fail CI; `gitleaks` scan. Coverage artifact 7-day.
 
 ## Rollback
 
-bbolt schema is forward-compatible (we never delete buckets, only
-add). To roll back:
+bbolt schema is forward-compatible (buckets only ever added). To roll
+back:
 
 ```sh
-# On deploy host
 cd /opt/bidlobot
 git fetch
 git checkout <previous-good-sha>
 docker compose up -d --build
 ```
 
-If the older binary doesn't recognize a bucket created by the newer
-one, the bucket is ignored. For destructive-schema rollbacks (rare),
-restore from a backup taken before the upgrade and stop the bot
-before swapping the database file:
+If the older binary doesn't recognize a newer bucket, it is ignored.
+For destructive-schema rollbacks (rare), restore from backup with the
+bot stopped:
 
 ```sh
 docker compose stop bot
@@ -315,14 +238,18 @@ docker compose start bot
 
 - **Single token, two processes**: stop production before running
   `cmd/probe` or any local `go run ./cmd/bidlobot` against the same
-  `TG_BOT_TOKEN`. Telegram returns 409 to the loser of the
-  `getUpdates` race; both processes flap and split traffic.
+  `TG_BOT_TOKEN` (409 getUpdates race).
 - **Forgetting to remove-and-re-add after `/setprivacy` flip**:
-  privacy mode is cached at join. The bot will start cleanly, polls
-  successfully, but only sees commands and @-mentions until you
-  remove and re-add it.
+  privacy is cached at join; content middlewares stay silent until the
+  bot is removed and re-added.
 - **Editing `env` without restart**: compose only re-reads `env_file`
-  on container recreate. After editing: `docker compose up -d`.
+  on container recreate. `DEEPSEEK_API_KEY` comes from the host shell
+  env at `up` time - after changing it, `docker compose up -d` (not
+  just restart) to re-read both.
 - **Backup during crash loop**: `deploy/backup.sh` exits nonzero if
-  the container is not running, so cron alerts. Diagnose the crash
-  first; do not wrap the script in `|| true`.
+  the container is not running; diagnose first, do not wrap in
+  `|| true`.
+- **fxtwitter unreachable**: X-post reposts decline with a random
+  phrase (original message kept), other features unaffected. The
+  FixTweet API is a public third-party service; sustained outages
+  surface as `xpost: metadata fetch failed` in the logs.

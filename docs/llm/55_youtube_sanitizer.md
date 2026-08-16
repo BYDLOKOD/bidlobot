@@ -1,20 +1,32 @@
 ---
 id: youtube-sanitizer
 kind: spec
+touches:
+  - internal/bot/youtube_sanitizer.go
+  - internal/bot/routes.go
+written: 2026-05-15
+updated: 2026-05-15
 ---
 
 # YouTube `si=` sanitizer
 
-See also: [10_scope.md](10_scope.md), [50_telegram.md](50_telegram.md).
+See also: [PRD.md](PRD.md), [50_telegram.md](50_telegram.md).
 
 NOT the dropped "YouTube Summary" (that was an LLM/GLM dependency, still
-dropped - see 10_scope). This is a content-cleanup behavior: strip the
+dropped - see PRD.md). This is a content-cleanup behavior: strip the
 `si=` share-tracking parameter that leaks who-shared-from-where.
 
 `internal/bot/youtube_sanitizer.go`, a passive supergroup middleware
-registered on `sgGroup` AFTER the membership/stats observers (they must
-see the original human message first) and before nothing destructive
-runs ahead of it.
+registered on `sgGroup` AFTER the passive observers (membership/stats/
+summarize recorder must see the original human message first) and
+BEFORE the TikTok reposter and X-post sidecar (`routes.go:105-112`).
+The same repost-then-delete shape is reused by the TikTok reposter
+([56_tiktok_repost.md](56_tiktok_repost.md)); the X-post sidecar is
+add-only ([57_xpost.md](57_xpost.md)).
+
+**Privacy gate**: like all content middlewares it needs BotFather
+privacy OFF + bot re-added - a bare YouTube link never reaches the bot
+under privacy ON ([50_telegram.md](50_telegram.md)).
 
 ## Detection
 
