@@ -379,7 +379,7 @@ func TestProcessXPostVideoRepostDeletesOriginal(t *testing.T) {
 
 	snd := &recYTSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), client, api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, msg, msg.Text)
 
 	if len(snd.Videos) != 1 || len(snd.MediaGroups) != 0 || len(snd.Messages) != 0 {
 		t.Fatalf("calls: videos=%d groups=%d messages=%d", len(snd.Videos), len(snd.MediaGroups), len(snd.Messages))
@@ -421,7 +421,7 @@ func TestProcessXPostAlbumPhotosAndVideo(t *testing.T) {
 
 	snd := &recYTSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), client, api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, msg, msg.Text)
 
 	if len(snd.MediaGroups) != 1 || len(snd.Videos) != 0 || len(snd.Messages) != 0 {
 		t.Fatalf("calls: groups=%d videos=%d messages=%d", len(snd.MediaGroups), len(snd.Videos), len(snd.Messages))
@@ -464,7 +464,7 @@ func TestProcessXPostUserPhotoKeptFirstInAlbum(t *testing.T) {
 		{FileID: "small", Width: 100, Height: 100},
 		{FileID: "large", Width: 800, Height: 600},
 	}
-	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, msg, msg.Caption)
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, nil, msg, msg.Caption)
 
 	if len(snd.MediaGroups) != 1 || len(snd.MediaGroups[0].Media) != 2 {
 		t.Fatalf("groups = %+v", snd.MediaGroups)
@@ -486,7 +486,7 @@ func TestProcessXPostTextOnlyTweet(t *testing.T) {
 
 	snd := &recYTSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, nil, msg, msg.Text)
 
 	if len(snd.Messages) != 1 || len(snd.MediaGroups) != 0 || len(snd.Videos) != 0 {
 		t.Fatalf("calls: messages=%d groups=%d videos=%d", len(snd.Messages), len(snd.MediaGroups), len(snd.Videos))
@@ -516,7 +516,7 @@ func TestProcessXPostOversizedVideoDegradesToText(t *testing.T) {
 
 	snd := &recYTSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, nil, msg, msg.Text)
 
 	if len(snd.Messages) != 1 || len(snd.MediaGroups) != 0 || len(snd.Videos) != 0 {
 		t.Fatalf("calls: messages=%d groups=%d videos=%d", len(snd.Messages), len(snd.MediaGroups), len(snd.Videos))
@@ -541,7 +541,7 @@ func TestProcessXPostMetadataFailureDeclinesKeepsOriginal(t *testing.T) {
 
 	snd := &recYTSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, nil, msg, msg.Text)
 
 	if len(snd.Messages) != 1 {
 		t.Fatalf("messages = %d, want 1 decline", len(snd.Messages))
@@ -570,7 +570,7 @@ func TestProcessXPostAlbumFallbackDownloadsPhotos(t *testing.T) {
 
 	snd := &recYTSender{GroupErr: errors.New("group send failed")}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), client, api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, msg, msg.Text)
 
 	if len(snd.MediaGroups) != 2 {
 		t.Fatalf("group attempts = %d, want 2 (URL then downloaded files)", len(snd.MediaGroups))
@@ -603,7 +603,7 @@ func TestProcessXPostSinglePhotoFallback(t *testing.T) {
 
 	snd := &failingPhotoSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), client, api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, msg, msg.Text)
 
 	if len(snd.Photos) != 2 {
 		t.Fatalf("photo attempts = %d, want 2", len(snd.Photos))
@@ -632,7 +632,7 @@ func TestProcessXPostAlbumTruncatedToTelegramLimit(t *testing.T) {
 
 	snd := &recYTSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, nil, msg, msg.Text)
 
 	if len(snd.MediaGroups) != 1 || len(snd.MediaGroups[0].Media) != xpostMaxAlbumItems {
 		t.Fatalf("group items = %d, want %d", len(snd.MediaGroups[0].Media), xpostMaxAlbumItems)
@@ -649,12 +649,88 @@ func TestProcessXPostLogsDeclineSendFailure(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
 	snd := &failingXPostSender{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, logger, api.Client(), api.URL, msg, msg.Text)
+	processXPost(context.Background(), snd, logger, api.Client(), api.URL, nil, msg, msg.Text)
 
 	output := logs.String()
 	if !strings.Contains(output, `msg="xpost: decline note send failed"`) ||
 		!strings.Contains(output, "message_id=42") ||
 		strings.Contains(output, "tiktok:") {
 		t.Fatalf("unexpected decline failure log: %s", output)
+	}
+}
+
+func TestProcessXPostTranslatesForeignTweet(t *testing.T) {
+	payload := `{"code":200,"tweet":{"url":"https://x.com/alice/status/123456",` +
+		`"text":"GLM5.3 重新夺回国模","lang":"zh",` +
+		`"author":{"name":"Alice","screen_name":"alice"},"media":{}}}`
+	api := xpostAPIServer(t, payload)
+	defer api.Close()
+
+	var gotInput string
+	translate := func(_ context.Context, text string) (string, error) {
+		gotInput = text
+		return "GLM5.3 снова забрал корону", nil
+	}
+	snd := &recYTSender{}
+	msg := ytTestMessage("https://x.com/alice/status/123456")
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, translate, msg, msg.Text)
+
+	if gotInput != "GLM5.3 重新夺回国模" {
+		t.Fatalf("translator input = %q", gotInput)
+	}
+	if len(snd.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(snd.Messages))
+	}
+	if !strings.Contains(snd.Messages[0].Text, "GLM5.3 снова забрал корону") {
+		t.Fatalf("caption missing translation: %q", snd.Messages[0].Text)
+	}
+	if strings.Contains(snd.Messages[0].Text, "重新夺回") {
+		t.Fatalf("caption must not carry the untranslated original: %q", snd.Messages[0].Text)
+	}
+}
+
+func TestProcessXPostKeepsRussianAndEnglishText(t *testing.T) {
+	for _, lang := range []string{"ru", "en", "und", ""} {
+		t.Run("lang_"+lang, func(t *testing.T) {
+			payload := fmt.Sprintf(`{"code":200,"tweet":{"url":"https://x.com/alice/status/123456",`+
+				`"text":"hello мир","lang":%q,`+
+				`"author":{"name":"Alice","screen_name":"alice"},"media":{}}}`, lang)
+			api := xpostAPIServer(t, payload)
+			defer api.Close()
+
+			translate := func(context.Context, string) (string, error) {
+				t.Fatal("translator must not run for ru/en/und tweets")
+				return "", nil
+			}
+			snd := &recYTSender{}
+			msg := ytTestMessage("https://x.com/alice/status/123456")
+			processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, translate, msg, msg.Text)
+
+			if len(snd.Messages) != 1 || !strings.Contains(snd.Messages[0].Text, "hello мир") {
+				t.Fatalf("original text must be kept, got %+v", snd.Messages)
+			}
+		})
+	}
+}
+
+func TestProcessXPostTranslationFailureKeepsOriginal(t *testing.T) {
+	payload := `{"code":200,"tweet":{"url":"https://x.com/alice/status/123456",` +
+		`"text":"こんにちは","lang":"ja",` +
+		`"author":{"name":"Alice","screen_name":"alice"},"media":{}}}`
+	api := xpostAPIServer(t, payload)
+	defer api.Close()
+
+	translate := func(context.Context, string) (string, error) {
+		return "", errors.New("provider down")
+	}
+	snd := &recYTSender{}
+	msg := ytTestMessage("https://x.com/alice/status/123456")
+	processXPost(context.Background(), snd, discardLogger(), api.Client(), api.URL, translate, msg, msg.Text)
+
+	if len(snd.Messages) != 1 || !strings.Contains(snd.Messages[0].Text, "こんにちは") {
+		t.Fatalf("failed translation must keep the original, got %+v", snd.Messages)
+	}
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("repost must still complete, deletes = %+v", snd.Deletes)
 	}
 }

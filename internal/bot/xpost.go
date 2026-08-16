@@ -27,7 +27,6 @@ package bot
 //   - media groups: only the caption-bearing item is processed; sibling
 //     media of the user's own album are not re-sent.
 //   - only the first X status link in a message is expanded.
-
 import (
 	"context"
 	"encoding/json"
@@ -61,9 +60,25 @@ const (
 	// xpostMaxAlbumItems is Telegram's sendMediaGroup ceiling.
 	xpostMaxAlbumItems = 10
 
+	// xpostTranslateTimeout bounds one translation call.
+	xpostTranslateTimeout = 60 * time.Second
+
+	// xpostTranslateInputLimit caps the text handed to the translator
+	// (long premium posts only ever yield a 1024-unit caption anyway).
+	xpostTranslateInputLimit = 4000
+
 	// msgXPostHeaderPrefix is the sender attribution line ("👤 name").
 	msgXPostHeaderPrefix = "\U0001F464 "
 )
+
+// XPostTranslatePrompt is the system instruction for translating a
+// foreign-language tweet to Russian for the repost caption.
+const XPostTranslatePrompt = `You translate social media posts to Russian.
+Output ONLY the translated text - no preamble, no quotes, no comments.
+Preserve line breaks, emoji, URLs, @mentions and #hashtags verbatim.
+Keep product names, technical terms and code identifiers in Latin
+script. Aim for a natural chat register rather than literal
+word-for-word translation.`
 
 var (
 	xpostTokenRe = regexp.MustCompile(`[^\s<>"']+`)
@@ -95,6 +110,7 @@ type xpostTweetResponse struct {
 	Tweet *struct {
 		URL    string `json:"url"`
 		Text   string `json:"text"`
+		Lang   string `json:"lang"`
 		Author struct {
 			Name       string `json:"name"`
 			ScreenName string `json:"screen_name"`
@@ -127,6 +143,7 @@ type xpostFormat struct {
 type xpostResolvedTweet struct {
 	URL          string
 	Text         string
+	Lang         string
 	AuthorName   string
 	AuthorHandle string
 	PhotoURLs    []string
@@ -196,7 +213,7 @@ func xpostReposter(a *App) th.Handler {
 		case xpostSlot <- struct{}{}:
 			go func() {
 				defer func() { <-xpostSlot }()
-				processXPost(context.Background(), snd, a.log, xpostHTTPClient, xpostAPIBase, msg, postURL)
+				processXPost(context.Background(), snd, a.log, xpostHTTPClient, xpostAPIBase, a.tweetTranslator, msg, postURL)
 			}()
 		default:
 			go sendDecline(context.Background(), snd, a.log, msg.Chat.ID, msg.GetMessageID(), publicPureFailure(), "xpost: decline note send failed")
@@ -215,6 +232,7 @@ func processXPost(
 	log *slog.Logger,
 	client *http.Client,
 	apiBase string,
+	translate func(ctx context.Context, text string) (string, error),
 	msg *telego.Message,
 	postURL string,
 ) {
@@ -227,6 +245,8 @@ func processXPost(
 		sendDecline(ctx, snd, log, chatID, messageID, publicPureFailure(), "xpost: decline note send failed")
 		return
 	}
+
+	xpostTranslateTweet(ctx, log, translate, chatID, messageID, tweet)
 
 	workDir, err := os.MkdirTemp("", "bidlobot-xpost-")
 	if err != nil {
@@ -269,6 +289,44 @@ func processXPost(
 
 	log.Info("xpost: reposted", "chat_id", chatID, "message_id", messageID,
 		"photos", len(tweet.PhotoURLs), "videos", len(tweet.Videos))
+}
+
+// xpostTranslateTweet replaces tweet.Text with a Russian translation
+// when the tweet is in neither Russian nor English (the chat reads
+// both) and a translator is wired. Any failure keeps the original
+// text - the repost is never blocked by the translator.
+func xpostTranslateTweet(
+	ctx context.Context,
+	log *slog.Logger,
+	translate func(ctx context.Context, text string) (string, error),
+	chatID int64,
+	messageID int,
+	tweet *xpostResolvedTweet,
+) {
+	if translate == nil || tweet.Text == "" {
+		return
+	}
+	switch tweet.Lang {
+	case "", "und", "ru", "en":
+		return
+	}
+	input := tweet.Text
+	if utf16Len(input) > xpostTranslateInputLimit {
+		input = truncateUTF16(input, xpostTranslateInputLimit)
+	}
+	tctx, cancel := context.WithTimeout(ctx, xpostTranslateTimeout)
+	defer cancel()
+	translated, err := translate(tctx, input)
+	if err != nil {
+		log.Warn("xpost: translation failed; keeping original",
+			"chat_id", chatID, "message_id", messageID, "lang", tweet.Lang, "error", err)
+		return
+	}
+	if strings.TrimSpace(translated) == "" {
+		return
+	}
+	log.Info("xpost: translated", "chat_id", chatID, "message_id", messageID, "lang", tweet.Lang)
+	tweet.Text = translated
 }
 
 // Telegram caption/text ceilings; the caption path truncates against them.
@@ -599,6 +657,7 @@ func fetchXPostTweet(ctx context.Context, client *http.Client, apiBase, postURL 
 	tweet := &xpostResolvedTweet{
 		URL:          payload.Tweet.URL,
 		Text:         payload.Tweet.Text,
+		Lang:         strings.ToLower(payload.Tweet.Lang),
 		AuthorName:   payload.Tweet.Author.Name,
 		AuthorHandle: payload.Tweet.Author.ScreenName,
 	}

@@ -168,6 +168,17 @@ func main() {
 	// Reaction reputation: 👍 +rep, 👎/🤡 -rep with a 10s combined-message
 	// batcher. Shares the reputation bbolt bucket with /praise and /roast.
 	app.AttachRepReactions(bot.NewRepReactor(storage.NewReputationRepo(db), adminCache, tgClient, log))
+	// X-post translation: tweets in neither Russian nor English are
+	// reposted with a Russian caption. Shares the summarize Pi runner
+	// (same binary/model/budget-free one-shot calls); a failed or empty
+	// translation keeps the original text.
+	app.AttachTweetTranslator(func(ctx context.Context, text string) (string, error) {
+		completion, err := pi.Complete(ctx, bot.XPostTranslatePrompt, text)
+		if err != nil {
+			return "", err
+		}
+		return completion.Text, nil
+	})
 	if err := app.AttachHealth(
 		// dbOpen probes bbolt with a no-op view txn. Path() returning a
 		// non-empty string is a tautology (it's set at open time and

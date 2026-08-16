@@ -20,3 +20,6 @@
 - [x] Deploy xpost v2 to VM100
   Accept: scripts/deploy.sh run with explicit owner OK; smoke: X link in prod chat -> one message, original deleted
   Evidence: deploy.sh --skip-push 2026-08-16 - HEAD 6e93f82 built+recreated, healthy after 8s, "bot started, polling"; orphaned bidlobot-xshot container+image removed; status.sh healthy, 0 errors. Live X-link smoke pending a real post in the chat.
+- [x] Translate non-ru/en X-post texts to Russian in the repost
+  Accept: process tests cover translate / passthrough / fallback
+  Evidence: go test ./internal/bot/ -run 'ProcessXPost' -count=1 2026-08-16 - all pass incl. 3 new translation tests; full go test -race ./... zero FAIL

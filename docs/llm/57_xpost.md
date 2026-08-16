@@ -8,19 +8,19 @@ updated: 2026-08-16
 
 # X/Twitter post repost (`xpost`)
 
-Reworked 2026-08 (single-message repost, renderer sidecar retired).
-When a supergroup message carries an `x.com`/`twitter.com` status URL,
-the bot resolves the tweet through the public FixTweet JSON API
-(`api.fxtwitter.com`) and re-sends it as ONE message - tweet text as
-caption, every photo/video as native Telegram media, canonical link to
-the original - then deletes the user's message. Contract mirrors the
-TikTok reposter: repost first, delete only after a successful send; on
-failure the original stays and a decline note is posted.
-
-`internal/bot/xpost.go` only. The old `xshot/` Node/Puppeteer sidecar
-(painted tweet cards as PNG) was deleted together with its compose
-service: the same API it proxied already returns text + direct twimg
-media URLs, so the Go bot assembles the message itself.
+Reworked 2026-08-16 (single-message repost, renderer sidecar retired,
+Russian translation added the same day). When a supergroup message
+carries an `x.com`/`twitter.com` status URL, the bot resolves the tweet
+through the public FixTweet JSON API (`api.fxtwitter.com`) and re-sends
+it as ONE message - tweet text as caption, every photo/video as native
+Telegram media, canonical link to the original - then deletes the
+user's message. Tweets detected as neither Russian nor English (FixTweet
+`lang`) are translated to Russian first via the shared Pi runner
+(DeepSeek V4 Flash, 60s timeout, 4000-unit input cap); a failed or empty
+translation keeps the original text and never blocks the repost.
+Contract mirrors the TikTok reposter: repost first, delete only after a
+successful send; on failure the original stays and a decline note is
+posted.
 
 ## Detection
 

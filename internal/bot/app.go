@@ -42,6 +42,10 @@ type App struct {
 	summarize       *summarize.Service
 	summarizeSender shared.TelegramAPI
 
+	// tweetTranslator renders non-ru/en X-post texts in Russian for the
+	// single-message repost. nil (tests, feature off) keeps originals.
+	tweetTranslator func(ctx context.Context, text string) (string, error)
+
 	// sender is the rate-limited + retried wrapper used for every
 	// outgoing message on the public surface (help, onboarding, the
 	// moderation-redirect notice). Distinct from `bot`, which stays the
@@ -195,6 +199,16 @@ func (a *App) AttachSummarize(svc *summarize.Service, sender shared.TelegramAPI)
 	}
 	a.summarize = svc
 	a.summarizeSender = sender
+}
+
+// AttachTweetTranslator wires the LLM translator used by the X-post
+// reposter (non-ru/en tweets are reposted in Russian). Nil or a nil
+// func is a no-op - the reposter then keeps original texts.
+func (a *App) AttachTweetTranslator(f func(ctx context.Context, text string) (string, error)) {
+	if f == nil {
+		return
+	}
+	a.tweetTranslator = f
 }
 
 func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
