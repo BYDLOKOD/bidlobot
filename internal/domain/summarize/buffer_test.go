@@ -58,20 +58,6 @@ func TestBuffer_WindowReturnsCopyChronological(t *testing.T) {
 	}
 }
 
-func TestBuffer_UpdateRewritesTextAndBytes(t *testing.T) {
-	b := NewBuffer(BufferConfig{MaxPerChat: 10, MaxBytesChat: 1 << 20})
-	b.Record(1, e(1, "old"))
-	b.Record(1, e(2, "keep"))
-	b.Update(1, 1, "a much longer replacement text")
-	win, _ := b.Window(1, 10)
-	if win[0].Text != "a much longer replacement text" {
-		t.Fatalf("Update did not rewrite text: %q", win[0].Text)
-	}
-	// Non-existent / evicted message id: no-op, no panic.
-	b.Update(1, 99999, "ignored")
-	b.Update(2, 1, "wrong chat")
-}
-
 func TestBuffer_DistinctChatCapEvictsLRU(t *testing.T) {
 	b := NewBuffer(BufferConfig{MaxPerChat: 4, MaxChats: 2})
 	b.Record(1, e(1, "a"))

@@ -10,13 +10,11 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-// "profiles" and "profiles_by_chat" are intentionally kept as empty buckets
-// so that data from the archived bio domain (branch archive/profiles-bio,
-// tag v0-bio-archive) can be restored without bbolt schema changes if the
-// feature returns.
+// Buckets from the archived bio domain ("profiles", "profiles_by_chat")
+// are no longer created; existing databases keep them untouched on
+// disk (bbolt never drops buckets implicitly), and migrate.go skips
+// them, so nothing reads or writes them.
 var buckets = []string{
-	"profiles",
-	"profiles_by_chat",
 	"stats",
 	"stats_by_chat",
 	"members",

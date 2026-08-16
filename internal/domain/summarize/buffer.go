@@ -109,31 +109,6 @@ func (b *Buffer) Record(absChatID int64, e Entry) {
 	}
 }
 
-// Update rewrites the text of a previously recorded message (a Telegram
-// edit) so the summary reflects the final wording. No-op if the message
-// has already been evicted. Byte accounting is kept consistent.
-func (b *Buffer) Update(absChatID int64, msgID int, newText string) {
-	if newText == "" {
-		return
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	r := b.chats[absChatID]
-	if r == nil {
-		return
-	}
-	for i := range r.entries {
-		if r.entries[i].MsgID == msgID {
-			r.bytes += len(newText) - len(r.entries[i].Text)
-			if r.bytes < 0 {
-				r.bytes = 0
-			}
-			r.entries[i].Text = newText
-			return
-		}
-	}
-}
-
 // Window returns up to n most-recent entries in chronological order as a
 // copy (callers must not see the live backing array). The second result
 // is the total currently retained for this chat, so the caller can tell

@@ -24,7 +24,7 @@ type Entry struct {
 
 // Sentinel validation errors. Each must be detectable via errors.Is.
 var (
-	ErrSelfTarget               = errors.New("reputation: cannot target self")
-	ErrInsufficientBalance      = errors.New("reputation: insufficient balance")
+	ErrSelfTarget                = errors.New("reputation: cannot target self")
+	ErrInsufficientBalance       = errors.New("reputation: insufficient balance")
 	ErrTargetInsufficientBalance = errors.New("reputation: target balance insufficient")
 )

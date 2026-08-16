@@ -149,11 +149,6 @@ func (s *Service) GlobalAllow() bool {
 // Record ingests one human message into the live window.
 func (s *Service) Record(absChatID int64, e Entry) { s.buf.Record(absChatID, e) }
 
-// UpdateEdited applies a Telegram edit to a message still in the window.
-func (s *Service) UpdateEdited(absChatID int64, msgID int, newText string) {
-	s.buf.Update(absChatID, msgID, newText)
-}
-
 // Available reports how many messages are currently in the live window.
 func (s *Service) Available(absChatID int64) int {
 	_, total := s.buf.Window(absChatID, 0)

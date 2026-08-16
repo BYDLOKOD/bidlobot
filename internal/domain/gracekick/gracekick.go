@@ -12,9 +12,9 @@
 package gracekick
 
 import (
-	"html"
 	"context"
 	"fmt"
+	"html"
 	"log/slog"
 	"strings"
 	"sync"

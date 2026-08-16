@@ -103,16 +103,11 @@ func parseOwnerID(raw string) int64 {
 // parseHHMM turns "HH:MM" (24h, UTC) into minutes past midnight, or -1
 // when malformed / out of range.
 func parseHHMM(s string) int {
-	h, m, ok := strings.Cut(strings.TrimSpace(s), ":")
-	if !ok {
+	t, err := time.Parse("15:04", strings.TrimSpace(s))
+	if err != nil {
 		return -1
 	}
-	hh, err1 := strconv.Atoi(h)
-	mm, err2 := strconv.Atoi(m)
-	if err1 != nil || err2 != nil || hh < 0 || hh > 23 || mm < 0 || mm > 59 {
-		return -1
-	}
-	return hh*60 + mm
+	return t.Hour()*60 + t.Minute()
 }
 
 func envBool(key string, fallback bool) bool {
