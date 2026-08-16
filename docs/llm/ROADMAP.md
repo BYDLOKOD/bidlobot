@@ -47,7 +47,7 @@ Scope: 2026-08-16 - drop the xshot sidecar; repost X statuses as one message via
 - Migrate 57_xpost.md to v3
 - Owner approval of the user-facing caption format
 - Full test run (go test -race ./...) - done 2026-08-16, zero FAIL
-- Deploy to VM100 (requires explicit owner OK)
+- Deploy to VM100 (requires explicit owner OK) - done 2026-08-16, healthy after 8s, xshot container+image removed
 
 ## E8: Docs v3 migration completion - open
 Scope: finish the docs/llm v3 layout for this batch.

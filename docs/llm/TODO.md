@@ -17,5 +17,6 @@
   Accept: PRD.md says "Status: FROZEN 2026-08-16" (10_scope.md already deleted, absorbed)
 - [ ] Owner approves xpost caption format (user-facing)
   Accept: explicit OK in chat for the "sender / author / text / canonical url" caption layout
-- [ ] Deploy xpost v2 to VM100
+- [x] Deploy xpost v2 to VM100
   Accept: scripts/deploy.sh run with explicit owner OK; smoke: X link in prod chat -> one message, original deleted
+  Evidence: deploy.sh --skip-push 2026-08-16 - HEAD 6e93f82 built+recreated, healthy after 8s, "bot started, polling"; orphaned bidlobot-xshot container+image removed; status.sh healthy, 0 errors. Live X-link smoke pending a real post in the chat.
