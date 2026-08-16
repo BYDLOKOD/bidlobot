@@ -270,12 +270,14 @@ type recYTSender struct {
 
 	DeleteErr error
 
-	Deletes    []*telego.DeleteMessageParams
-	Messages   []*telego.SendMessageParams
-	Photos     []*telego.SendPhotoParams
-	Videos     []*telego.SendVideoParams
-	Animations []*telego.SendAnimationParams
-	Documents  []*telego.SendDocumentParams
+	Deletes     []*telego.DeleteMessageParams
+	Messages    []*telego.SendMessageParams
+	Photos      []*telego.SendPhotoParams
+	Videos      []*telego.SendVideoParams
+	Animations  []*telego.SendAnimationParams
+	Documents   []*telego.SendDocumentParams
+	MediaGroups []*telego.SendMediaGroupParams
+	GroupErr    error
 }
 
 func (r *recYTSender) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
@@ -313,6 +315,15 @@ func (r *recYTSender) SendDocument(_ context.Context, p *telego.SendDocumentPara
 	defer r.mu.Unlock()
 	r.Documents = append(r.Documents, p)
 	return &telego.Message{MessageID: 1004}, nil
+}
+func (r *recYTSender) SendMediaGroup(_ context.Context, p *telego.SendMediaGroupParams) ([]telego.Message, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.MediaGroups = append(r.MediaGroups, p)
+	if r.GroupErr != nil {
+		return nil, r.GroupErr
+	}
+	return []telego.Message{{MessageID: 1005}}, nil
 }
 
 func ytTestMessage(text string) *telego.Message {

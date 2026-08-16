@@ -270,6 +270,7 @@ type youtubeMediaSender interface {
 	SendVideo(ctx context.Context, params *telego.SendVideoParams) (*telego.Message, error)
 	SendAnimation(ctx context.Context, params *telego.SendAnimationParams) (*telego.Message, error)
 	SendDocument(ctx context.Context, params *telego.SendDocumentParams) (*telego.Message, error)
+	SendMediaGroup(ctx context.Context, params *telego.SendMediaGroupParams) ([]telego.Message, error)
 }
 
 // Russian, neutral register, status glyph only - matches dm_text.go.
@@ -391,6 +392,9 @@ func (textOnlySender) SendAnimation(context.Context, *telego.SendAnimationParams
 	return nil, errNoMediaSend
 }
 func (textOnlySender) SendDocument(context.Context, *telego.SendDocumentParams) (*telego.Message, error) {
+	return nil, errNoMediaSend
+}
+func (textOnlySender) SendMediaGroup(context.Context, *telego.SendMediaGroupParams) ([]telego.Message, error) {
 	return nil, errNoMediaSend
 }
 

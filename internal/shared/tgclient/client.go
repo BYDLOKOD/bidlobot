@@ -309,6 +309,29 @@ func (c *Client) SendDocument(ctx context.Context, params *telego.SendDocumentPa
 	return msg, err
 }
 
+// SendMediaGroup wraps telego.Bot.SendMediaGroup. An album is one
+// chat-visible message so it shares the per-chat rate budget like the
+// other public sends; the X-post reposter builds mixed photo/video
+// albums through this path rather than the raw bot.
+func (c *Client) SendMediaGroup(ctx context.Context, params *telego.SendMediaGroupParams) ([]telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msgs []telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendMediaGroup",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendMediaGroup(ctx, params)
+			if e != nil {
+				return e
+			}
+			msgs = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msgs, err
+}
+
 // EditMessageText wraps telego.Bot.EditMessageText.
 func (c *Client) EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
 	if params == nil {
