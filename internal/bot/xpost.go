@@ -213,7 +213,7 @@ func xpostReposter(a *App) th.Handler {
 		case xpostSlot <- struct{}{}:
 			go func() {
 				defer func() { <-xpostSlot }()
-				processXPost(context.Background(), snd, a.log, xpostHTTPClient, xpostAPIBase, a.tweetTranslator, msg, postURL)
+				processXPost(context.Background(), snd, a.log, xpostHTTPClient, xpostAPIBase, a.tweetTranslator, a.repReactor, msg, postURL)
 			}()
 		default:
 			go sendDecline(context.Background(), snd, a.log, msg.Chat.ID, msg.GetMessageID(), publicPureFailure(), "xpost: decline note send failed")
@@ -233,6 +233,7 @@ func processXPost(
 	client *http.Client,
 	apiBase string,
 	translate func(ctx context.Context, text string) (string, error),
+	owners ownerRecorder,
 	msg *telego.Message,
 	postURL string,
 ) {
@@ -272,11 +273,17 @@ func processXPost(
 		stripXPostLinks(msg.Text+msg.Caption),
 		tweet.AuthorName, tweet.AuthorHandle, tweet.Text, tweet.URL, captionLimit,
 	)
-
-	if err := sendXPostMessage(ctx, snd, client, workDir, chatID, caption, items); err != nil {
-		log.Warn("xpost: send failed; leaving original intact", "chat_id", chatID, "message_id", messageID, "error", err)
+	sentIDs, sendErr := sendXPostMessage(ctx, snd, client, workDir, chatID, caption, items)
+	if sendErr != nil {
+		log.Warn("xpost: send failed; leaving original intact", "chat_id", chatID, "message_id", messageID, "error", sendErr)
 		sendDecline(ctx, snd, log, chatID, messageID, publicPureFailure(), "xpost: decline note send failed")
 		return
+	}
+
+	if owners != nil {
+		for _, id := range sentIDs {
+			owners.RecordOwner(chatID, id, msg.From)
+		}
 	}
 
 	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
@@ -479,6 +486,7 @@ func getXPost(ctx context.Context, client *http.Client, requestURL string) (*htt
 // sendXPostMessage delivers the repost as exactly one message: a text
 // message, a single photo/video, or a mixed album. URL photos that
 // Telegram refuses to fetch fall back to one download+upload retry.
+// Returns the sent message IDs for owner attribution.
 func sendXPostMessage(
 	ctx context.Context,
 	snd youtubeMediaSender,
@@ -487,66 +495,85 @@ func sendXPostMessage(
 	chatID int64,
 	caption string,
 	items []telego.InputMedia,
-) error {
+) ([]int, error) {
 	switch {
 	case len(items) == 0:
-		_, err := snd.SendMessage(ctx, &telego.SendMessageParams{
+		m, err := snd.SendMessage(ctx, &telego.SendMessageParams{
 			ChatID: telego.ChatID{ID: chatID},
 			Text:   caption,
 		})
-		return err
+		if err != nil {
+			return nil, err
+		}
+		return []int{m.GetMessageID()}, nil
 
 	case len(items) == 1:
-		err := sendXPostSingle(ctx, snd, chatID, caption, items[0])
+		ids, err := sendXPostSingle(ctx, snd, chatID, caption, items[0])
 		if err == nil {
-			return nil
+			return ids, nil
 		}
 		if local, ok := materializeXPostItem(ctx, client, workDir, items[0]); ok {
 			return sendXPostSingle(ctx, snd, chatID, caption, local)
 		}
-		return err
+		return nil, err
 
 	default:
 		setXPostCaption(items[0], caption)
-		_, err := snd.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
+		sent, err := snd.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
 			ChatID: telego.ChatID{ID: chatID},
 			Media:  items,
 		})
 		if err == nil {
-			return nil
+			return xPostMessageIDs(sent), nil
 		}
 		if local, ok := materializeXPostItems(ctx, client, workDir, items); ok {
 			setXPostCaption(local[0], caption)
-			if _, err2 := snd.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
+			sent, err2 := snd.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
 				ChatID: telego.ChatID{ID: chatID},
 				Media:  local,
-			}); err2 == nil {
-				return nil
+			})
+			if err2 == nil {
+				return xPostMessageIDs(sent), nil
 			}
 		}
-		return err
+		return nil, err
 	}
 }
 
-func sendXPostSingle(ctx context.Context, snd youtubeMediaSender, chatID int64, caption string, item telego.InputMedia) error {
+func sendXPostSingle(ctx context.Context, snd youtubeMediaSender, chatID int64, caption string, item telego.InputMedia) ([]int, error) {
 	switch m := item.(type) {
 	case *telego.InputMediaPhoto:
-		_, err := snd.SendPhoto(ctx, &telego.SendPhotoParams{
+		sent, err := snd.SendPhoto(ctx, &telego.SendPhotoParams{
 			ChatID:  telego.ChatID{ID: chatID},
 			Photo:   m.Media,
 			Caption: caption,
 		})
-		return err
+		if err != nil {
+			return nil, err
+		}
+		return []int{sent.GetMessageID()}, nil
 	case *telego.InputMediaVideo:
-		_, err := snd.SendVideo(ctx, &telego.SendVideoParams{
+		sent, err := snd.SendVideo(ctx, &telego.SendVideoParams{
 			ChatID:  telego.ChatID{ID: chatID},
 			Video:   m.Media,
 			Caption: caption,
 		})
-		return err
+		if err != nil {
+			return nil, err
+		}
+		return []int{sent.GetMessageID()}, nil
 	default:
-		return fmt.Errorf("unsupported album item %T", item)
+		return nil, fmt.Errorf("unsupported album item %T", item)
 	}
+}
+
+// xPostMessageIDs flattens an album send result into message IDs.
+func xPostMessageIDs(sent []telego.Message) []int {
+	ids := make([]int, 0, len(sent))
+	for _, m := range sent {
+		ids = append(ids, m.GetMessageID())
+	}
+	return ids
 }
 
 func setXPostCaption(item telego.InputMedia, caption string) {

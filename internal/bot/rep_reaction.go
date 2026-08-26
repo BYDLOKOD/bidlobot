@@ -108,6 +108,32 @@ func (x *msgAuthorIndex) Lookup(key msgKey) (msgAuthor, bool) {
 	return a, ok
 }
 
+// ownerRecorder indexes a BOT-sent message under the human whose content
+// it reposts, so reactions on the bot's message credit that human.
+// *repReactor implements it; a nil *repReactor is a valid no-op value.
+type ownerRecorder interface {
+	RecordOwner(chatID int64, msgID int, u *telego.User)
+}
+
+// RecordOwner feeds the author index for a message the bot itself sent
+// (video reposts, comment quotes, X renders). The bot never receives its
+// own outgoing messages as updates, so the stream-fed index cannot learn
+// them; reactions on such messages would otherwise die on the lookup
+// miss. isBot stays false on purpose: the recorded author is the human
+// owner, and the existing isBot guard then protects nothing here.
+// nil-receiver safe: feature off -> no-op.
+func (r *repReactor) RecordOwner(chatID int64, msgID int, u *telego.User) {
+	if r == nil || u == nil || u.IsBot {
+		return
+	}
+	r.index.Record(msgKey{chatID: chatID, msgID: msgID}, msgAuthor{
+		userID:    u.ID,
+		username:  u.Username,
+		firstName: u.FirstName,
+		isBot:     false,
+	})
+}
+
 // repReactor is the reaction->rep pipeline: author lookup, emoji mapping,
 // reputation Apply, and the 10-second batcher that emits one combined
 // message per chat.

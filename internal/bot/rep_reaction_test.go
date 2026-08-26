@@ -186,6 +186,54 @@ func TestRepReactorSkipsSelfReaction(t *testing.T) {
 	}
 }
 
+func TestRepReactorCreditsOwnerOfBotRepost(t *testing.T) {
+	r, _, store, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	// The bot reposts Alice's TikTok link as message 21; RecordOwner
+	// indexes the bot-sent message under Alice. Bob likes the REPOST.
+	r.RecordOwner(-1001234567890, 21, aliceUser)
+	if err := r.Handle(nil, reactionFor(bobUser, 21, emojiLike)); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	bal, err := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bal != 10+3 {
+		t.Fatalf("alice balance after like on bot repost = %d, want %d", bal, 10+3)
+	}
+	// The owner cannot farm rep by liking their own repost.
+	_ = r.Handle(nil, reactionFor(aliceUser, 21, emojiLike))
+	bal2, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
+	if bal2 != 10+3 {
+		t.Fatalf("self-like on own repost must not change balance, got %d", bal2)
+	}
+}
+
+func TestRepReactorRecordOwnerNilSafety(t *testing.T) {
+	var r *repReactor
+	// Feature off (nil reactor) and nil user must be no-ops.
+	r.RecordOwner(1, 2, aliceUser)
+	r2, _, _, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	r2.RecordOwner(1, 2, nil)
+	r2.RecordOwner(1, 2, &telego.User{ID: 1, IsBot: true})
+	if _, ok := r2.index.Lookup(msgKey{chatID: 1, msgID: 2}); ok {
+		t.Fatal("nil and bot users must not be indexed")
+	}
+}
+
+func TestRepReactorUnindexedBotMessageStillSkipped(t *testing.T) {
+	r, _, store, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	// A bot message never seen by RecordOwner: no index entry, no rep.
+	_ = r.Handle(nil, reactionFor(bobUser, 999, emojiLike))
+	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
+	if bal != 10 {
+		t.Fatalf("unindexed message must not change balance, got %d", bal)
+	}
+}
+
 func TestRepReactorSkipsAnonymousAndBotReactors(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()

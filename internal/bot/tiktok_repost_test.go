@@ -212,6 +212,7 @@ func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
 
 	snd := &recYTSender{}
 	log := slog.New(slog.DiscardHandler)
+	owners := &recOwners{}
 
 	msg := &telego.Message{
 		MessageID: 42,
@@ -220,8 +221,7 @@ func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
 		Caption:   "original caption",
 	}
 
-	processTikTok(context.Background(), snd, log, nil, msg,
-		"https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, owners, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Assert SendVideo was called with correct params.
 	if len(snd.Videos) != 1 {
@@ -248,6 +248,12 @@ func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
 	}
 	if d.MessageID != msg.MessageID {
 		t.Errorf("Delete MessageID = %d, want %d", d.MessageID, msg.MessageID)
+	}
+
+	// Reactions on the bot's repost must credit the original sender:
+	// the sent message ID (1002 from recYTSender) is indexed to alice.
+	if calls := owners.recorded(); len(calls) != 1 || calls[0] != "-1001234567890:1002:200" {
+		t.Fatalf("owner calls = %v", calls)
 	}
 }
 
@@ -276,8 +282,7 @@ func TestProcessTikTokVideoTooLarge(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, msg,
-		"https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Should NOT have called SendVideo (too large).
 	if len(snd.Videos) != 0 {
@@ -314,8 +319,7 @@ func TestProcessTikTokDeleteFailsRepostStands(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, msg,
-		"https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Repost MUST stand even when delete fails.
 	if len(snd.Videos) != 1 {
@@ -386,8 +390,7 @@ func TestProcessTikTok_NoAudio_QueuesNotUploads(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, q, msg,
-		"https://vt.tiktok.com/Ztest", videoPath)
+	processTikTok(context.Background(), snd, log, q, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
 
 	if len(snd.Videos) != 0 {
 		t.Errorf("expected 0 uploads, got %d", len(snd.Videos))
@@ -433,8 +436,7 @@ func TestProcessTikTok_NoAudio_NoQueue_Declines(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, msg,
-		"https://vt.tiktok.com/Ztest", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
 
 	if len(snd.Videos) != 0 {
 		t.Errorf("expected 0 uploads, got %d", len(snd.Videos))
@@ -517,7 +519,7 @@ func TestTiktokCaption(t *testing.T) {
 	if !strings.Contains(got, "check this out") {
 		t.Errorf("caption should contain raw caption; got %q", got)
 	}
-	// No caption → just the header, no trailing newline.
+	// No caption -> just the header, no trailing newline.
 	got = tiktokCaption("bob", "Bob", "")
 	if strings.Contains(got, "\n") {
 		t.Errorf("empty caption should not add newline; got %q", got)

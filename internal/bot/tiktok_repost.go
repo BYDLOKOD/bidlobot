@@ -244,6 +244,13 @@ func tiktokReposter(a *App) th.Handler {
 		if msg == nil {
 			return thctx.Next(update)
 		}
+		// Comment permalinks are also video URLs: quote the comment instead
+		// of replaying the video.
+		if act, videoURL, commentID := tiktokCommentDecision(msg); act {
+			go processTikTokComment(context.Background(), a.sanitizerSender(), a.log,
+				tiktokCommentHTTPClient, a.repReactor, msg, videoURL, commentID)
+			return thctx.Next(update)
+		}
 		act, tiktokURL := tiktokDecision(msg)
 		if !act {
 			return thctx.Next(update)
@@ -252,7 +259,7 @@ func tiktokReposter(a *App) th.Handler {
 		// context.Background() is mandatory -- the per-update ctx is
 		// cancelled when the handler returns.
 		go processTikTok(context.Background(), a.sanitizerSender(), a.log,
-			a.deferredQ, msg, tiktokURL, "")
+			a.deferredQ, a.repReactor, msg, tiktokURL, "")
 		return thctx.Next(update)
 	}
 }
@@ -277,6 +284,7 @@ func processTikTok(
 	snd youtubeMediaSender,
 	log *slog.Logger,
 	queue DeferredQueuer,
+	owners ownerRecorder,
 	msg *telego.Message,
 	tiktokURL string,
 	videoPath string,
@@ -337,7 +345,7 @@ func processTikTok(
 	defer file.Close()
 
 	// Step 5: Repost (first, before delete - repost-first contract).
-	_, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
+	sent, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		Video:     telego.InputFile{File: file},
 		Caption:   tiktokCaption(msg.From.Username, msg.From.FirstName, msg.Caption),
@@ -347,6 +355,10 @@ func processTikTok(
 		log.Warn("tiktok: repost failed; leaving original intact", "chat_id", chatID, "error", sendErr)
 		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
 		return
+	}
+
+	if owners != nil {
+		owners.RecordOwner(chatID, sent.GetMessageID(), msg.From)
 	}
 
 	// Step 6: Delete original (only after successful repost).
@@ -411,15 +423,17 @@ func enqueueOrFail(
 		publicPureFailure(), "tiktok: decline note send failed")
 }
 
-// tryTikTokExport attempts the full download→validate→upload→delete
+// tryTikTokExport attempts the full download->validate->upload->delete
 // cycle. Returns nil on success (caller removes from queue), error on
 // any failure (caller keeps in queue for next flush).
 func tryTikTokExport(
 	ctx context.Context,
 	snd youtubeMediaSender,
 	log *slog.Logger,
+	owners ownerRecorder,
 	chatID int64,
 	msgID int,
+	userID int64,
 	url, username, firstName, caption string,
 ) error {
 	workDir, err := os.MkdirTemp("", "bidlobot-tiktok-")
@@ -452,7 +466,7 @@ func tryTikTokExport(
 	}
 	defer file.Close()
 
-	_, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
+	sent, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
 		ChatID:    telego.ChatID{ID: chatID},
 		Video:     telego.InputFile{File: file},
 		Caption:   tiktokCaption(username, firstName, caption),
@@ -460,6 +474,13 @@ func tryTikTokExport(
 	})
 	if sendErr != nil {
 		return fmt.Errorf("send: %w", sendErr)
+	}
+	if owners != nil {
+		owners.RecordOwner(chatID, sent.GetMessageID(), &telego.User{
+			ID:        userID,
+			Username:  username,
+			FirstName: firstName,
+		})
 	}
 
 	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
