@@ -666,17 +666,27 @@ func defaultDownloadTikTokVideo(ctx context.Context, tiktokURL, workDir string) 
 	if err != nil {
 		return "", err
 	}
-	fi, err := os.Stat(videoPath)
-	if err != nil {
+	if err := validateTikTokVideo(videoPath); err != nil {
 		return "", err
 	}
+	return videoPath, nil
+}
+
+// validateTikTokVideo applies the repost gate to a downloaded video:
+// size cap and audio presence (TikTok serves muted variants to
+// non-browser clients - never post a silent video).
+func validateTikTokVideo(videoPath string) error {
+	fi, err := os.Stat(videoPath)
+	if err != nil {
+		return err
+	}
 	if fi.Size() > maxVideoSize {
-		return "", fmt.Errorf("tiktok: video too large (%d bytes)", fi.Size())
+		return fmt.Errorf("tiktok: video too large (%d bytes)", fi.Size())
 	}
 	if !ffprobeHasAudio(videoPath) {
-		return "", errors.New("tiktok: no audio stream")
+		return errors.New("tiktok: no audio stream")
 	}
-	return videoPath, nil
+	return nil
 }
 
 // postTikTokVideo downloads and posts tiktokURL as a bare repost (no

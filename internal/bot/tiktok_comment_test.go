@@ -247,16 +247,18 @@ func TestFetchTikTokCommentAPIError(t *testing.T) {
 // recCommentSender records sends and returns configurable message IDs.
 // failSends makes the next N SendMessage calls fail (fallback-path tests).
 type recCommentSender struct {
-	mu           sync.Mutex
-	Messages     []*telego.SendMessageParams
-	Photos       []*telego.SendPhotoParams
-	Animations   []*telego.SendAnimationParams
-	Videos       []*telego.SendVideoParams
-	Groups       []*telego.SendMediaGroupParams
-	Deletes      []*telego.DeleteMessageParams
-	nextID       int
-	failSends    int
-	sendFailures int
+	mu            sync.Mutex
+	Messages      []*telego.SendMessageParams
+	Photos        []*telego.SendPhotoParams
+	Animations    []*telego.SendAnimationParams
+	Videos        []*telego.SendVideoParams
+	Groups        []*telego.SendMediaGroupParams
+	Deletes       []*telego.DeleteMessageParams
+	nextID        int
+	failSends     int
+	sendFailures  int
+	failVideos    int
+	videoFailures int
 }
 
 func newRecCommentSender() *recCommentSender { return &recCommentSender{nextID: 500} }
@@ -295,6 +297,11 @@ func (s *recCommentSender) SendAnimation(_ context.Context, p *telego.SendAnimat
 func (s *recCommentSender) SendVideo(_ context.Context, p *telego.SendVideoParams) (*telego.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failVideos > 0 {
+		s.failVideos--
+		s.videoFailures++
+		return nil, errors.New("video send failed")
+	}
 	s.Videos = append(s.Videos, p)
 	return s.send(), nil
 }
@@ -617,6 +624,88 @@ func TestProcessTikTokCommentVideoDownloadFailsStandalone(t *testing.T) {
 	}
 	if recs := videos.recorded(); len(recs) != 0 {
 		t.Fatalf("no index record on failed download, records = %v", recs)
+	}
+}
+
+func TestProcessTikTokCommentVideoSendFailsStandalone(t *testing.T) {
+	origDownload := downloadTikTokVideo
+	downloadTikTokVideo = func(_ context.Context, _, workDir string) (string, error) {
+		p := filepath.Join(workDir, "video.mp4")
+		if err := os.WriteFile(p, []byte("fake mp4"), 0644); err != nil {
+			return "", err
+		}
+		return p, nil
+	}
+	defer func() { downloadTikTokVideo = origDownload }()
+
+	_, srv := withTikwmStub(t, map[string]string{
+		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "hi")}, 1, false),
+	}, nil)
+	snd := newRecCommentSender()
+	snd.failVideos = 1
+	videos := &recVideoIndex{} // miss -> video post -> send fails
+	owners := &recOwners{}
+	msg := ttCommentMsg()
+
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, videos, msg,
+		"https://www.tiktok.com/@u/video/777", "42")
+
+	if snd.videoFailures != 1 {
+		t.Fatalf("video send must fail once, failures = %d", snd.videoFailures)
+	}
+	if len(snd.Messages) != 1 || snd.Messages[0].ReplyParameters != nil {
+		t.Fatalf("quote must fall back to standalone, messages = %+v", snd.Messages)
+	}
+	if recs := videos.recorded(); len(recs) != 0 {
+		t.Fatalf("no index record when the video send failed, records = %v", recs)
+	}
+	if calls := owners.recorded(); len(calls) != 1 || calls[0] != "-1001234567890:501:7" {
+		t.Fatalf("only the comment must be credited to the sharer, calls = %v", calls)
+	}
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("original must be deleted after standalone quote, deletes = %+v", snd.Deletes)
+	}
+}
+
+func TestValidateTikTokVideo(t *testing.T) {
+	dir := t.TempDir()
+
+	// Normal file passes.
+	okPath := filepath.Join(dir, "ok.mp4")
+	if err := os.WriteFile(okPath, []byte("fake mp4"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origFFprobe := ffprobeHasAudio
+	ffprobeHasAudio = func(string) bool { return true }
+	defer func() { ffprobeHasAudio = origFFprobe }()
+	if err := validateTikTokVideo(okPath); err != nil {
+		t.Fatalf("valid video rejected: %v", err)
+	}
+
+	// Oversized video rejected.
+	bigPath := filepath.Join(dir, "big.mp4")
+	f, err := os.Create(bigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Truncate(maxVideoSize + 1); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	if err := validateTikTokVideo(bigPath); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("oversized video must be rejected, err = %v", err)
+	}
+
+	// Muted video rejected.
+	ffprobeHasAudio = func(string) bool { return false }
+	if err := validateTikTokVideo(okPath); err == nil || !strings.Contains(err.Error(), "no audio") {
+		t.Fatalf("muted video must be rejected, err = %v", err)
+	}
+
+	// Missing file rejected.
+	if err := validateTikTokVideo(filepath.Join(dir, "nope.mp4")); err == nil {
+		t.Fatal("missing file must be rejected")
 	}
 }
 
