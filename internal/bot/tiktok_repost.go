@@ -255,9 +255,26 @@ func tiktokReposter(a *App) th.Handler {
 		if !act {
 			return thctx.Next(update)
 		}
-		// Fire-and-forget: download + validate + upload in background.
-		// context.Background() is mandatory -- the per-update ctx is
-		// cancelled when the handler returns.
+		// Short links (vm./vt.) may hide a comment permalink behind their
+		// redirect (the app's share button on a comment produces exactly
+		// that). Resolve first, then dispatch: comment quote or video
+		// replay. Fire-and-forget either way - context.Background() is
+		// mandatory, the per-update ctx is cancelled when the handler
+		// returns.
+		if isTikTokShortLink(tiktokURL) {
+			snd := a.sanitizerSender()
+			go func() {
+				ctx := context.Background()
+				if final := resolveTikTokURL(ctx, tiktokCommentHTTPClient, tiktokURL); final != "" {
+					if videoURL, commentID, ok := tiktokCommentIDFromURL(final); ok {
+						processTikTokComment(ctx, snd, a.log, tiktokCommentHTTPClient, a.repReactor, msg, videoURL, commentID)
+						return
+					}
+				}
+				processTikTok(ctx, snd, a.log, a.deferredQ, a.repReactor, msg, tiktokURL, "")
+			}()
+			return thctx.Next(update)
+		}
 		go processTikTok(context.Background(), a.sanitizerSender(), a.log,
 			a.deferredQ, a.repReactor, msg, tiktokURL, "")
 		return thctx.Next(update)

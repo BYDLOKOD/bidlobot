@@ -2,10 +2,16 @@ package bot
 
 // TikTok comment quote ("Парсинг ссылки на коммент", issue #1).
 //
-// A TikTok comment permalink (the app's copy-link on a comment) is the
-// regular video URL plus a comment_id query parameter:
+// Two link shapes carry a comment reference:
 //
-//	https://www.tiktok.com/@user/video/123?comment_id=456&is_copy_url=1&is_from_webapp=v1
+//	https://www.tiktok.com/@user/video/123?comment_id=456        (web timestamp permalink)
+//	https://vt.tiktok.com/ZSxxxx/  ->  .../video/123?share_comment_id=456  (app share button)
+//
+// The app's share button on a comment produces a SHORT link whose
+// redirect target carries share_comment_id; the middleware resolves
+// short links before dispatching, so both shapes reach the quote
+// pipeline. App share links often point at a REPLY, so the scan covers
+// reply threads too (comments with reply_total > 0, newest-first).
 //
 // When a supergroup message carries such a link, the bot fetches the
 // comment (author, text, attached images) and posts a quote attributed to
@@ -26,12 +32,9 @@ package bot
 // pacer.
 //
 // v1 gaps (documented deliberately):
-//   - reply comments: resolving a NESTED reply would mean scanning every
-//     parent's reply thread; only top-level comments are matched, a reply
-//     link declines like any other not-found comment.
-//   - the comment is located by paginating the video's comment list
-//     newest-first, capped at tiktokCommentMaxPages; on heavily commented
-//     videos an old comment may fall outside the window.
+//   - the scan is capped (tiktokCommentMaxRequests overall, newest
+// first): on heavily commented videos a buried or old comment may fall
+// outside the window and decline.
 //   - fetch failures are NOT queued for /flush (unlike video downloads):
 //     the public decline reply is the whole retry story.
 //   - animated images (GIF stickers) in a MULTI-image comment are sent as
@@ -66,9 +69,17 @@ const (
 	// писал:"). No "(а)": the commenter's gender is unknown.
 	msgTikTokCommentHeader = "\U0001F464 <b>@%s</b> \u043F\u0438\u0441\u0430\u043B:"
 
-	// tiktokCommentMaxPages caps the newest-first scan while locating
-	// the comment (20 comments per page).
+	// tiktokCommentMaxPages caps the newest-first top-level scan while
+	// locating the comment (20 comments per page).
 	tiktokCommentMaxPages = 10
+
+	// tiktokCommentMaxRequests is the overall request budget for one
+	// comment scan (top-level pages + reply threads); 40 x 1.5s bounds
+	// the worst case at one minute.
+	tiktokCommentMaxRequests = 40
+
+	// tiktokCommentMaxReplyPages caps reply pagination per thread.
+	tiktokCommentMaxReplyPages = 3
 
 	// tiktokCommentPageCount is the tikwm page size.
 	tiktokCommentPageCount = 20
@@ -78,11 +89,17 @@ const (
 	tiktokCommentMediaCap = 10 * 1024 * 1024
 )
 
-// tikwmAPIBase is the tikwm comment-list root; a variable so tests can
-// point the fetcher at a stub server.
-var tikwmAPIBase = "https://www.tikwm.com/api/comment/list"
+// tikwmAPIHost is the tikwm API root; a variable so tests can point the
+// fetcher at a stub server. tikwmPathList serves the top-level comments
+// of a video (url param), tikwmPathReply serves one comment's replies
+// (video_id + comment_id params).
+var tikwmAPIHost = "https://www.tikwm.com"
 
-// tikwmMinInterval is the global pacing between tikwm calls (free tier
+const (
+	tikwmPathList  = "/api/comment/list"
+	tikwmPathReply = "/api/comment/reply"
+)
+
 // advertises 1 request/second; 1.5s keeps a safe margin - the limiter
 // rejects 1.1s gaps). A variable so tests can shrink it.
 var tikwmMinInterval = 1500 * time.Millisecond
@@ -117,8 +134,11 @@ func tikwmPace() {
 
 // tiktokCommentDecision is the pure gate: applies the same exclusions as
 // tiktokDecision and returns the first TikTok video permalink that
-// carries a comment_id query parameter. act=false when the message must
-// fall through to the video replayer (or pass untouched).
+// carries a comment reference. Canonical links from the web carry
+// comment_id; app share links carry share_comment_id. Short links
+// (vm./vt.) hide both behind a redirect - the middleware resolves them
+// before dispatching, this gate only sees raw text. act=false when the
+// message must fall through to the video replayer (or pass untouched).
 func tiktokCommentDecision(msg *telego.Message) (act bool, videoURL, commentID string) {
 	if msg == nil {
 		return false, "", ""
@@ -146,20 +166,82 @@ func tiktokCommentDecision(msg *telego.Message) (act bool, videoURL, commentID s
 	}
 
 	for _, raw := range candidates {
-		u, err := url.Parse(ensureScheme(raw))
-		if err != nil || !isTikTokHost(u.Host) {
-			continue
-		}
-		// A comment permalink is a canonical video URL with comment_id;
-		// short links (vm./vt.) never carry the parameter.
-		if !strings.Contains(u.Path, "/video/") {
-			continue
-		}
-		if cid := u.Query().Get("comment_id"); cid != "" {
-			return true, raw, cid
+		if vid, cid, ok := tiktokCommentIDFromURL(raw); ok {
+			return true, vid, cid
 		}
 	}
 	return false, "", ""
+}
+
+// tiktokCommentIDFromURL extracts the comment reference from one TikTok
+// URL. Both param spellings are accepted: comment_id (web timestamp
+// permalink) and share_comment_id (app share button). Returns the
+// canonical video URL (scheme://host/path, tracking query stripped - it
+// is what tikwm expects) and the comment id.
+func tiktokCommentIDFromURL(raw string) (videoURL, commentID string, ok bool) {
+	u, err := url.Parse(ensureScheme(raw))
+	if err != nil || !isTikTokHost(u.Host) {
+		return "", "", false
+	}
+	if !strings.Contains(u.Path, "/video/") {
+		return "", "", false
+	}
+	cid := u.Query().Get("comment_id")
+	if cid == "" {
+		cid = u.Query().Get("share_comment_id")
+	}
+	if cid == "" {
+		return "", "", false
+	}
+	return u.Scheme + "://" + u.Host + u.Path, cid, true
+}
+
+// isTikTokShortLink reports a vm./vt. redirect link: it may hide a
+// comment permalink, so the middleware resolves it before dispatch.
+func isTikTokShortLink(raw string) bool {
+	u, err := url.Parse(ensureScheme(raw))
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Host)
+	if h, _, ok := strings.Cut(host, ":"); ok {
+		host = h
+	}
+	return host == "vm.tiktok.com" || host == "vt.tiktok.com"
+}
+
+// resolveTikTokURL follows the redirect chain of a TikTok link and
+// returns the final URL ("" on any error).
+func resolveTikTokURL(ctx context.Context, client *http.Client, raw string) string {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ensureScheme(raw), nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+	resp, err := client.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+	return resp.Request.URL.String()
+}
+
+// tiktokVideoID extracts the numeric video id from a canonical video
+// URL path ("" when absent).
+func tiktokVideoID(videoURL string) string {
+	u, err := url.Parse(ensureScheme(videoURL))
+	if err != nil {
+		return ""
+	}
+	_, id, ok := strings.Cut(u.Path, "/video/")
+	if !ok {
+		return ""
+	}
+	if rest, _, ok := strings.Cut(id, "/"); ok {
+		id = rest
+	}
+	return id
 }
 
 // --- Fetch ----------------------------------------------------------------
@@ -173,10 +255,11 @@ type tikwmCommentUser struct {
 // tikwmComment is one tikwm comment row. Images is a plain list of signed
 // CDN URLs (comment stickers/photos, including GIFs).
 type tikwmComment struct {
-	ID     string           `json:"id"`
-	Text   string           `json:"text"`
-	User   tikwmCommentUser `json:"user"`
-	Images []string         `json:"images"`
+	ID         string           `json:"id"`
+	Text       string           `json:"text"`
+	User       tikwmCommentUser `json:"user"`
+	Images     []string         `json:"images"`
+	ReplyTotal int              `json:"reply_total"`
 }
 
 // tikwmCommentPage is one comment-list response. code 0 = success.
@@ -190,49 +273,72 @@ type tikwmCommentPage struct {
 	} `json:"data"`
 }
 
-// fetchTikTokComment locates one top-level comment by id, paginating the
-// tikwm comment list newest-first. The returned cursor (not page math)
-// drives the next request: tikwm's cursor does not always advance by
-// count, and a non-advancing cursor stops the scan.
+// tikwmGet performs one paced tikwm GET and decodes the page. budget
+// counts the remaining requests across the whole scan (top-level pages
+// plus reply threads); -1 on success means "budget exhausted".
+func tikwmGet(ctx context.Context, client *http.Client, budget *int, path string, q url.Values) (tikwmCommentPage, error) {
+	tikwmPace()
+	*budget--
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, tikwmAPIHost+path+"?"+q.Encode(), nil)
+	if err != nil {
+		return tikwmCommentPage{}, fmt.Errorf("building tikwm request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return tikwmCommentPage{}, fmt.Errorf("tikwm request: %w", err)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return tikwmCommentPage{}, fmt.Errorf("tikwm status %d", resp.StatusCode)
+	}
+	if readErr != nil {
+		return tikwmCommentPage{}, fmt.Errorf("reading tikwm body: %w", readErr)
+	}
+
+	var parsed tikwmCommentPage
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return tikwmCommentPage{}, fmt.Errorf("decoding tikwm response: %w", err)
+	}
+	if parsed.Code != 0 {
+		return tikwmCommentPage{}, fmt.Errorf("tikwm error %d: %s", parsed.Code, parsed.Msg)
+	}
+	return parsed, nil
+}
+
+// fetchTikTokComment locates one comment by id: first the top-level list
+// (newest-first), then the reply threads of comments that have replies -
+// app share links often point at a reply. The returned cursor (not page
+// math) drives each loop: tikwm's cursor does not always advance by
+// count, and a non-advancing cursor stops the scan. The overall request
+// budget bounds the worst-case wall time (1.5s per request).
 func fetchTikTokComment(ctx context.Context, client *http.Client, videoURL, commentID string) (tikwmComment, error) {
+	budget := tiktokCommentMaxRequests
+
+	// Phase 1: top-level pages.
+	var threads []tikwmComment
 	cursor := 0
 	for range tiktokCommentMaxPages {
-		q := url.Values{
+		if budget <= 0 {
+			return tikwmComment{}, errTikTokCommentNotFound
+		}
+		parsed, err := tikwmGet(ctx, client, &budget, tikwmPathList, url.Values{
 			"url":    {videoURL},
 			"count":  {strconv.Itoa(tiktokCommentPageCount)},
 			"cursor": {strconv.Itoa(cursor)},
-		}
-		tikwmPace()
-
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, tikwmAPIBase+"?"+q.Encode(), nil)
+		})
 		if err != nil {
-			return tikwmComment{}, fmt.Errorf("building tikwm request: %w", err)
-		}
-		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return tikwmComment{}, fmt.Errorf("tikwm request: %w", err)
-		}
-		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			return tikwmComment{}, fmt.Errorf("tikwm status %d", resp.StatusCode)
-		}
-		if readErr != nil {
-			return tikwmComment{}, fmt.Errorf("reading tikwm body: %w", readErr)
-		}
-
-		var parsed tikwmCommentPage
-		if err := json.Unmarshal(body, &parsed); err != nil {
-			return tikwmComment{}, fmt.Errorf("decoding tikwm response: %w", err)
-		}
-		if parsed.Code != 0 {
-			return tikwmComment{}, fmt.Errorf("tikwm error %d: %s", parsed.Code, parsed.Msg)
+			return tikwmComment{}, err
 		}
 		for _, c := range parsed.Data.Comments {
 			if c.ID == commentID {
 				return c, nil
+			}
+			if c.ReplyTotal > 0 {
+				threads = append(threads, c)
 			}
 		}
 		if !parsed.Data.HasMore || parsed.Data.Cursor <= cursor {
@@ -240,10 +346,40 @@ func fetchTikTokComment(ctx context.Context, client *http.Client, videoURL, comm
 		}
 		cursor = parsed.Data.Cursor
 	}
+
+	// Phase 2: reply threads, newest threads first.
+	videoID := tiktokVideoID(videoURL)
+	if videoID == "" {
+		return tikwmComment{}, errTikTokCommentNotFound
+	}
+	for _, parent := range threads {
+		cursor := 0
+		for range tiktokCommentMaxReplyPages {
+			if budget <= 0 {
+				return tikwmComment{}, errTikTokCommentNotFound
+			}
+			parsed, err := tikwmGet(ctx, client, &budget, tikwmPathReply, url.Values{
+				"video_id":   {videoID},
+				"comment_id": {parent.ID},
+				"count":      {strconv.Itoa(tiktokCommentPageCount)},
+				"cursor":     {strconv.Itoa(cursor)},
+			})
+			if err != nil {
+				return tikwmComment{}, err
+			}
+			for _, c := range parsed.Data.Comments {
+				if c.ID == commentID {
+					return c, nil
+				}
+			}
+			if !parsed.Data.HasMore || parsed.Data.Cursor <= cursor {
+				break
+			}
+			cursor = parsed.Data.Cursor
+		}
+	}
 	return tikwmComment{}, errTikTokCommentNotFound
 }
-
-// --- Render ---------------------------------------------------------------
 
 // tiktokCommentCaption builds the HTML caption: commenter header plus the
 // comment text (issue #1 format). An image-only comment keeps just the

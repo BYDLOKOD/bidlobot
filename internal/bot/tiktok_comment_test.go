@@ -33,6 +33,12 @@ func TestTikTokCommentDecision(t *testing.T) {
 			commentID: "9876543210",
 		},
 		{
+			name:      "app share param",
+			msg:       ttTestMessage("https://www.tiktok.com/@user/video/123456789?share_comment_id=777&share_app_id=1233"),
+			want:      true,
+			commentID: "777",
+		},
+		{
 			name:      "comment id first param",
 			msg:       ttTestMessage("https://www.tiktok.com/@user/video/123456789?comment_id=555&foo=bar"),
 			want:      true,
@@ -91,11 +97,15 @@ func TestTikTokCommentDecisionCaptionEntity(t *testing.T) {
 	msg := ttTestMessage("")
 	msg.Caption = "look at this"
 	msg.CaptionEntities = []telego.MessageEntity{
-		{Type: "url", Offset: 0, Length: 5, URL: "https://www.tiktok.com/@u/video/777?comment_id=42"},
+		{Type: "url", Offset: 0, Length: 5, URL: "https://www.tiktok.com/@u/video/777?comment_id=42&is_copy_url=1"},
 	}
 	act, videoURL, cid := tiktokCommentDecision(msg)
-	if !act || cid != "42" || videoURL != "https://www.tiktok.com/@u/video/777?comment_id=42" {
-		t.Fatalf("act=%v url=%q cid=%q", act, videoURL, cid)
+	if !act || cid != "42" {
+		t.Fatalf("act=%v cid=%q", act, cid)
+	}
+	// The video URL is canonicalized: tracking query stripped (tikwm form).
+	if videoURL != "https://www.tiktok.com/@u/video/777" {
+		t.Fatalf("url = %q", videoURL)
 	}
 }
 
@@ -112,28 +122,28 @@ func TestTikTokCommentCaption(t *testing.T) {
 
 // --- fetch ----------------------------------------------------------------
 
-// tikwmStubServer serves a scripted comment list: pages keyed by cursor,
-// recording every request query for assertions.
+// tikwmStub serves scripted comment pages. listPages maps top-level
+// cursor -> body; replyPages maps "<parentID>:<cursor>" -> body. Every
+// request path+query is recorded for assertions.
 type tikwmStub struct {
-	mu       sync.Mutex
-	requests []urlQuery
-	pages    map[string]string // cursor -> JSON body
-}
-
-type urlQuery struct {
-	url    string
-	cursor string
-	count  string
+	mu         sync.Mutex
+	requests   []string
+	listPages  map[string]string
+	replyPages map[string]string
 }
 
 func (s *tikwmStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
 	s.mu.Lock()
-	s.requests = append(s.requests, urlQuery{
-		url:    r.URL.Query().Get("url"),
-		cursor: r.URL.Query().Get("cursor"),
-		count:  r.URL.Query().Get("count"),
-	})
-	body, ok := s.pages[r.URL.Query().Get("cursor")]
+	s.requests = append(s.requests, r.URL.Path+"?"+r.URL.RawQuery)
+	var body string
+	var ok bool
+	switch r.URL.Path {
+	case tikwmPathList:
+		body, ok = s.listPages[q.Get("cursor")]
+	case tikwmPathReply:
+		body, ok = s.replyPages[q.Get("comment_id")+":"+q.Get("cursor")]
+	}
 	s.mu.Unlock()
 	if !ok {
 		w.WriteHeader(http.StatusNotFound)
@@ -141,6 +151,12 @@ func (s *tikwmStub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	fmt.Fprint(w, body)
+}
+
+func (s *tikwmStub) requestCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.requests)
 }
 
 func tikwmPage(comments []tikwmComment, cursor int, hasMore bool) string {
@@ -157,14 +173,17 @@ func ttComment(id, handle, text string, images ...string) tikwmComment {
 	return tikwmComment{ID: id, Text: text, User: tikwmCommentUser{UniqueID: handle}, Images: images}
 }
 
-func withTikwmStub(t *testing.T, pages map[string]string) (*tikwmStub, *httptest.Server) {
+func withTikwmStub(t *testing.T, listPages, replyPages map[string]string) (*tikwmStub, *httptest.Server) {
 	t.Helper()
-	stub := &tikwmStub{pages: pages}
+	if replyPages == nil {
+		replyPages = map[string]string{}
+	}
+	stub := &tikwmStub{listPages: listPages, replyPages: replyPages}
 	srv := httptest.NewServer(stub)
 	t.Cleanup(srv.Close)
-	prevBase, prevInterval := tikwmAPIBase, tikwmMinInterval
-	tikwmAPIBase, tikwmMinInterval = srv.URL, 0
-	t.Cleanup(func() { tikwmAPIBase, tikwmMinInterval = prevBase, prevInterval })
+	prevHost, prevInterval := tikwmAPIHost, tikwmMinInterval
+	tikwmAPIHost, tikwmMinInterval = srv.URL, 0
+	t.Cleanup(func() { tikwmAPIHost, tikwmMinInterval = prevHost, prevInterval })
 	return stub, srv
 }
 
@@ -172,7 +191,7 @@ func TestFetchTikTokCommentPaginatesByCursor(t *testing.T) {
 	stub, _ := withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("a", "u1", "one")}, 2, true),
 		"2": tikwmPage([]tikwmComment{ttComment("b", "u2", "two"), ttComment("target", "u3", "three", "https://cdn/x.jpeg")}, 4, false),
-	})
+	}, nil)
 	got, err := fetchTikTokComment(context.Background(), srv0(), "https://www.tiktok.com/@u/video/1", "target")
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
@@ -180,21 +199,21 @@ func TestFetchTikTokCommentPaginatesByCursor(t *testing.T) {
 	if got.ID != "target" || got.User.UniqueID != "u3" || got.Text != "three" || len(got.Images) != 1 {
 		t.Fatalf("comment = %+v", got)
 	}
-	if len(stub.requests) != 2 {
-		t.Fatalf("requests = %d, want 2", len(stub.requests))
+	if stub.requestCount() != 2 {
+		t.Fatalf("requests = %d, want 2", stub.requestCount())
 	}
-	if stub.requests[1].cursor != "2" {
-		t.Fatalf("second page cursor = %q, want 2 (returned cursor drives pagination)", stub.requests[1].cursor)
+	if !strings.Contains(stub.requests[1], "cursor=2") {
+		t.Fatalf("second page = %q, want cursor=2 (returned cursor drives pagination)", stub.requests[1])
 	}
-	if stub.requests[0].url != "https://www.tiktok.com/@u/video/1" {
-		t.Fatalf("video url = %q", stub.requests[0].url)
+	if !strings.Contains(stub.requests[0], "url=https%3A%2F%2Fwww.tiktok.com%2F%40u%2Fvideo%2F1") {
+		t.Fatalf("list request = %q", stub.requests[0])
 	}
 }
 
 func TestFetchTikTokCommentNotFound(t *testing.T) {
 	_, _ = withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("a", "u1", "one")}, 1, false),
-	})
+	}, nil)
 	if _, err := fetchTikTokComment(context.Background(), srv0(), "https://www.tiktok.com/@u/video/1", "nope"); err != errTikTokCommentNotFound {
 		t.Fatalf("err = %v, want errTikTokCommentNotFound", err)
 	}
@@ -203,7 +222,7 @@ func TestFetchTikTokCommentNotFound(t *testing.T) {
 func TestFetchTikTokCommentAPIError(t *testing.T) {
 	_, _ = withTikwmStub(t, map[string]string{
 		"0": `{"code":1001,"msg":"url invalid"}`,
-	})
+	}, nil)
 	if _, err := fetchTikTokComment(context.Background(), srv0(), "https://www.tiktok.com/@u/video/1", "x"); err == nil || !strings.Contains(err.Error(), "1001") {
 		t.Fatalf("err = %v, want code 1001 error", err)
 	}
@@ -305,7 +324,7 @@ func srv0() *http.Client { return &http.Client{} }
 func TestProcessTikTokCommentTextOnly(t *testing.T) {
 	_, srv := withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "жиза <вот это> да")}, 1, false),
-	})
+	}, nil)
 	snd := newRecCommentSender()
 	owners := &recOwners{}
 	msg := ttCommentMsg()
@@ -330,7 +349,7 @@ func TestProcessTikTokCommentTextOnly(t *testing.T) {
 func TestProcessTikTokCommentSinglePhoto(t *testing.T) {
 	_, srv := withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "", "https://cdn.example/x.jpeg")}, 1, false),
-	})
+	}, nil)
 	snd := newRecCommentSender()
 	msg := ttCommentMsg()
 
@@ -351,7 +370,7 @@ func TestProcessTikTokCommentSinglePhoto(t *testing.T) {
 func TestProcessTikTokCommentGIF(t *testing.T) {
 	_, srv := withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "lo", "https://cdn.example/x.gif")}, 1, false),
-	})
+	}, nil)
 	snd := newRecCommentSender()
 	msg := ttCommentMsg()
 
@@ -370,7 +389,7 @@ func TestProcessTikTokCommentAlbum(t *testing.T) {
 	_, srv := withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "two imgs",
 			"https://cdn.example/1.jpeg", "https://cdn.example/2.jpeg")}, 1, false),
-	})
+	}, nil)
 	snd := newRecCommentSender()
 	owners := &recOwners{}
 	msg := ttCommentMsg()
@@ -394,7 +413,7 @@ func TestProcessTikTokCommentAlbum(t *testing.T) {
 func TestProcessTikTokCommentNotFoundDeclines(t *testing.T) {
 	_, srv := withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("a", "u1", "one")}, 1, false),
-	})
+	}, nil)
 	snd := newRecCommentSender()
 	owners := &recOwners{}
 	msg := ttCommentMsg()
@@ -415,7 +434,7 @@ func TestProcessTikTokCommentNotFoundDeclines(t *testing.T) {
 func TestTikTokReposterRoutesCommentPermalinkToQuote(t *testing.T) {
 	_, _ = withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "hi")}, 1, false),
-	})
+	}, nil)
 	api := testutil.NewMockAPI()
 	a := &App{sender: api, log: discardLogger()}
 	msg := ttCommentMsg()
@@ -442,5 +461,109 @@ func TestTikTokReposterRoutesCommentPermalinkToQuote(t *testing.T) {
 	}
 	if got != "👤 <b>@commenter</b> писал:\nhi" {
 		t.Fatalf("quote = %q", got)
+	}
+}
+
+// --- short links and reply threads ------------------------------------------
+
+func TestTikTokCommentIDFromURL(t *testing.T) {
+	tests := []struct {
+		name      string
+		raw       string
+		wantOK    bool
+		wantVideo string
+		wantCID   string
+	}{
+		{
+			name:      "web permalink",
+			raw:       "https://www.tiktok.com/@u/video/111?comment_id=22&is_copy_url=1",
+			wantOK:    true,
+			wantVideo: "https://www.tiktok.com/@u/video/111",
+			wantCID:   "22",
+		},
+		{
+			name:      "app share permalink",
+			raw:       "https://www.tiktok.com/@u/video/111?share_comment_id=33&share_app_id=1233",
+			wantOK:    true,
+			wantVideo: "https://www.tiktok.com/@u/video/111",
+			wantCID:   "33",
+		},
+		{name: "plain video", raw: "https://www.tiktok.com/@u/video/111"},
+		{name: "short link", raw: "https://vt.tiktok.com/ZSabc/"},
+		{name: "non-video path", raw: "https://www.tiktok.com/@u?comment_id=9"},
+		{name: "foreign host", raw: "https://tiktok.com.ru/x/video/1?comment_id=9"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			video, cid, ok := tiktokCommentIDFromURL(tc.raw)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && (video != tc.wantVideo || cid != tc.wantCID) {
+				t.Fatalf("video=%q cid=%q", video, cid)
+			}
+		})
+	}
+}
+
+func TestIsTikTokShortLink(t *testing.T) {
+	if !isTikTokShortLink("https://vt.tiktok.com/ZS9B6twKLCemh-cIAnX") {
+		t.Fatal("vt link must be short")
+	}
+	if !isTikTokShortLink("https://vm.tiktok.com/ABCDEF/") {
+		t.Fatal("vm link must be short")
+	}
+	if isTikTokShortLink("https://www.tiktok.com/@u/video/111?comment_id=1") {
+		t.Fatal("canonical link is not short")
+	}
+}
+
+func TestTikTokVideoID(t *testing.T) {
+	if got := tiktokVideoID("https://www.tiktok.com/@romasrdk/video/7677856345864834325?x=1"); got != "7677856345864834325" {
+		t.Fatalf("id = %q", got)
+	}
+	if got := tiktokVideoID("https://vt.tiktok.com/abc/"); got != "" {
+		t.Fatalf("short link id = %q, want empty", got)
+	}
+}
+
+func TestResolveTikTokURLFollowsRedirects(t *testing.T) {
+	final := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "video page")
+	}))
+	defer final.Close()
+	hop := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, final.URL+"/@u/video/111?share_comment_id=42", http.StatusFound)
+	}))
+	defer hop.Close()
+
+	got := resolveTikTokURL(context.Background(), &http.Client{}, hop.URL+"/ZSabc/")
+	if got != final.URL+"/@u/video/111?share_comment_id=42" {
+		t.Fatalf("resolved = %q", got)
+	}
+}
+
+func TestFetchTikTokCommentScansReplyThreads(t *testing.T) {
+	parent := ttComment("parent1", "author", "top comment")
+	parent.ReplyTotal = 2
+	stub, _ := withTikwmStub(t,
+		map[string]string{
+			"0": tikwmPage([]tikwmComment{parent}, 1, false),
+		},
+		map[string]string{
+			"parent1:0": tikwmPage([]tikwmComment{ttComment("r1", "u1", "wrong"), ttComment("reply-target", "u2", "right one")}, 2, false),
+		})
+	got, err := fetchTikTokComment(context.Background(), srv0(), "https://www.tiktok.com/@u/video/111", "reply-target")
+	if err != nil {
+		t.Fatalf("fetch: %v", err)
+	}
+	if got.ID != "reply-target" || got.Text != "right one" {
+		t.Fatalf("comment = %+v", got)
+	}
+	if stub.requestCount() != 2 {
+		t.Fatalf("requests = %d, want 2 (list + one reply page)", stub.requestCount())
+	}
+	if !strings.Contains(stub.requests[1], "video_id=111") || !strings.Contains(stub.requests[1], "comment_id=parent1") {
+		t.Fatalf("reply request = %q", stub.requests[1])
 	}
 }
