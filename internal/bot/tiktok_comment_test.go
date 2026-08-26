@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -249,6 +251,7 @@ type recCommentSender struct {
 	Messages     []*telego.SendMessageParams
 	Photos       []*telego.SendPhotoParams
 	Animations   []*telego.SendAnimationParams
+	Videos       []*telego.SendVideoParams
 	Groups       []*telego.SendMediaGroupParams
 	Deletes      []*telego.DeleteMessageParams
 	nextID       int
@@ -289,7 +292,10 @@ func (s *recCommentSender) SendAnimation(_ context.Context, p *telego.SendAnimat
 	return s.send(), nil
 }
 
-func (s *recCommentSender) SendVideo(_ context.Context, _ *telego.SendVideoParams) (*telego.Message, error) {
+func (s *recCommentSender) SendVideo(_ context.Context, p *telego.SendVideoParams) (*telego.Message, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Videos = append(s.Videos, p)
 	return s.send(), nil
 }
 
@@ -535,6 +541,82 @@ func TestProcessTikTokCommentReplyFallbackToStandalone(t *testing.T) {
 	}
 	if len(snd.Deletes) != 1 {
 		t.Fatalf("original must be deleted after successful fallback, deletes = %+v", snd.Deletes)
+	}
+}
+
+func TestProcessTikTokCommentPostsVideoWhenNotInChat(t *testing.T) {
+	origDownload := downloadTikTokVideo
+	downloadTikTokVideo = func(_ context.Context, _, workDir string) (string, error) {
+		p := filepath.Join(workDir, "video.mp4")
+		if err := os.WriteFile(p, []byte("fake mp4"), 0644); err != nil {
+			return "", err
+		}
+		return p, nil
+	}
+	defer func() { downloadTikTokVideo = origDownload }()
+
+	_, srv := withTikwmStub(t, map[string]string{
+		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "жиза")}, 1, false),
+	}, nil)
+	snd := newRecCommentSender()
+	videos := &recVideoIndex{} // find=0: index miss -> video must be posted
+	owners := &recOwners{}
+	msg := ttCommentMsg()
+
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, videos, msg,
+		"https://www.tiktok.com/@u/video/777", "42")
+
+	if len(snd.Videos) != 1 {
+		t.Fatalf("video must be posted on index miss, videos = %+v", snd.Videos)
+	}
+	if snd.Videos[0].Caption != "" {
+		t.Fatalf("context video must be bare (no caption), got %q", snd.Videos[0].Caption)
+	}
+	// Video send is the first send (id 501); the comment replies to it.
+	if len(snd.Messages) != 1 ||
+		snd.Messages[0].ReplyParameters == nil || snd.Messages[0].ReplyParameters.MessageID != 501 {
+		t.Fatalf("comment must reply to the fresh video post, messages = %+v", snd.Messages)
+	}
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("original must be deleted after quote, deletes = %+v", snd.Deletes)
+	}
+	// The fresh post is recorded in the index and credited to the sharer.
+	if recs := videos.recorded(); len(recs) != 1 || recs[0] != "-1001234567890:777:501" {
+		t.Fatalf("index records = %v, want [-1001234567890:777:501]", recs)
+	}
+	if calls := owners.recorded(); len(calls) != 2 || calls[0] != "-1001234567890:501:7" {
+		t.Fatalf("owner calls = %v, want video 501 and comment 502 credited to sharer 7", calls)
+	}
+}
+
+func TestProcessTikTokCommentVideoDownloadFailsStandalone(t *testing.T) {
+	origDownload := downloadTikTokVideo
+	downloadTikTokVideo = func(context.Context, string, string) (string, error) {
+		return "", errors.New("download failed")
+	}
+	defer func() { downloadTikTokVideo = origDownload }()
+
+	_, srv := withTikwmStub(t, map[string]string{
+		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "hi")}, 1, false),
+	}, nil)
+	snd := newRecCommentSender()
+	videos := &recVideoIndex{} // miss -> download -> fails
+	msg := ttCommentMsg()
+
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, videos, msg,
+		"https://www.tiktok.com/@u/video/777", "42")
+
+	if len(snd.Videos) != 0 {
+		t.Fatalf("no video expected on download failure, videos = %+v", snd.Videos)
+	}
+	if len(snd.Messages) != 1 || snd.Messages[0].ReplyParameters != nil {
+		t.Fatalf("quote must fall back to standalone, messages = %+v", snd.Messages)
+	}
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("original must still be deleted after standalone quote, deletes = %+v", snd.Deletes)
+	}
+	if recs := videos.recorded(); len(recs) != 0 {
+		t.Fatalf("no index record on failed download, records = %v", recs)
 	}
 }
 

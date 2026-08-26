@@ -25,9 +25,11 @@ package bot
 // The TikTok link is an inline "видео" label with link preview disabled;
 // the comment author is not part of the quote (the point is who shared
 // it and the comment content). When the bot has already reposted that
-// video into the chat (tiktok_videos index), the quote is sent as a
-// reply to the repost; otherwise it stands alone - the link line stays
-// in both cases.
+// video into the chat (tiktok_videos index), the quote replies to the
+// repost; otherwise the bot downloads and posts the video first and the
+// quote replies to the fresh post. Only when the video post fails (or
+// the index is unwired) does the quote stand alone - the link line stays
+// in every case.
 //
 // Source. TikTok exposes no unsigned API for comments (verified live):
 // www.tiktok.com/api/comment/list answers HTTP 200 with an empty body
@@ -653,12 +655,92 @@ func sendCommentLocalAlbum(ctx context.Context, snd youtubeMediaSender, client *
 
 // --- Pipeline -------------------------------------------------------------
 
+// downloadTikTokVideo downloads and validates (size, audio) a TikTok
+// video into workDir, mirroring the repost pipeline's checks. A variable
+// so tests can stub it. The returned path must be os.Remove'd by the
+// caller.
+var downloadTikTokVideo = defaultDownloadTikTokVideo
+
+func defaultDownloadTikTokVideo(ctx context.Context, tiktokURL, workDir string) (string, error) {
+	videoPath, err := downloadTikTok(ctx, tiktokURL, workDir)
+	if err != nil {
+		return "", err
+	}
+	fi, err := os.Stat(videoPath)
+	if err != nil {
+		return "", err
+	}
+	if fi.Size() > maxVideoSize {
+		return "", fmt.Errorf("tiktok: video too large (%d bytes)", fi.Size())
+	}
+	if !ffprobeHasAudio(videoPath) {
+		return "", errors.New("tiktok: no audio stream")
+	}
+	return videoPath, nil
+}
+
+// postTikTokVideo downloads and posts tiktokURL as a bare repost (no
+// caption: the quoting comment carries the attribution), records the
+// owner and the repost index, and returns the new message id. Returns 0
+// on any failure - the caller then quotes the comment standalone.
+func postTikTokVideo(
+	ctx context.Context,
+	snd youtubeMediaSender,
+	log *slog.Logger,
+	workDir string,
+	chatID int64,
+	videoURL string,
+	sharer *telego.User,
+	owners ownerRecorder,
+	videos tiktokVideoIndex,
+) int {
+	videoPath, err := downloadTikTokVideo(ctx, videoURL, workDir)
+	if err != nil {
+		log.Warn("tiktok comment: video download failed, quoting standalone",
+			"chat_id", chatID, "url", videoURL, "error", err)
+		return 0
+	}
+	defer os.Remove(videoPath)
+
+	file, err := os.Open(videoPath)
+	if err != nil {
+		log.Warn("tiktok comment: opening video failed, quoting standalone",
+			"chat_id", chatID, "error", err)
+		return 0
+	}
+	defer file.Close()
+
+	sent, err := snd.SendVideo(ctx, &telego.SendVideoParams{
+		ChatID: telego.ChatID{ID: chatID},
+		Video:  telego.InputFile{File: file},
+	})
+	if err != nil {
+		log.Warn("tiktok comment: video send failed, quoting standalone",
+			"chat_id", chatID, "error", err)
+		return 0
+	}
+
+	if owners != nil {
+		owners.RecordOwner(chatID, sent.GetMessageID(), sharer)
+	}
+	if videos != nil {
+		if vid := tiktokVideoID(videoURL); vid != "" {
+			if rerr := videos.RecordVideo(ctx, chatID, vid, sent.GetMessageID()); rerr != nil {
+				log.Warn("tiktok comment: recording video index failed",
+					"chat_id", chatID, "video_id", vid, "error", rerr)
+			}
+		}
+	}
+	return sent.GetMessageID()
+}
+
 // processTikTokComment runs the full comment pipeline: fetch, quote, owner
 // attribution, delete-original. When videos records a bot repost of the
-// video in this chat, the quote is sent as a reply to it; if that reply
-// fails (the repost was deleted) the quote falls back to standalone. Runs
-// on its own goroutine (started by the tiktokReposter middleware) so the
-// sequential update loop never stalls.
+// video in this chat, the quote replies to it; on an index miss the bot
+// posts the video first (postTikTokVideo) and replies to the fresh post.
+// If the reply send fails (repost deleted) the quote falls back to
+// standalone. Runs on its own goroutine (started by the tiktokReposter
+// middleware) so the sequential update loop never stalls.
 func processTikTokComment(
 	ctx context.Context,
 	snd youtubeMediaSender,
@@ -697,7 +779,12 @@ func processTikTokComment(
 			log.Warn("tiktok comment: video index lookup failed",
 				"chat_id", chatID, "error", ferr)
 		} else if ok {
+			// The bot already reposted this video: reply to it.
 			replyTo = id
+		} else {
+			// The video is not in the chat: post it first, then reply
+			// the comment to the fresh post.
+			replyTo = postTikTokVideo(ctx, snd, log, workDir, chatID, videoURL, msg.From, owners, videos)
 		}
 	}
 
