@@ -75,6 +75,17 @@ type DeferredQueuer interface {
 	GarbageCollect(ctx context.Context, before time.Time) (int, error)
 }
 
+// --- Video repost index interface ----------------------------------------
+
+// tiktokVideoIndex records which TikTok videos the bot has reposted into
+// which chat and where. The comment-quote pipeline consults it to reply
+// to a video already in the chat. nil (not wired) means quotes always
+// stand alone and reposts are not recorded.
+type tiktokVideoIndex interface {
+	RecordVideo(ctx context.Context, chatID int64, videoID string, msgID int) error
+	FindVideo(ctx context.Context, chatID int64, videoID string) (int, bool, error)
+}
+
 // ffprobeHasAudio reports whether a video file has an audio stream.
 // Package-level so tests can substitute a stub.
 var ffprobeHasAudio = defaultFFprobeHasAudio
@@ -248,7 +259,7 @@ func tiktokReposter(a *App) th.Handler {
 		// of replaying the video.
 		if act, videoURL, commentID := tiktokCommentDecision(msg); act {
 			go processTikTokComment(context.Background(), a.sanitizerSender(), a.log,
-				tiktokCommentHTTPClient, a.repReactor, msg, videoURL, commentID)
+				tiktokCommentHTTPClient, a.repReactor, a.tiktokVideos, msg, videoURL, commentID)
 			return thctx.Next(update)
 		}
 		act, tiktokURL := tiktokDecision(msg)
@@ -267,16 +278,20 @@ func tiktokReposter(a *App) th.Handler {
 				ctx := context.Background()
 				if final := resolveTikTokURL(ctx, tiktokCommentHTTPClient, tiktokURL); final != "" {
 					if videoURL, commentID, ok := tiktokCommentIDFromURL(final); ok {
-						processTikTokComment(ctx, snd, a.log, tiktokCommentHTTPClient, a.repReactor, msg, videoURL, commentID)
+						processTikTokComment(ctx, snd, a.log, tiktokCommentHTTPClient, a.repReactor, a.tiktokVideos, msg, videoURL, commentID)
 						return
 					}
+					// Pass the resolved long URL so the video id can be
+					// extracted for the repost index.
+					processTikTok(ctx, snd, a.log, a.deferredQ, a.tiktokVideos, a.repReactor, msg, final, "")
+					return
 				}
-				processTikTok(ctx, snd, a.log, a.deferredQ, a.repReactor, msg, tiktokURL, "")
+				processTikTok(ctx, snd, a.log, a.deferredQ, a.tiktokVideos, a.repReactor, msg, tiktokURL, "")
 			}()
 			return thctx.Next(update)
 		}
 		go processTikTok(context.Background(), a.sanitizerSender(), a.log,
-			a.deferredQ, a.repReactor, msg, tiktokURL, "")
+			a.deferredQ, a.tiktokVideos, a.repReactor, msg, tiktokURL, "")
 		return thctx.Next(update)
 	}
 }
@@ -301,6 +316,7 @@ func processTikTok(
 	snd youtubeMediaSender,
 	log *slog.Logger,
 	queue DeferredQueuer,
+	videos tiktokVideoIndex,
 	owners ownerRecorder,
 	msg *telego.Message,
 	tiktokURL string,
@@ -378,6 +394,17 @@ func processTikTok(
 		owners.RecordOwner(chatID, sent.GetMessageID(), msg.From)
 	}
 
+	// Record the repost so a later comment quote can reply to this
+	// message. Best-effort: a failed record only costs the reply link.
+	if videos != nil {
+		if vid := tiktokVideoID(tiktokURL); vid != "" {
+			if rerr := videos.RecordVideo(ctx, chatID, vid, sent.GetMessageID()); rerr != nil {
+				log.Warn("tiktok: recording repost index failed",
+					"chat_id", chatID, "video_id", vid, "error", rerr)
+			}
+		}
+	}
+
 	// Step 6: Delete original (only after successful repost).
 	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
 		ChatID:    telego.ChatID{ID: chatID},
@@ -448,6 +475,7 @@ func tryTikTokExport(
 	snd youtubeMediaSender,
 	log *slog.Logger,
 	owners ownerRecorder,
+	videos tiktokVideoIndex,
 	chatID int64,
 	msgID int,
 	userID int64,
@@ -498,6 +526,24 @@ func tryTikTokExport(
 			Username:  username,
 			FirstName: firstName,
 		})
+	}
+
+	if videos != nil {
+		// A queued short link (resolve failed at share time) yields no
+		// video id from the path; resolve it now so the repost still
+		// lands in the index.
+		vid := tiktokVideoID(url)
+		if vid == "" {
+			if final := resolveTikTokURL(ctx, tiktokCommentHTTPClient, url); final != "" {
+				vid = tiktokVideoID(final)
+			}
+		}
+		if vid != "" {
+			if rerr := videos.RecordVideo(ctx, chatID, vid, sent.GetMessageID()); rerr != nil {
+				log.Warn("tiktok flush: recording repost index failed",
+					"chat_id", chatID, "video_id", vid, "error", rerr)
+			}
+		}
 	}
 
 	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{

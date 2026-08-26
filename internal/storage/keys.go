@@ -146,3 +146,12 @@ func ReferralKey(absChatID int64, referralID uint64) []byte {
 
 // ReferralPrefix scans every referral row in one chat.
 func ReferralPrefix(absChatID int64) []byte { return keyf("rf:%020d:", absChatID) }
+
+// TikTokVideoKey is one recorded bot repost of a TikTok video in a chat,
+// keyed by (chat, numeric video id). The value is the message id of the
+// repost; the comment-quote pipeline uses it to reply to the video when
+// it is already in the chat. Raw chat ids are normalized via AbsChatID
+// (same convention as the other chat-scoped keys).
+func TikTokVideoKey(chatID int64, videoID string) []byte {
+	return keyf("tv:%020d:%s", AbsChatID(chatID), videoID)
+}

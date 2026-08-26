@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -112,11 +113,22 @@ func TestTikTokCommentDecisionCaptionEntity(t *testing.T) {
 // --- caption --------------------------------------------------------------
 
 func TestTikTokCommentCaption(t *testing.T) {
-	if got := tiktokCommentCaption("bayan", "привет <b>жиза</b>"); got != "👤 <b>@bayan</b> писал:\nпривет &lt;b&gt;жиза&lt;/b&gt;" {
+	const url = "https://www.tiktok.com/@u/video/777"
+	if got := tiktokCommentCaption("bayan", "привет <b>жиза</b>", 1234, url); got !=
+		"👤 <b>bayan</b> поделился(ась) комментарием к <a href=\""+url+"\">видео</a>:\nпривет &lt;b&gt;жиза&lt;/b&gt;\n❤️ 1,234" {
 		t.Fatalf("caption = %q", got)
 	}
-	if got := tiktokCommentCaption("bayan", ""); got != "👤 <b>@bayan</b> писал:" {
+	if got := tiktokCommentCaption("bayan", "", 7, url); got !=
+		"👤 <b>bayan</b> поделился(ась) комментарием к <a href=\""+url+"\">видео</a>:\n❤️ 7" {
 		t.Fatalf("image-only caption = %q", got)
+	}
+	// Zero likes are shown honestly, formatted count stays plain.
+	if got := tiktokCommentCaption("bayan", "", 0, url); !strings.Contains(got, "\n❤️ 0") {
+		t.Fatalf("zero-likes caption = %q", got)
+	}
+	// Sharer display name is HTML-escaped.
+	if got := tiktokCommentCaption("<script>", "x", 1, url); !strings.Contains(got, "<b>&lt;script&gt;</b>") {
+		t.Fatalf("escaping caption = %q", got)
 	}
 }
 
@@ -231,14 +243,17 @@ func TestFetchTikTokCommentAPIError(t *testing.T) {
 // --- pipeline -------------------------------------------------------------
 
 // recCommentSender records sends and returns configurable message IDs.
+// failSends makes the next N SendMessage calls fail (fallback-path tests).
 type recCommentSender struct {
-	mu         sync.Mutex
-	Messages   []*telego.SendMessageParams
-	Photos     []*telego.SendPhotoParams
-	Animations []*telego.SendAnimationParams
-	Groups     []*telego.SendMediaGroupParams
-	Deletes    []*telego.DeleteMessageParams
-	nextID     int
+	mu           sync.Mutex
+	Messages     []*telego.SendMessageParams
+	Photos       []*telego.SendPhotoParams
+	Animations   []*telego.SendAnimationParams
+	Groups       []*telego.SendMediaGroupParams
+	Deletes      []*telego.DeleteMessageParams
+	nextID       int
+	failSends    int
+	sendFailures int
 }
 
 func newRecCommentSender() *recCommentSender { return &recCommentSender{nextID: 500} }
@@ -251,6 +266,11 @@ func (s *recCommentSender) send() *telego.Message {
 func (s *recCommentSender) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failSends > 0 {
+		s.failSends--
+		s.sendFailures++
+		return nil, errors.New("send failed")
+	}
 	s.Messages = append(s.Messages, p)
 	return s.send(), nil
 }
@@ -329,15 +349,18 @@ func TestProcessTikTokCommentTextOnly(t *testing.T) {
 	owners := &recOwners{}
 	msg := ttCommentMsg()
 
-	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, msg,
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, nil, msg,
 		"https://www.tiktok.com/@u/video/777", "42")
 
 	if len(snd.Messages) != 1 {
 		t.Fatalf("messages = %+v", snd.Messages)
 	}
 	if snd.Messages[0].ParseMode != telego.ModeHTML ||
-		snd.Messages[0].Text != "👤 <b>@commenter</b> писал:\nжиза &lt;вот это&gt; да" {
+		snd.Messages[0].Text != "👤 <b>sender</b> поделился(ась) комментарием к <a href=\"https://www.tiktok.com/@u/video/777\">видео</a>:\nжиза &lt;вот это&gt; да\n❤️ 0" {
 		t.Fatalf("quote = %+v", snd.Messages[0])
+	}
+	if snd.Messages[0].LinkPreviewOptions == nil || !snd.Messages[0].LinkPreviewOptions.IsDisabled {
+		t.Fatalf("link preview must be disabled, params = %+v", snd.Messages[0])
 	}
 	if calls := owners.recorded(); len(calls) != 1 || calls[0] != "-1001234567890:501:7" {
 	}
@@ -353,13 +376,13 @@ func TestProcessTikTokCommentSinglePhoto(t *testing.T) {
 	snd := newRecCommentSender()
 	msg := ttCommentMsg()
 
-	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, msg,
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, nil, msg,
 		"https://www.tiktok.com/@u/video/777", "42")
 
 	if len(snd.Photos) != 1 || snd.Photos[0].Photo.URL != "https://cdn.example/x.jpeg" {
 		t.Fatalf("photos = %+v", snd.Photos)
 	}
-	if snd.Photos[0].Caption != "👤 <b>@commenter</b> писал:" {
+	if snd.Photos[0].Caption != "👤 <b>sender</b> поделился(ась) комментарием к <a href=\"https://www.tiktok.com/@u/video/777\">видео</a>:\n❤️ 0" {
 		t.Fatalf("caption = %q", snd.Photos[0].Caption)
 	}
 	if len(snd.Deletes) != 1 {
@@ -374,7 +397,7 @@ func TestProcessTikTokCommentGIF(t *testing.T) {
 	snd := newRecCommentSender()
 	msg := ttCommentMsg()
 
-	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, msg,
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, nil, msg,
 		"https://www.tiktok.com/@u/video/777", "42")
 
 	if len(snd.Animations) != 1 || snd.Animations[0].Animation.URL != "https://cdn.example/x.gif" {
@@ -394,14 +417,14 @@ func TestProcessTikTokCommentAlbum(t *testing.T) {
 	owners := &recOwners{}
 	msg := ttCommentMsg()
 
-	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, msg,
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, nil, msg,
 		"https://www.tiktok.com/@u/video/777", "42")
 
 	if len(snd.Groups) != 1 || len(snd.Groups[0].Media) != 2 {
 		t.Fatalf("groups = %+v", snd.Groups)
 	}
 	first := snd.Groups[0].Media[0].(*telego.InputMediaPhoto)
-	if first.Caption != "👤 <b>@commenter</b> писал:\ntwo imgs" {
+	if first.Caption != "👤 <b>sender</b> поделился(ась) комментарием к <a href=\"https://www.tiktok.com/@u/video/777\">видео</a>:\ntwo imgs\n❤️ 0" {
 		t.Fatalf("album caption = %q", first.Caption)
 	}
 	// Both album messages carry the owner.
@@ -418,7 +441,7 @@ func TestProcessTikTokCommentNotFoundDeclines(t *testing.T) {
 	owners := &recOwners{}
 	msg := ttCommentMsg()
 
-	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, msg,
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), owners, nil, msg,
 		"https://www.tiktok.com/@u/video/777", "nope")
 
 	if len(snd.Deletes) != 0 {
@@ -431,6 +454,90 @@ func TestProcessTikTokCommentNotFoundDeclines(t *testing.T) {
 		t.Fatalf("expected one decline message, got %+v", snd.Messages)
 	}
 }
+
+// recVideoIndex scripts the repost index for pipeline tests. find=0 is a
+// miss; records collects RecordVideo calls as "chatID:videoID:msgID".
+type recVideoIndex struct {
+	mu      sync.Mutex
+	records []string
+	find    int
+}
+
+func (r *recVideoIndex) RecordVideo(_ context.Context, chatID int64, videoID string, msgID int) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.records = append(r.records, fmt.Sprintf("%d:%s:%d", chatID, videoID, msgID))
+	return nil
+}
+
+func (r *recVideoIndex) FindVideo(_ context.Context, _ int64, _ string) (int, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.find == 0 {
+		return 0, false, nil
+	}
+	return r.find, true, nil
+}
+
+func (r *recVideoIndex) recorded() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.records...)
+}
+
+func TestProcessTikTokCommentLikesAndReply(t *testing.T) {
+	c := ttComment("42", "commenter", "жиза")
+	c.DiggCount = 1234
+	_, srv := withTikwmStub(t, map[string]string{
+		"0": tikwmPage([]tikwmComment{c}, 1, false),
+	}, nil)
+	snd := newRecCommentSender()
+	videos := &recVideoIndex{find: 501}
+	msg := ttCommentMsg()
+
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, videos, msg,
+		"https://www.tiktok.com/@u/video/777", "42")
+
+	if len(snd.Messages) != 1 {
+		t.Fatalf("messages = %+v", snd.Messages)
+	}
+	if !strings.Contains(snd.Messages[0].Text, "\n❤️ 1,234") {
+		t.Fatalf("likes line missing: %q", snd.Messages[0].Text)
+	}
+	if snd.Messages[0].ReplyParameters == nil || snd.Messages[0].ReplyParameters.MessageID != 501 {
+		t.Fatalf("reply = %+v, want reply to video repost 501", snd.Messages[0].ReplyParameters)
+	}
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("original must be deleted after quote, deletes = %+v", snd.Deletes)
+	}
+}
+
+func TestProcessTikTokCommentReplyFallbackToStandalone(t *testing.T) {
+	_, srv := withTikwmStub(t, map[string]string{
+		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "hi")}, 1, false),
+	}, nil)
+	snd := newRecCommentSender()
+	snd.failSends = 1 // reply attempt fails (repost deleted)
+	videos := &recVideoIndex{find: 501}
+	msg := ttCommentMsg()
+
+	processTikTokComment(context.Background(), snd, discardLogger(), srv.Client(), nil, videos, msg,
+		"https://www.tiktok.com/@u/video/777", "42")
+
+	if snd.sendFailures != 1 {
+		t.Fatalf("reply attempt must fail once, failures = %d", snd.sendFailures)
+	}
+	if len(snd.Messages) != 1 {
+		t.Fatalf("messages = %+v, want the standalone resend only", snd.Messages)
+	}
+	if snd.Messages[0].ReplyParameters != nil {
+		t.Fatalf("fallback must be standalone, got %+v", snd.Messages[0].ReplyParameters)
+	}
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("original must be deleted after successful fallback, deletes = %+v", snd.Deletes)
+	}
+}
+
 func TestTikTokReposterRoutesCommentPermalinkToQuote(t *testing.T) {
 	_, _ = withTikwmStub(t, map[string]string{
 		"0": tikwmPage([]tikwmComment{ttComment("42", "commenter", "hi")}, 1, false),
@@ -459,7 +566,7 @@ func TestTikTokReposterRoutesCommentPermalinkToQuote(t *testing.T) {
 			}
 		}
 	}
-	if got != "👤 <b>@commenter</b> писал:\nhi" {
+	if got != "👤 <b>sender</b> поделился(ась) комментарием к <a href=\"https://www.tiktok.com/@u/video/777\">видео</a>:\nhi\n❤️ 0" {
 		t.Fatalf("quote = %q", got)
 	}
 }

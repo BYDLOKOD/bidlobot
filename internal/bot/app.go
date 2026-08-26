@@ -85,6 +85,11 @@ type App struct {
 	// summarize retries). nil (default) means failures get a decline
 	// reply instead of being queued.
 	deferredQ DeferredQueuer
+	// tiktokVideos records the bot's TikTok reposts per (chat, video) so
+	// a comment quote can reply to a video already in the chat. nil
+	// (default) means quotes always stand alone and reposts are not
+	// recorded.
+	tiktokVideos tiktokVideoIndex
 	// repReactor is the reaction->rep pipeline (👍 +rep, 👎/🤡 -rep).
 	// nil (default) means reactions are ignored for reputation.
 	repReactor *repReactor
@@ -143,6 +148,13 @@ func (a *App) SetAdmissionAttemptStore(store AdmissionAttemptStore) {
 // TikTok exports and summarize retries. Call before Run.
 func (a *App) SetDeferredQueue(q DeferredQueuer) {
 	a.deferredQ = q
+}
+
+// AttachTikTokVideoIndex wires the recorded TikTok repost index the
+// comment-quote pipeline uses to reply to a video already in the chat.
+// Call before Run; nil (not wired) leaves quotes standalone.
+func (a *App) AttachTikTokVideoIndex(v tiktokVideoIndex) {
+	a.tiktokVideos = v
 }
 
 // AttachRepReactions wires the reaction->rep pipeline (👍 +rep, 👎/🤡 -rep

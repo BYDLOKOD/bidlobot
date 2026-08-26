@@ -165,6 +165,9 @@ func main() {
 	app.SetBotOwnerID(cfg.BotOwnerID)
 	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	app.SetDeferredQueue(storage.NewDeferredRepo(db))
+	// TikTok repost index: lets a comment quote reply to a video the bot
+	// already reposted into the chat.
+	app.AttachTikTokVideoIndex(storage.NewTikTokVideoRepo(db))
 	// Reaction reputation: 👍 +rep, 👎/🤡 -rep with a 10s combined-message
 	// batcher. Shares the reputation bbolt bucket with /praise and /roast.
 	app.AttachRepReactions(bot.NewRepReactor(storage.NewReputationRepo(db), adminCache, tgClient, log))

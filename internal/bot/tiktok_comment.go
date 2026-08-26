@@ -14,12 +14,20 @@ package bot
 // reply threads too (comments with reply_total > 0, newest-first).
 //
 // When a supergroup message carries such a link, the bot fetches the
-// comment (author, text, attached images) and posts a quote attributed to
-// the commenter, then deletes the original message (repost-first contract,
-// same as the video replayer):
+// comment (text, attached images, like count) and posts a quote credited
+// to the person who shared the link, then deletes the original message
+// (repost-first contract, same as the video replayer):
 //
-//	👤 <b>@username</b> писал:
+//	👤 <b>sender</b> поделился(ась) комментарием к <a href="...">видео</a>:
 //	текст комментария
+//	❤️ 123
+//
+// The TikTok link is an inline "видео" label with link preview disabled;
+// the comment author is not part of the quote (the point is who shared
+// it and the comment content). When the bot has already reposted that
+// video into the chat (tiktok_videos index), the quote is sent as a
+// reply to the repost; otherwise it stands alone - the link line stays
+// in both cases.
 //
 // Source. TikTok exposes no unsigned API for comments (verified live):
 // www.tiktok.com/api/comment/list answers HTTP 200 with an empty body
@@ -64,11 +72,17 @@ import (
 )
 
 const (
-	// msgTikTokCommentHeader is the quote header for a reposted TikTok
-	// comment. %s = the commenter's @handle (issue #1 format: "{username}
-	// писал:"). No "(а)": the commenter's gender is unknown.
-	msgTikTokCommentHeader = "\U0001F464 <b>@%s</b> \u043F\u0438\u0441\u0430\u043B:"
+	// msgTikTokCommentSharer is the quote header: the in-chat sharer
+	// (plain display name, UserDisplay) credited with sharing the
+	// comment, with the TikTok itself as an inline "видео" link (no
+	// link preview). %s = sharer display name, %s = canonical video URL.
+	msgTikTokCommentSharer = "\U0001F464 <b>%s</b> \u043F\u043E\u0434\u0435\u043B\u0438\u043B\u0441\u044F(\u0430\u0441\u044C) \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0435\u043C \u043A <a href=\"%s\">\u0432\u0438\u0434\u0435\u043E</a>:"
 
+	// msgTikTokCommentLikes is the like-count line. %s = formatted count.
+	msgTikTokCommentLikes = "\u2764\uFE0F %s"
+)
+
+const (
 	// tiktokCommentMaxPages caps the newest-first top-level scan while
 	// locating the comment (20 comments per page).
 	tiktokCommentMaxPages = 10
@@ -260,6 +274,7 @@ type tikwmComment struct {
 	User       tikwmCommentUser `json:"user"`
 	Images     []string         `json:"images"`
 	ReplyTotal int              `json:"reply_total"`
+	DiggCount  int64            `json:"digg_count"`
 }
 
 // tikwmCommentPage is one comment-list response. code 0 = success.
@@ -381,31 +396,37 @@ func fetchTikTokComment(ctx context.Context, client *http.Client, videoURL, comm
 	return tikwmComment{}, errTikTokCommentNotFound
 }
 
-// tiktokCommentCaption builds the HTML caption: commenter header plus the
-// comment text (issue #1 format). An image-only comment keeps just the
-// header.
-func tiktokCommentCaption(handle, text string) string {
-	caption := fmt.Sprintf(msgTikTokCommentHeader, html.EscapeString(handle))
+// tiktokCommentCaption builds the HTML caption: the in-chat sharer
+// credited with the comment, the comment text (if any), and the like
+// count. The TikTok is an inline "видео" link (videoURL) - it is always
+// present, whether the quote replies to an existing repost or stands
+// alone. The comment author is deliberately absent.
+func tiktokCommentCaption(sharer, text string, likes int64, videoURL string) string {
+	caption := fmt.Sprintf(msgTikTokCommentSharer,
+		html.EscapeString(sharer), html.EscapeString(videoURL))
 	if text != "" {
 		caption += "\n" + html.EscapeString(text)
 	}
+	caption += "\n" + fmt.Sprintf(msgTikTokCommentLikes, shared.FormatNumber(likes))
 	return caption
-}
-
-// commentHandle picks the display handle: the @unique_id, falling back to
-// the display nickname for accounts without a handle.
-func commentHandle(c tikwmComment) string {
-	if c.User.UniqueID != "" {
-		return c.User.UniqueID
-	}
-	return c.User.Nickname
 }
 
 // --- Delivery -------------------------------------------------------------
 
+// replyParams returns the Telegram reply parameters for replyTo (0 = no
+// reply).
+func replyParams(replyTo int) *telego.ReplyParameters {
+	if replyTo == 0 {
+		return nil
+	}
+	return &telego.ReplyParameters{MessageID: replyTo}
+}
+
 // sendTikTokComment delivers the quote as exactly one message: text, a
-// single image (URL first, download fallback), or a photo album. Returns
-// the sent message IDs for owner attribution.
+// single image (URL first, download fallback), or a photo album. replyTo
+// makes the message a reply (0 = standalone). The text send disables the
+// link preview: the TikTok URL is deliberately presented as the inline
+// "видео" label only. Returns the sent message IDs for owner attribution.
 func sendTikTokComment(
 	ctx context.Context,
 	snd youtubeMediaSender,
@@ -414,13 +435,16 @@ func sendTikTokComment(
 	chatID int64,
 	caption string,
 	images []string,
+	replyTo int,
 ) ([]int, error) {
 	switch {
 	case len(images) == 0:
 		m, err := snd.SendMessage(ctx, &telego.SendMessageParams{
-			ChatID:    telego.ChatID{ID: chatID},
-			Text:      caption,
-			ParseMode: telego.ModeHTML,
+			ChatID:             telego.ChatID{ID: chatID},
+			Text:               caption,
+			ParseMode:          telego.ModeHTML,
+			LinkPreviewOptions: &telego.LinkPreviewOptions{IsDisabled: true},
+			ReplyParameters:    replyParams(replyTo),
 		})
 		if err != nil {
 			return nil, err
@@ -428,22 +452,22 @@ func sendTikTokComment(
 		return []int{m.GetMessageID()}, nil
 
 	case len(images) == 1:
-		ids, err := sendCommentSingleImage(ctx, snd, chatID, caption, images[0])
+		ids, err := sendCommentSingleImage(ctx, snd, chatID, caption, images[0], replyTo)
 		if err == nil {
 			return ids, nil
 		}
-		ids, ferr := sendCommentLocalImage(ctx, snd, client, workDir, chatID, caption, images[0])
+		ids, ferr := sendCommentLocalImage(ctx, snd, client, workDir, chatID, caption, images[0], replyTo)
 		if ferr != nil {
 			return nil, err
 		}
 		return ids, nil
 
 	default:
-		ids, err := sendCommentAlbum(ctx, snd, chatID, caption, images)
+		ids, err := sendCommentAlbum(ctx, snd, chatID, caption, images, replyTo)
 		if err == nil {
 			return ids, nil
 		}
-		ids, ferr := sendCommentLocalAlbum(ctx, snd, client, workDir, chatID, caption, images)
+		ids, ferr := sendCommentLocalAlbum(ctx, snd, client, workDir, chatID, caption, images, replyTo)
 		if ferr != nil {
 			return nil, err
 		}
@@ -457,14 +481,15 @@ func isGIFMedia(u string) bool {
 }
 
 // sendCommentSingleImage sends one image by URL: animation for GIFs,
-// photo otherwise.
-func sendCommentSingleImage(ctx context.Context, snd youtubeMediaSender, chatID int64, caption, imageURL string) ([]int, error) {
+// photo otherwise. replyTo makes the message a reply (0 = standalone).
+func sendCommentSingleImage(ctx context.Context, snd youtubeMediaSender, chatID int64, caption, imageURL string, replyTo int) ([]int, error) {
 	if isGIFMedia(imageURL) {
 		m, err := snd.SendAnimation(ctx, &telego.SendAnimationParams{
-			ChatID:    telego.ChatID{ID: chatID},
-			Animation: telego.InputFile{URL: imageURL},
-			Caption:   caption,
-			ParseMode: telego.ModeHTML,
+			ChatID:          telego.ChatID{ID: chatID},
+			Animation:       telego.InputFile{URL: imageURL},
+			Caption:         caption,
+			ParseMode:       telego.ModeHTML,
+			ReplyParameters: replyParams(replyTo),
 		})
 		if err != nil {
 			return nil, err
@@ -472,10 +497,11 @@ func sendCommentSingleImage(ctx context.Context, snd youtubeMediaSender, chatID 
 		return []int{m.GetMessageID()}, nil
 	}
 	m, err := snd.SendPhoto(ctx, &telego.SendPhotoParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Photo:     telego.InputFile{URL: imageURL},
-		Caption:   caption,
-		ParseMode: telego.ModeHTML,
+		ChatID:          telego.ChatID{ID: chatID},
+		Photo:           telego.InputFile{URL: imageURL},
+		Caption:         caption,
+		ParseMode:       telego.ModeHTML,
+		ReplyParameters: replyParams(replyTo),
 	})
 	if err != nil {
 		return nil, err
@@ -521,7 +547,7 @@ func downloadCommentImage(ctx context.Context, client *http.Client, imageURL, pa
 
 // sendCommentLocalImage is the download fallback for one image: sniffs the
 // bytes so a GIF keeps its animation even when the URL lied.
-func sendCommentLocalImage(ctx context.Context, snd youtubeMediaSender, client *http.Client, workDir string, chatID int64, caption, imageURL string) ([]int, error) {
+func sendCommentLocalImage(ctx context.Context, snd youtubeMediaSender, client *http.Client, workDir string, chatID int64, caption, imageURL string, replyTo int) ([]int, error) {
 	path := filepath.Join(workDir, "comment-img")
 	if err := downloadCommentImage(ctx, client, imageURL, path); err != nil {
 		return nil, err
@@ -538,10 +564,11 @@ func sendCommentLocalImage(ctx context.Context, snd youtubeMediaSender, client *
 	}
 	if http.DetectContentType(head[:n]) == "image/gif" {
 		m, err := snd.SendAnimation(ctx, &telego.SendAnimationParams{
-			ChatID:    telego.ChatID{ID: chatID},
-			Animation: telego.InputFile{File: f},
-			Caption:   caption,
-			ParseMode: telego.ModeHTML,
+			ChatID:          telego.ChatID{ID: chatID},
+			Animation:       telego.InputFile{File: f},
+			Caption:         caption,
+			ParseMode:       telego.ModeHTML,
+			ReplyParameters: replyParams(replyTo),
 		})
 		if err != nil {
 			return nil, err
@@ -549,10 +576,11 @@ func sendCommentLocalImage(ctx context.Context, snd youtubeMediaSender, client *
 		return []int{m.GetMessageID()}, nil
 	}
 	m, err := snd.SendPhoto(ctx, &telego.SendPhotoParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Photo:     telego.InputFile{File: f},
-		Caption:   caption,
-		ParseMode: telego.ModeHTML,
+		ChatID:          telego.ChatID{ID: chatID},
+		Photo:           telego.InputFile{File: f},
+		Caption:         caption,
+		ParseMode:       telego.ModeHTML,
+		ReplyParameters: replyParams(replyTo),
 	})
 	if err != nil {
 		return nil, err
@@ -561,8 +589,8 @@ func sendCommentLocalImage(ctx context.Context, snd youtubeMediaSender, client *
 }
 
 // sendCommentAlbum sends 2+ images as one album by URL, caption on the
-// first item.
-func sendCommentAlbum(ctx context.Context, snd youtubeMediaSender, chatID int64, caption string, images []string) ([]int, error) {
+// first item. replyTo makes the album a reply (0 = standalone).
+func sendCommentAlbum(ctx context.Context, snd youtubeMediaSender, chatID int64, caption string, images []string, replyTo int) ([]int, error) {
 	media := make([]telego.InputMedia, 0, len(images))
 	for i, imageURL := range images {
 		item := &telego.InputMediaPhoto{Media: telego.InputFile{URL: imageURL}}
@@ -573,8 +601,9 @@ func sendCommentAlbum(ctx context.Context, snd youtubeMediaSender, chatID int64,
 		media = append(media, item)
 	}
 	sent, err := snd.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Media:  media,
+		ChatID:          telego.ChatID{ID: chatID},
+		Media:           media,
+		ReplyParameters: replyParams(replyTo),
 	})
 	if err != nil {
 		return nil, err
@@ -588,7 +617,7 @@ func sendCommentAlbum(ctx context.Context, snd youtubeMediaSender, chatID int64,
 
 // sendCommentLocalAlbum is the download fallback for albums. GIF items
 // degrade to static photos (Telegram albums cannot carry animations).
-func sendCommentLocalAlbum(ctx context.Context, snd youtubeMediaSender, client *http.Client, workDir string, chatID int64, caption string, images []string) ([]int, error) {
+func sendCommentLocalAlbum(ctx context.Context, snd youtubeMediaSender, client *http.Client, workDir string, chatID int64, caption string, images []string, replyTo int) ([]int, error) {
 	media := make([]telego.InputMedia, 0, len(images))
 	for i, imageURL := range images {
 		path := filepath.Join(workDir, "comment-img-"+strconv.Itoa(i))
@@ -608,8 +637,9 @@ func sendCommentLocalAlbum(ctx context.Context, snd youtubeMediaSender, client *
 		media = append(media, item)
 	}
 	sent, err := snd.SendMediaGroup(ctx, &telego.SendMediaGroupParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Media:  media,
+		ChatID:          telego.ChatID{ID: chatID},
+		Media:           media,
+		ReplyParameters: replyParams(replyTo),
 	})
 	if err != nil {
 		return nil, err
@@ -624,14 +654,18 @@ func sendCommentLocalAlbum(ctx context.Context, snd youtubeMediaSender, client *
 // --- Pipeline -------------------------------------------------------------
 
 // processTikTokComment runs the full comment pipeline: fetch, quote, owner
-// attribution, delete-original. Runs on its own goroutine (started by the
-// tiktokReposter middleware) so the sequential update loop never stalls.
+// attribution, delete-original. When videos records a bot repost of the
+// video in this chat, the quote is sent as a reply to it; if that reply
+// fails (the repost was deleted) the quote falls back to standalone. Runs
+// on its own goroutine (started by the tiktokReposter middleware) so the
+// sequential update loop never stalls.
 func processTikTokComment(
 	ctx context.Context,
 	snd youtubeMediaSender,
 	log *slog.Logger,
 	client *http.Client,
 	owners ownerRecorder,
+	videos tiktokVideoIndex,
 	msg *telego.Message,
 	videoURL, commentID string,
 ) {
@@ -654,8 +688,26 @@ func processTikTokComment(
 	}
 	defer os.RemoveAll(workDir)
 
-	caption := tiktokCommentCaption(commentHandle(comment), comment.Text)
-	sentIDs, sendErr := sendTikTokComment(ctx, snd, client, workDir, chatID, caption, comment.Images)
+	caption := tiktokCommentCaption(shared.UserDisplay(msg.From.Username, msg.From.FirstName),
+		comment.Text, comment.DiggCount, videoURL)
+
+	replyTo := 0
+	if videos != nil {
+		if id, ok, ferr := videos.FindVideo(ctx, chatID, tiktokVideoID(videoURL)); ferr != nil {
+			log.Warn("tiktok comment: video index lookup failed",
+				"chat_id", chatID, "error", ferr)
+		} else if ok {
+			replyTo = id
+		}
+	}
+
+	sentIDs, sendErr := sendTikTokComment(ctx, snd, client, workDir, chatID, caption, comment.Images, replyTo)
+	if sendErr != nil && replyTo != 0 {
+		// Reply target gone (the repost was deleted): resend standalone.
+		log.Info("tiktok comment: reply send failed, resending standalone",
+			"chat_id", chatID, "message_id", msgID, "reply_to", replyTo, "error", sendErr)
+		sentIDs, sendErr = sendTikTokComment(ctx, snd, client, workDir, chatID, caption, comment.Images, 0)
+	}
 	if sendErr != nil {
 		log.Warn("tiktok comment: quote send failed; leaving original intact",
 			"chat_id", chatID, "message_id", msgID, "error", sendErr)

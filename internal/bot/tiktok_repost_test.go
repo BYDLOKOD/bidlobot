@@ -221,7 +221,7 @@ func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
 		Caption:   "original caption",
 	}
 
-	processTikTok(context.Background(), snd, log, nil, owners, msg, "https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, owners, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Assert SendVideo was called with correct params.
 	if len(snd.Videos) != 1 {
@@ -257,6 +257,41 @@ func TestProcessTikTokWithSyntheticVideo(t *testing.T) {
 	}
 }
 
+// TestProcessTikTokRecordsRepostIndex verifies a successful repost is
+// recorded in the video index (chat, video id -> repost message id) so a
+// later comment quote can reply to it.
+func TestProcessTikTokRecordsRepostIndex(t *testing.T) {
+	origFFprobe := ffprobeHasAudio
+	ffprobeHasAudio = func(string) bool { return true }
+	defer func() { ffprobeHasAudio = origFFprobe }()
+
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4 content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	snd := &recYTSender{}
+	log := slog.New(slog.DiscardHandler)
+	videos := &recVideoIndex{}
+
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -1001234567890, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, nil, videos, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
+
+	if len(snd.Videos) != 1 {
+		t.Fatalf("expected 1 SendVideo, got %d", len(snd.Videos))
+	}
+	// recYTSender.SendVideo returns message id 1002.
+	if recs := videos.recorded(); len(recs) != 1 || recs[0] != "-1001234567890:123:1002" {
+		t.Fatalf("index records = %v, want [-1001234567890:123:1002]", recs)
+	}
+}
+
 // TestProcessTikTokVideoTooLarge verifies the size-limit decline path:
 // videos over 50MB get a decline note instead of Silent drop.
 func TestProcessTikTokVideoTooLarge(t *testing.T) {
@@ -282,7 +317,7 @@ func TestProcessTikTokVideoTooLarge(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Should NOT have called SendVideo (too large).
 	if len(snd.Videos) != 0 {
@@ -319,7 +354,7 @@ func TestProcessTikTokDeleteFailsRepostStands(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	// Repost MUST stand even when delete fails.
 	if len(snd.Videos) != 1 {
@@ -390,7 +425,7 @@ func TestProcessTikTok_NoAudio_QueuesNotUploads(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, q, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
+	processTikTok(context.Background(), snd, log, q, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
 
 	if len(snd.Videos) != 0 {
 		t.Errorf("expected 0 uploads, got %d", len(snd.Videos))
@@ -436,7 +471,7 @@ func TestProcessTikTok_NoAudio_NoQueue_Declines(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
 
 	if len(snd.Videos) != 0 {
 		t.Errorf("expected 0 uploads, got %d", len(snd.Videos))

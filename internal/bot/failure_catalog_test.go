@@ -168,7 +168,7 @@ func TestTikTok_DownloadFail_MustUseFailureCatalog(t *testing.T) {
 	}
 	// Pass a non-existent file path - os.Stat fails, triggering
 	// sendDecline with a FailureCatalog note.
-	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://www.tiktok.com/@user/video/123", filepath.Join(t.TempDir(), "nonexistent.mp4"))
+	processTikTok(context.Background(), snd, log, nil, nil, nil, msg, "https://www.tiktok.com/@user/video/123", filepath.Join(t.TempDir(), "nonexistent.mp4"))
 
 	if len(snd.Messages) == 0 {
 		t.Fatal("expected a decline message when video does not exist on disk")
@@ -201,7 +201,7 @@ func TestTikTok_SizeLimit_MustUseFailureCatalog(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	processTikTok(context.Background(), snd, log, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
+	processTikTok(context.Background(), snd, log, nil, nil, nil, msg, "https://www.tiktok.com/@user/video/123", videoPath)
 
 	if len(snd.Messages) != 1 {
 		t.Fatalf("expected 1 decline message, got %d", len(snd.Messages))
