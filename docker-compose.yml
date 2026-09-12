@@ -44,6 +44,18 @@ services:
     # individually take >10s, and we want bbolt.Close to land cleanly.
     stop_grace_period: 30s
     init: false # tini already runs as PID 1 inside the image
+    # Resolve through the router and two public resolvers instead of the
+    # host stub. Without this the container chain is
+    # container -> 127.0.0.11 (dockerd) -> 127.0.0.53 (systemd-resolved)
+    # -> router, and the host stub stalls in ~10-minute bursts every 1-2
+    # hours (`journalctl -u docker`: "[resolver] failed to query external
+    # DNS server dns-server=\"udp:127.0.0.53:53\" ... i/o timeout"), which
+    # is what produced the 24h count of `lookup api.telegram.org`
+    # failures. `.lan` still resolves: the router answers it.
+    dns:
+      - 192.168.0.1
+      - 1.1.1.1
+      - 8.8.8.8
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:8080/health"]
       interval: 30s

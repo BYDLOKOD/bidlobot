@@ -17,6 +17,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
@@ -52,7 +53,7 @@ func (a *App) handleFlush(_ *th.Context, msg telego.Message) error {
 		Text:   fmt.Sprintf("Выгружаю %d...", len(jobs)),
 	})
 
-	go a.flushDeferredJobs(msg.From.ID, msg.Chat.ID, jobs)
+	shared.Go(a.log, "flush", func() { a.flushDeferredJobs(msg.From.ID, msg.Chat.ID, jobs) })
 	return nil
 }
 

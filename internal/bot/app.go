@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -233,6 +234,9 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	}
 
 	updates, err := a.bot.UpdatesViaLongPolling(ctx, &telego.GetUpdatesParams{
+		// Explicit: telego requires Timeout whenever non-nil params are
+		// passed, and the poll must stay under the HTTP read timeout.
+		Timeout: 30,
 		AllowedUpdates: []string{
 			"message",
 			"callback_query",
@@ -255,6 +259,10 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 		return err
 	}
 	a.handler = bh
+	// Registered first so it is the outermost frame: telegohandler runs
+	// every update on its own goroutine, and a panic anywhere below would
+	// otherwise kill the process.
+	bh.Use(a.recoverMiddleware())
 	if a.healthCheck != nil {
 		bh.Use(a.healthMiddleware())
 	}
@@ -479,6 +487,21 @@ func (a *App) Stop() {
 	}
 
 	a.log.Info("handler stopped, stats flushed")
+}
+
+// recoverMiddleware converts a panic anywhere in the update chain into a
+// log entry. Without it a panic kills the process: telegohandler runs each
+// update on its own goroutine and nothing on that goroutine recovers.
+func (a *App) recoverMiddleware() th.Handler {
+	return func(ctx *th.Context, update telego.Update) error {
+		defer func() {
+			if r := recover(); r != nil {
+				a.log.Error("update handler panic recovered",
+					"update_id", update.UpdateID, "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
+		return ctx.Next(update)
+	}
 }
 
 // inFlightMiddleware tracks the per-update handler chain in App.inFlight

@@ -3,12 +3,13 @@ id: tiktok-repost
 kind: spec
 touches:
   - internal/bot/tiktok_repost.go
+  - internal/bot/tiktok_source.go
   - internal/bot/deferred.go
   - internal/bot/routes.go
   - internal/storage/deferred_repo.go
   - Dockerfile
 written: 2026-08-16
-updated: 2026-08-16
+updated: 2026-09-12
 ---
 
 # TikTok video repost
@@ -37,13 +38,19 @@ family as stats counting.
 
 ## Pipeline
 
-1. **Download** via `yt-dlp -f bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best
-   --no-playlist -o <workdir>/video.%(ext)s`. Up to 3 attempts with 2s
-   sleep, 60s per-call timeout. Watermark trim was added then **removed**
-   (commit 5d3a12a) - the current pipeline downloads the original file
-   as-is.
+1. **Download**, mirror first ([Video source](#video-source)): the tikwm
+   API resolves the link and returns a signed, watermark-free MP4 URL
+   that the bot streams into `<workdir>/video.mp4`. If the mirror fails,
+   `yt-dlp -f b[vcodec=h264]/b --no-playlist -o
+   <workdir>/video.%(ext)s` runs up to 3 times with a 2s sleep between
+   attempts and a **45s deadline per attempt**. Watermark trim was added
+   then **removed** (commit 5d3a12a) - both paths download the file
+   as-is. If both fail, the error names each path (`mirror: ...;
+   yt-dlp: ...`).
 2. **Size check**: 50 MiB ceiling (`maxVideoSize`) - Telegram Bot API
-   upload cap. Oversized -> public decline note, original kept.
+   upload cap. The mirror path refuses an oversized video twice: on the
+   reported metadata size before downloading, and on the number of bytes
+   actually streamed. Oversized -> public decline note, original kept.
 3. **Audio check** via `ffprobe`; a video without an audio stream is
    declined (TikTok clips are expected to have audio). If ffprobe is
    missing/fails it degrades to "assume audio present" so a broken
@@ -56,6 +63,33 @@ family as stats counting.
    failure is logged and the original kept (visible duplicate, lesser
    evil).
 
+## Video source
+
+`internal/bot/tiktok_source.go`. The deployment ISP filters TikTok web
+by TLS SNI: the yt-dlp path fetches TikTok pages, and the production
+log for 2026-08-26..2026-09-12 holds 24 DNS failures and 7 TLS-EOF
+failures from it. tikwm does the page fetch on its own side and serves
+the MP4 from a `*.tiktokcdn-us.com` host, which the same egress
+reaches: 6/6 fetches of `https://vt.tiktok.com/ZSq5d4Rxh` returned
+`200`/`1067861` bytes in 1.1-1.5s (verified 2026-09-12).
+
+Request shape: `GET {tikwmAPIHost}/api/?url=<link>` with a Chrome
+`User-Agent`, answer decoded from the `code`/`msg`/`data` envelope
+shared with the comment endpoints. `data.play` is the media URL,
+`data.size` the reported length, `data.images` the photo-post signal.
+Requests go through the shared `tikwmPace` limiter, so the mirror's
+free tier (about one request per second) sees one client for comments
+and downloads together.
+
+**Photo posts**. A `/photo/` post carries a non-empty `data.images`
+array and no usable video stream. Measured 2026-09-12: tikwm answers
+such a query with `data.size: 0` and a `data.play` URL on a music host
+that never serves an MP4. The download therefore reports `errPhotoPost`
+both when `play` is empty and when a post carrying images fails to
+deliver bytes; the pipeline then posts the randomized decline phrase
+instead of queueing a job no retry could complete. A post without
+images keeps today's behaviour (fall back to yt-dlp, queue on failure).
+
 ## Failure handling
 
 - Download failure or missing audio -> the job is persisted to the
@@ -63,14 +97,18 @@ family as stats counting.
   payload `TikTokPayload{URL, Username, FirstName, Caption}`; see
   [60_architecture.md](60_architecture.md) "Deferred queue"). The
   original message is never deleted on failure.
+- Photo post (`errPhotoPost`) -> decline note, **never queued**: the
+  queue would keep a job that no retry can complete. In the flush path
+  (`tryTikTokExport`) the job is dropped after the note.
 - Too-large, stat/open/send errors -> public decline note
   (`sendDecline`, randomized phrase from the failure catalog), no
   enqueue.
-- Runs **fire-and-forget** (`go processTikTok(context.Background(),
-  ...)`): the per-update ctx is cancelled when the handler returns, and
-  a synchronous download/upload would stall the sequential update loop
-  for every other member. NOT tracked in `App.inFlight` - best-effort,
-  a shutdown may lose one in-flight repost (documented tradeoff).
+- Runs **fire-and-forget** through `shared.Go` (`shared.Go(a.log,
+  "tiktok", ...)`), which wraps the goroutine in a `recover` so a panic
+  cannot take the process down; the per-update ctx is cancelled when the
+  handler returns, so the body builds its own `context.Background()`.
+  NOT tracked in `App.inFlight` - best-effort, a shutdown may lose one
+  in-flight repost (documented tradeoff).
 
 ## Exclusions & gaps (v1)
 
@@ -89,6 +127,8 @@ link) - the same gate as the YT sanitizer and the X post sidecar
 
 ## Image requirements
 
-The runtime image installs `yt-dlp` (pinned release, sha256-checked)
-and `ffmpeg`/`ffprobe` ([70_deployment.md](70_deployment.md)). No env
+The runtime image installs `yt-dlp` (pinned release 2026.03.17,
+sha256-checked) and `ffmpeg`/`ffprobe`
+([70_deployment.md](70_deployment.md)). yt-dlp is the fallback path
+only; the mirror needs nothing but the shared HTTP client. No env
 vars; the middleware is always on.

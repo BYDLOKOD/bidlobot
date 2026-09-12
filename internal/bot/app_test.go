@@ -1,9 +1,16 @@
 package bot
 
 import (
+	"context"
+	"io"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/mymmrac/telego"
+	th "github.com/mymmrac/telego/telegohandler"
 )
 
 // TestStop_WaitsForInFlightUntilTimeout exercises the inFlight WaitGroup
@@ -48,6 +55,54 @@ func TestApp_inFlightWaitTiming(t *testing.T) {
 			t.Fatalf("wait should not exceed deadline by much, got %s", dur)
 		}
 	})
+}
+
+// TestRecoverMiddlewareKeepsProcessing is the regression guard for the
+// 2026-09-10 production SIGSEGV-class failure: an update whose handler
+// panics must not take the process (or the handler loop) down with it, so
+// the next update is still processed.
+//
+// Without recoverMiddleware this test aborts the whole test binary: the
+// panic unwinds the dispatch goroutine telegohandler started, and no
+// recover exists on that stack.
+func TestRecoverMiddlewareKeepsProcessing(t *testing.T) {
+	updates := make(chan telego.Update, 4)
+	// The constructor only stores the bot pointer; no method is called on
+	// it before an update drives a handler.
+	bh, err := th.NewBotHandler(&telego.Bot{}, updates)
+	if err != nil {
+		t.Fatalf("new bot handler: %v", err)
+	}
+	app := &App{log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	bh.Use(app.recoverMiddleware())
+
+	var processed atomic.Bool
+	bh.Handle(func(_ *th.Context, update telego.Update) error {
+		if update.UpdateID == 1 {
+			panic("boom")
+		}
+		processed.Store(true)
+		return nil
+	})
+
+	done := make(chan error, 1)
+	go func() { done <- bh.Start() }()
+	t.Cleanup(func() {
+		_ = bh.StopWithContext(context.Background())
+		<-done
+	})
+
+	updates <- telego.Update{UpdateID: 1}
+	updates <- telego.Update{UpdateID: 2}
+
+	deadline := time.After(2 * time.Second)
+	for !processed.Load() {
+		select {
+		case <-deadline:
+			t.Fatal("second update was not processed after the first panicked")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 // waitOrTimeout mirrors the body of App.Stop's in-flight wait loop. We

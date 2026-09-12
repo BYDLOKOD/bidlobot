@@ -281,6 +281,88 @@ func TestRunWrite_ContextCancelDuringRateLimit(t *testing.T) {
 	}
 }
 
+// countingTransportCaller fails every call the way a transport fault
+// reaches the wrapper: DNS resolution timing out.
+type countingTransportCaller struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *countingTransportCaller) Call(_ context.Context, _ string, _ *telegoapi.RequestData) (*telegoapi.Response, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	return nil, errors.New("fasthttp do request: lookup api.telegram.org: i/o timeout")
+}
+
+func (c *countingTransportCaller) count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calls
+}
+
+// TestTransportRetryBudgetPerMethodClass pins the two transport budgets:
+// a control call spends the whole control ladder, while a media send gets
+// the shorter one so a stalled upload cannot retry three times through a
+// 240s attempt deadline.
+func TestTransportRetryBudgetPerMethodClass(t *testing.T) {
+	caller := &countingTransportCaller{}
+	// 35 characters after the colon: telego validates the token shape.
+	bot, err := telego.NewBot("123456:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsawX", telego.WithAPICaller(caller))
+	if err != nil {
+		t.Fatalf("new bot: %v", err)
+	}
+
+	limiter := ratelimit.New(ratelimit.Config{
+		Rate:           1 * time.Millisecond,
+		QueueCapacity:  16,
+		IdleTimeout:    100 * time.Millisecond,
+		ReaperInterval: 50 * time.Millisecond,
+		Logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	t.Cleanup(limiter.Close)
+
+	c, err := New(Config{
+		Bot:     bot,
+		Limiter: limiter,
+		RetryPolicy: retry.Policy{
+			Sleep:  func(context.Context, time.Duration) error { return nil },
+			Jitter: func(d time.Duration) time.Duration { return d },
+		},
+		Migrator: &fakeMigrator{},
+		Admin:    &fakeAdmin{},
+		Logger:   slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	ctx := context.Background()
+
+	if _, err := c.SendMessage(ctx, &telego.SendMessageParams{
+		ChatID: telego.ChatID{ID: -100}, Text: "hi",
+	}); err == nil {
+		t.Fatal("expected sendMessage to fail")
+	}
+	if got := caller.count(); got != retry.MaxTransportAttempts {
+		t.Errorf("sendMessage attempts = %d, want %d", got, retry.MaxTransportAttempts)
+	}
+
+	caller.mu.Lock()
+	caller.calls = 0
+	caller.mu.Unlock()
+
+	if _, err := c.SendVideo(ctx, &telego.SendVideoParams{
+		ChatID: telego.ChatID{ID: -100},
+		Video:  telego.InputFile{URL: "https://example.com/v.mp4"},
+	}); err == nil {
+		t.Fatal("expected sendVideo to fail")
+	}
+	if got := caller.count(); got != mediaMaxTransportAttempts {
+		t.Errorf("sendVideo attempts = %d, want %d", got, mediaMaxTransportAttempts)
+	}
+}
+
 // Compile-time interface assertion is verified at package level; this
 // test ensures the New constructor catches missing deps.
 func TestNewRejectsMissingDeps(t *testing.T) {

@@ -211,10 +211,10 @@ func xpostReposter(a *App) th.Handler {
 		snd := a.sanitizerSender()
 		select {
 		case xpostSlot <- struct{}{}:
-			go func() {
+			shared.Go(a.log, "xpost", func() {
 				defer func() { <-xpostSlot }()
 				processXPost(context.Background(), snd, a.log, xpostHTTPClient, xpostAPIBase, a.tweetTranslator, a.repReactor, msg, postURL)
-			}()
+			})
 		default:
 			go sendDecline(context.Background(), snd, a.log, msg.Chat.ID, msg.GetMessageID(), publicPureFailure(), "xpost: decline note send failed")
 		}

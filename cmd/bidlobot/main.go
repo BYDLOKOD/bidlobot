@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/valyala/fasthttp"
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
@@ -71,7 +72,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	tgBot, err := telego.NewBot(cfg.Token)
+	// telego defaults to a zero-value fasthttp.Client with no read or
+	// write timeout, and its caller applies the context deadline only when
+	// the context carries one - main passes context.Background() to
+	// startup calls, so without these two bounds one stalled request can
+	// hang for minutes (getChatAdministrators ran 181s on 2026-09-04).
+	tgBot, err := telego.NewBot(cfg.Token, telego.WithFastHTTPClient(&fasthttp.Client{
+		ReadTimeout:  65 * time.Second,  // must exceed the 30s long poll
+		WriteTimeout: 240 * time.Second, // 50 MiB upload on a slow uplink
+	}))
 	if err != nil {
 		log.Error("create telegram bot", "error", err)
 		os.Exit(1)

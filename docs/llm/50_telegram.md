@@ -13,7 +13,7 @@ touches:
   - internal/bot/routes.go
   - internal/storage/migrate.go
 written: 2026-05-14
-updated: 2026-05-15
+updated: 2026-09-12
 ---
 
 # Telegram API Reference
@@ -107,6 +107,8 @@ Outgoing: bot limits itself to 15 messages/min per chat (below Telegram's 20/min
 
 Telegram 429 error: respect `retry_after` field (seconds) + 10% jitter. `retry_after` is per-chat since Feb 2025.
 
+Retry classes in `shared/retry` (all with 10% jitter, caller cancellation never retried): 429 -> one retry after `retry_after`; 5xx (Telegram API error or bare HTTP status) -> 1/2/4/8s ladder, 4 attempts; transport (DNS, connect, TLS, read/write timeout, connection reset) -> 1/2/4s ladder, 3 attempts. Every attempt runs under its own deadline: 20s for control calls, 240s for media sends (`tgclient`). The outbound HTTP client bounds a call even when the caller passes a deadline-less context: 65s read (above the 30s long poll), 240s write.
+
 Per-user command cooldown (`internal/bot/cooldown.go`, applied by `gateMsg` to games, `/stats`, `/summarize`, `/refs*`, `/flush`): a user may trigger a given command once per its window (5-30s). An over-frequency call is dropped (handler not run) but is **not** fully silent: exactly **one** "slow down" notice is sent per window per (user,command) - bounded so a flooder cannot amplify, while a normal user still gets feedback. A fresh allowed call resets the notice state. The notice goes through the rate-limited sender; absent sender (minimal/test app) -> no notice, drop stays silent.
 
 ## Message formatting
@@ -116,6 +118,12 @@ HTML parse mode. Escape `<`, `>`, `&` in user-provided text. Max message length:
 ## Error handling
 
 API errors not exposed to users. Bot logs original error, responds with human-readable message.
+
+A panic in any route is recovered by `App.recoverMiddleware`, the outermost
+handler in the update chain (`app.go`): the panic and its stack are logged as
+`update handler panic recovered` and the process keeps serving. Background
+work spawned by handlers runs through `shared.Go`, which recovers the same way
+(`background goroutine panic recovered`).
 
 | Telegram error | Bot response |
 |---------------|-------------|
@@ -145,7 +153,9 @@ Signal: SIGTERM or SIGINT.
 4. Close DB connection
 5. Exit
 
-Heavy media goroutines (TikTok/xpost/captcha welcome) are NOT tracked - best-effort, may be lost on shutdown.
+Heavy media goroutines (TikTok/xpost/captcha welcome) are NOT tracked -
+best-effort, may be lost on shutdown. They are launched through
+`shared.Go`, so a panic inside one is logged instead of killing the process.
 
 ## Logging
 

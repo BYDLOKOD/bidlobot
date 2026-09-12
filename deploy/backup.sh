@@ -14,8 +14,10 @@
 # If downtime becomes a constraint, run the bot behind a webhook with
 # two replicas and back up the replica that is not serving traffic.
 #
-# Cron suggestion (root crontab on the deployment host):
-#     17 3 * * * /opt/bidlobot/deploy/backup.sh >>/var/log/bidlobot-backup.log 2>&1
+# Cron (root crontab on the deployment host; the checkout lives in
+# /home/veschin/bidlobot, and COMPOSE_DIR must be passed explicitly
+# because the default is /opt/bidlobot):
+#     17 3 * * * cd /home/veschin/bidlobot && BIDLOBOT_COMPOSE_DIR=/home/veschin/bidlobot ./deploy/backup.sh >>/var/log/bidlobot-backup.log 2>&1
 
 set -eu
 

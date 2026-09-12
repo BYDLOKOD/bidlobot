@@ -1,5 +1,5 @@
 // Package retry implements Telegram-aware retry with backoff for outbound
-// Bot API calls. Two policies fold into one Do call:
+// Bot API calls. Three policies fold into one Do call:
 //
 //   - 429 Too Many Requests: sleep for the server-supplied retry_after
 //     plus 10% jitter and try once more. A second 429 fails fast - if
@@ -10,6 +10,12 @@
 //     jitter, max four attempts total. 5xx is almost always transient
 //     (proxy hiccup, brief Telegram outage); the bounded ladder hides
 //     the user-visible blip without becoming a retry storm.
+//
+//   - Transport failure: DNS resolution, connect, TLS, read/write
+//     timeouts, reset connections. Three attempts on a 1s/2s/4s ladder
+//     with 10% jitter. These are local-egress faults - the ISP resolver
+//     or the uplink dropped the call - so they are worth exactly one
+//     short ladder before the caller decides what to do.
 //
 // Other 4xx (400, 403, ...) are not retried because they signal a real
 // problem in the request (bad chat ID, blocked by user, etc.) that
@@ -45,6 +51,23 @@ func ServerBackoff(attempt int) time.Duration {
 		base = 8 * time.Second
 	}
 	return base
+}
+
+// MaxTransportAttempts caps total attempts on transport errors: DNS
+// resolution, connect, TLS, read/write timeouts, reset connections.
+const MaxTransportAttempts = 3
+
+// TransportBackoff returns the delay before attempt n (1-indexed) on the
+// transport ladder: 1s, 2s, 4s, capped at 8s.
+func TransportBackoff(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := time.Second << (attempt - 1)
+	if d > 8*time.Second {
+		d = 8 * time.Second
+	}
+	return d
 }
 
 // Jitter adds +/- 10% noise to d so concurrent retries spread their wakes.
@@ -91,6 +114,10 @@ type Policy struct {
 	Sleep                  Sleep
 	Jitter                 Jitter
 	MaxServerErrorAttempts int
+	MaxTransportAttempts   int
+	// AttemptTimeout bounds one attempt of fn. Zero disables the bound
+	// (the caller's context remains the only limit).
+	AttemptTimeout time.Duration
 }
 
 func (p *Policy) ensureDefaults() {
@@ -102,6 +129,9 @@ func (p *Policy) ensureDefaults() {
 	}
 	if p.MaxServerErrorAttempts <= 0 {
 		p.MaxServerErrorAttempts = MaxServerErrorAttempts
+	}
+	if p.MaxTransportAttempts <= 0 {
+		p.MaxTransportAttempts = MaxTransportAttempts
 	}
 }
 
@@ -116,6 +146,7 @@ func Do(ctx context.Context, p Policy, fn func(ctx context.Context) error) error
 	var lastErr error
 	retried429 := false
 	serverAttempt := 1
+	transportAttempt := 1
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -125,7 +156,18 @@ func Do(ctx context.Context, p Policy, fn func(ctx context.Context) error) error
 			return err
 		}
 
-		err := fn(ctx)
+		// Each attempt gets its own deadline so one hung call cannot eat
+		// the whole budget. The expiry surfaces as a wrapped
+		// context.DeadlineExceeded, which classifies as transport and is
+		// retried while the caller's context is still alive.
+		var err error
+		if p.AttemptTimeout > 0 {
+			attemptCtx, cancel := context.WithTimeout(ctx, p.AttemptTimeout)
+			err = fn(attemptCtx)
+			cancel()
+		} else {
+			err = fn(ctx)
+		}
 		if err == nil {
 			return nil
 		}
@@ -160,6 +202,19 @@ func Do(ctx context.Context, p Policy, fn func(ctx context.Context) error) error
 				return waitErr
 			}
 
+		case kindTransport:
+			if ctx.Err() != nil { // caller cancelled or its deadline passed
+				return lastErr
+			}
+			if transportAttempt >= p.MaxTransportAttempts {
+				return err
+			}
+			delay := p.Jitter(TransportBackoff(transportAttempt))
+			transportAttempt++
+			if waitErr := p.Sleep(ctx, delay); waitErr != nil {
+				return waitErr
+			}
+
 		default:
 			return err
 		}
@@ -173,6 +228,7 @@ const (
 	kindNonRetryable kind = iota
 	kindTooManyRequests
 	kindServerError
+	kindTransport
 )
 
 type decision struct {
@@ -185,19 +241,27 @@ func classify(err error) decision {
 		return decision{kind: kindNonRetryable}
 	}
 	var apiErr *telegoapi.Error
-	if !errors.As(err, &apiErr) {
-		return decision{kind: kindNonRetryable}
-	}
-	switch {
-	case apiErr.ErrorCode == 429:
-		ra := 0
-		if apiErr.Parameters != nil {
-			ra = apiErr.Parameters.RetryAfter
+	if errors.As(err, &apiErr) {
+		switch {
+		case apiErr.ErrorCode == 429:
+			ra := 0
+			if apiErr.Parameters != nil {
+				ra = apiErr.Parameters.RetryAfter
+			}
+			return decision{kind: kindTooManyRequests, retryAfter: ra}
+		case apiErr.ErrorCode >= 500 && apiErr.ErrorCode <= 599:
+			return decision{kind: kindServerError}
+		default:
+			return decision{kind: kindNonRetryable}
 		}
-		return decision{kind: kindTooManyRequests, retryAfter: ra}
-	case apiErr.ErrorCode >= 500 && apiErr.ErrorCode <= 599:
-		return decision{kind: kindServerError}
-	default:
+	}
+	// A cancelled caller is not a transport fault: retrying it would only
+	// extend a shutdown or an expired handler.
+	if errors.Is(err, context.Canceled) {
 		return decision{kind: kindNonRetryable}
 	}
+	// Everything else that reaches here is the call never completing:
+	// resolver failure, refused/reset connection, TLS abort, read or
+	// write timeout, or this package's own per-attempt deadline.
+	return decision{kind: kindTransport}
 }

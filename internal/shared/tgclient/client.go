@@ -6,7 +6,10 @@
 //     the new chat id. Runs once per call.
 //
 //  2. retry with backoff - on 429 sleep retry_after+jitter once; on 5xx
-//     follow the bounded exponential ladder; other 4xx surface as-is.
+//     follow the bounded exponential ladder; on a transport failure
+//     (DNS, connect, TLS, read/write timeout) follow the short transport
+//     ladder; other 4xx surface as-is. Every attempt runs under its own
+//     deadline: control calls get 20s, media sends 240s.
 //
 //  3. per-chat rate limiter - 15 req/min per chat with a FIFO queue
 //     bounded at 50; overflow drops oldest with a WARN log.
@@ -29,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoapi"
@@ -49,11 +53,20 @@ type AdminInvalidator interface {
 	Invalidate(absChatID int64)
 }
 
+// Per-attempt budgets. Control calls are small JSON requests; media sends
+// upload up to 50 MiB and need room on a slow uplink.
+const (
+	controlCallTimeout        = 20 * time.Second
+	mediaCallTimeout          = 240 * time.Second
+	mediaMaxTransportAttempts = 2
+)
+
 // Client is the fully wrapped Telegram bot client. Construct with [New].
 type Client struct {
 	bot         *telego.Bot
 	limiter     *ratelimit.Limiter
 	retryPolicy retry.Policy
+	mediaPolicy retry.Policy
 	migrator    Migrator
 	admin       AdminInvalidator
 	log         *slog.Logger
@@ -89,10 +102,18 @@ func New(cfg Config) (*Client, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	policy := cfg.RetryPolicy
+	if policy.AttemptTimeout <= 0 {
+		policy.AttemptTimeout = controlCallTimeout
+	}
+	media := policy
+	media.AttemptTimeout = mediaCallTimeout
+	media.MaxTransportAttempts = mediaMaxTransportAttempts
 	return &Client{
 		bot:         cfg.Bot,
 		limiter:     cfg.Limiter,
-		retryPolicy: cfg.RetryPolicy,
+		retryPolicy: policy,
+		mediaPolicy: media,
 		migrator:    cfg.Migrator,
 		admin:       cfg.Admin,
 		log:         cfg.Logger,
@@ -109,8 +130,25 @@ func (c *Client) Bot() *telego.Bot { return c.bot }
 // embedded in the request (negative for groups). migrateChatID is invoked
 // when Telegram redirects: it should rewrite the request params and
 // return whether to replay.
+//
+// Applies the control policy; media sends use runWritePolicy with the
+// media budget (see mediaCallTimeout).
 func (c *Client) runWrite(
 	ctx context.Context,
+	chatID int64,
+	method string,
+	send func(ctx context.Context) error,
+	migrateApply func(newSignedChatID int64),
+) error {
+	return c.runWritePolicy(ctx, c.retryPolicy, chatID, method, send, migrateApply)
+}
+
+// runWritePolicy is runWrite with an explicit retry policy: control calls
+// and media uploads need different per-attempt deadlines and transport
+// attempt budgets.
+func (c *Client) runWritePolicy(
+	ctx context.Context,
+	policy retry.Policy,
 	chatID int64,
 	method string,
 	send func(ctx context.Context) error,
@@ -124,7 +162,7 @@ func (c *Client) runWrite(
 		}
 
 		var apiErr *telegoapi.Error
-		err := retry.Do(ctx, c.retryPolicy, func(ctx context.Context) error {
+		err := retry.Do(ctx, policy, func(ctx context.Context) error {
 			return send(ctx)
 		})
 		if err == nil {
@@ -232,7 +270,7 @@ func (c *Client) SendPhoto(ctx context.Context, params *telego.SendPhotoParams) 
 		return nil, errors.New("tgclient: nil params")
 	}
 	var msg *telego.Message
-	err := c.runWrite(ctx, params.ChatID.ID, "sendPhoto",
+	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendPhoto",
 		func(ctx context.Context) error {
 			m, e := c.bot.SendPhoto(ctx, params)
 			if e != nil {
@@ -253,7 +291,7 @@ func (c *Client) SendVideo(ctx context.Context, params *telego.SendVideoParams) 
 		return nil, errors.New("tgclient: nil params")
 	}
 	var msg *telego.Message
-	err := c.runWrite(ctx, params.ChatID.ID, "sendVideo",
+	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendVideo",
 		func(ctx context.Context) error {
 			m, e := c.bot.SendVideo(ctx, params)
 			if e != nil {
@@ -274,7 +312,7 @@ func (c *Client) SendAnimation(ctx context.Context, params *telego.SendAnimation
 		return nil, errors.New("tgclient: nil params")
 	}
 	var msg *telego.Message
-	err := c.runWrite(ctx, params.ChatID.ID, "sendAnimation",
+	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendAnimation",
 		func(ctx context.Context) error {
 			m, e := c.bot.SendAnimation(ctx, params)
 			if e != nil {
@@ -295,7 +333,7 @@ func (c *Client) SendDocument(ctx context.Context, params *telego.SendDocumentPa
 		return nil, errors.New("tgclient: nil params")
 	}
 	var msg *telego.Message
-	err := c.runWrite(ctx, params.ChatID.ID, "sendDocument",
+	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendDocument",
 		func(ctx context.Context) error {
 			m, e := c.bot.SendDocument(ctx, params)
 			if e != nil {
@@ -318,7 +356,7 @@ func (c *Client) SendMediaGroup(ctx context.Context, params *telego.SendMediaGro
 		return nil, errors.New("tgclient: nil params")
 	}
 	var msgs []telego.Message
-	err := c.runWrite(ctx, params.ChatID.ID, "sendMediaGroup",
+	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendMediaGroup",
 		func(ctx context.Context) error {
 			m, e := c.bot.SendMediaGroup(ctx, params)
 			if e != nil {

@@ -4,6 +4,7 @@ go 1.26.1
 
 require (
 	github.com/mymmrac/telego v1.8.0
+	github.com/valyala/fasthttp v1.69.0
 	go.etcd.io/bbolt v1.4.3
 	golang.org/x/sys v0.39.0
 )
@@ -19,7 +20,6 @@ require (
 	github.com/klauspost/cpuid/v2 v2.2.9 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/valyala/fasthttp v1.69.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	golang.org/x/arch v0.0.0-20210923205945-b76863e36670 // indirect
 	golang.org/x/sync v0.20.0 // indirect

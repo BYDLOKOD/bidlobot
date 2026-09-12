@@ -11,7 +11,7 @@ touches:
   - internal/testutil/
   - internal/text/
 written: 2026-05-14
-updated: 2026-05-15
+updated: 2026-09-12
 ---
 
 # Architecture
@@ -39,7 +39,8 @@ internal/
     deferred.go        /flush per-user retry queue
     summarize.go       /summarize + /итог handler
     youtube_sanitizer.go  YT si= strip (delete+repost)
-    tiktok_repost.go      TikTok video repost (yt-dlp)
+    tiktok_repost.go      TikTok video repost (mirror -> yt-dlp)
+    tiktok_source.go      tikwm mirror: resolve + stream the MP4
     xpost.go              X/Twitter sidecar client
     referral.go           referral catalog UX
     reputation.go         praise/roast/rep economy
@@ -62,8 +63,9 @@ internal/
     reputation/  balance economy rules
   games/           dice / battle / duel / guess / hangman / quiz ...
   shared/          admin cache, target resolve, format
+  shared/safe.go   Go(): panic-safe background goroutine launcher
   shared/ratelimit per-chat outgoing token bucket
-  shared/retry     429+5xx retry policy
+  shared/retry     429 + 5xx + transport retry policy, per-attempt deadline
   shared/tgclient  composed wrapper: migration -> retry -> rate-limit
   storage/         bbolt repos + key conventions + migration
   testutil/        MockAPI + recorder + update factories
@@ -123,8 +125,10 @@ observers MUST see the original human message before the sanitizer
 deletes+reposts it. Game routes register before the observers so their
 slash commands and callbacks coexist.
 
-App-level middleware in `Run`: `healthMiddleware` (update freshness)
-then `inFlightMiddleware` (per-update WaitGroup).
+App-level middleware in `Run`: `recoverMiddleware` (outermost - a panic
+in any route below becomes a log record instead of a dead process),
+then `healthMiddleware` (update freshness), then `inFlightMiddleware`
+(per-update WaitGroup).
 
 Side-effect axes:
 - Every chat-visible send flows through `tgclient.Client` (per-chat
@@ -132,13 +136,15 @@ Side-effect axes:
   referrals, summarize placeholder/edit, sanitizer/reposter sends,
   captcha mute/kick/welcome, onboarding. This keeps high-volume public
   paths inside Telegram's 20 msg/min/chat budget under load.
-- Heavy media work (TikTok download/upload, xpost screenshot/videos,
-  captcha welcome animation) runs **fire-and-forget**
-  (`go f(context.Background(), ...)`) because the update loop is
-  sequential and a synchronous multi-hundred-KB upload would stall
-  every member's update. These are deliberately NOT in `App.inFlight`
-  (best-effort; shutdown may lose one). Summarize IS tracked (app
-  context + deadline, must finish inside the shutdown budget).
+- Heavy media work (TikTok download/upload, xpost render/videos,
+  captcha welcome animation) runs **fire-and-forget** through
+  `shared.Go(log, name, fn)`, which spawns the goroutine behind a
+  `recover` so a panic there cannot kill the process; the body builds its
+  own `context.Background()` because the update loop is sequential and a
+  synchronous multi-hundred-KB upload would stall every member's update.
+  These are deliberately NOT in `App.inFlight` (best-effort; shutdown may
+  lose one). Summarize IS tracked (app context + deadline, must finish
+  inside the shutdown budget).
 - The legacy `v1:` callback dispatcher still uses the raw bot; it is
   per-tap, low volume, and no surface feeds it destructive pendings
   (nothing creates them anymore - dead surface, kept for the game
@@ -204,7 +210,8 @@ migration (documented, not silently handled).
    pending GC, captcha sweep, summarize take App's signal context;
    `App.Stop()` waits `inFlight` up to `ShutdownTimeout` (10s).
 9. **Heavy sends never block the loop.** Fire-and-forget
-   `context.Background()` goroutines for media uploads/downloads.
+   `context.Background()` goroutines for media uploads/downloads, always
+   launched through `shared.Go` so a panic in one is contained.
 10. **Privacy + admin guard inputs.** Without `setprivacy: disabled`
     the sanitizer/reposters/summarize recorder never see message
     content; `cmd/probe` reports the flag.
@@ -233,11 +240,14 @@ No `edited_message`, no `chat_join_request`.
 | Failure | Where | Response |
 |---------|-------|----------|
 | 429 | `retry.Do` | sleep `retry_after`+jitter, retry once |
-| 5xx | `retry.Do` | 1/2/4/8s backoff, 4 attempts |
-| other 4xx | `retry.Do` | surface to caller |
+| 5xx (Telegram API error or HTTP status) | `retry.Do` | 1/2/4/8s backoff, 4 attempts |
+| transport (DNS, connect, TLS, read/write timeout, reset) | `retry.Do` | 1/2/4s backoff, 3 attempts; caller cancellation is never retried |
+| hung Bot API call | `retry.Do` + `tgclient` | per-attempt deadline: 20s control, 240s media; no deadline from the caller still leaves the HTTP client's 65s read / 240s write bounds |
 | `migrate_to_chat_id` | `tgclient` | `MigrateChatID` + replay |
+| panic in any route | `App.recoverMiddleware` | log with stack; the process and the update loop survive |
 | bbolt I/O | service | propagate; reply "временная ошибка" |
-| TikTok download/audio fail | `tiktok_repost.go` | enqueue to deferred queue; original kept |
+| TikTok download/audio fail | `tiktok_repost.go` | mirror first, yt-dlp fallback; both failed -> enqueue to deferred queue; original kept |
+| TikTok photo post | `tiktok_source.go` | decline note; never queued (no retry can succeed) |
 | TikTok too-large/send fail | `tiktok_repost.go` | public decline note; original kept |
 | xpost any failure | `xpost.go` | decline note; original kept (never deleted) |
 | YT sanitizer repost fail | `youtube_sanitizer.go` | original left intact |

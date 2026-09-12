@@ -29,6 +29,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"log/slog"
@@ -59,8 +60,10 @@ const (
 	// maxVideoSize is Telegram's bot upload limit for video (50 MB).
 	maxVideoSize = 50 * 1024 * 1024
 
-	// tiktokDownloadTimeout caps the yt-dlp invocation.
-	tiktokDownloadTimeout = 60 * time.Second
+	// tiktokDownloadAttemptTimeout caps one yt-dlp invocation. Three
+	// attempts get three separate deadlines, so a slow third attempt is
+	// not cut off by the first two.
+	tiktokDownloadAttemptTimeout = 45 * time.Second
 )
 
 // --- Deferred queue interface --------------------------------------------
@@ -198,50 +201,95 @@ func ensureScheme(raw string) string {
 
 // --- Video download ------------------------------------------------------
 
-// downloadTikTok fetches a TikTok video via yt-dlp to a temp directory.
-// Returns the file path (caller must os.Remove when done).
-// On failure returns an error describing what went wrong.
-func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error) {
-	dlURL := ensureScheme(rawURL)
+// ytdlpDownload is the yt-dlp fallback path; a variable so tests can
+// substitute a stub.
+var ytdlpDownload = downloadTikTokViaYtDlp
 
-	dlCtx, cancel := context.WithTimeout(ctx, tiktokDownloadTimeout)
+// downloadTikTok fetches a TikTok video for repost: the tikwm mirror
+// first (it resolves and serves the file without any request to TikTok
+// web, which the ISP filters by TLS SNI), yt-dlp as the fallback.
+// Returns the file path (caller must os.Remove when done).
+func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error) {
+	mctx, cancel := context.WithTimeout(ctx, mirrorDownloadTimeout)
 	defer cancel()
+	path, mirrorErr := downloadFromMirror(mctx, tiktokCommentHTTPClient, rawURL, workDir)
+	if mirrorErr == nil {
+		return path, nil
+	}
+	if errors.Is(mirrorErr, errPhotoPost) {
+		return "", mirrorErr
+	}
+	path, dlpErr := ytdlpDownload(ctx, rawURL, workDir)
+	if dlpErr == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("mirror: %w; yt-dlp: %w", mirrorErr, dlpErr)
+}
+
+// downloadTikTokViaYtDlp runs yt-dlp up to three times, each attempt
+// under its own deadline: one shared deadline leaves the third attempt
+// with whatever the first two did not spend, usually nothing.
+func downloadTikTokViaYtDlp(ctx context.Context, rawURL, workDir string) (string, error) {
+	dlURL := ensureScheme(rawURL)
 
 	const maxAttempts = 3
 	var lastErr error
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		cmd := exec.CommandContext(dlCtx,
-			"yt-dlp",
-			// Prefer an h264 single-file variant: TikTok serves the bytevc1
-			// (h265) variant muted to non-browser clients, and the ffprobe
-			// audio gate would reject it. h264 variants carry aac audio.
-			"-f", "b[vcodec=h264]/b",
-			"--no-playlist",
-			"-o", workDir+"/video.%(ext)s",
-			dlURL,
-		)
-
-		output, err := cmd.CombinedOutput()
+		path, err := ytDlpAttempt(ctx, dlURL, workDir)
 		if err == nil {
-			// Find the downloaded file in the workDir.
-			entries, rdErr := os.ReadDir(workDir)
-			if rdErr != nil {
-				return "", fmt.Errorf("reading work dir: %w", rdErr)
-			}
-			for _, e := range entries {
-				if !e.IsDir() {
-					return filepath.Join(workDir, e.Name()), nil
-				}
-			}
-			return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
+			return path, nil
 		}
-
-		lastErr = fmt.Errorf("yt-dlp attempt %d: %w\n%s", attempt, err, string(output))
+		lastErr = fmt.Errorf("yt-dlp attempt %d: %w", attempt, err)
 		if attempt < maxAttempts {
 			time.Sleep(2 * time.Second)
 		}
 	}
 	return "", lastErr
+}
+
+// ytDlpAttempt runs one yt-dlp invocation and returns the file it wrote
+// into workDir.
+func ytDlpAttempt(ctx context.Context, dlURL, workDir string) (string, error) {
+	dlCtx, cancel := context.WithTimeout(ctx, tiktokDownloadAttemptTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(dlCtx,
+		"yt-dlp",
+		// Prefer an h264 single-file variant: TikTok serves the bytevc1
+		// (h265) variant muted to non-browser clients, and the ffprobe
+		// audio gate would reject it. h264 variants carry aac audio.
+		"-f", "b[vcodec=h264]/b",
+		"--no-playlist",
+		"-o", workDir+"/video.%(ext)s",
+		dlURL,
+	)
+
+	output, err := cmd.CombinedOutput()
+	if err == nil {
+		// Find the downloaded file in the workDir.
+		entries, rdErr := os.ReadDir(workDir)
+		if rdErr != nil {
+			return "", fmt.Errorf("reading work dir: %w", rdErr)
+		}
+		for _, e := range entries {
+			if !e.IsDir() {
+				return filepath.Join(workDir, e.Name()), nil
+			}
+		}
+		return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
+	}
+	return "", fmt.Errorf("%w\n%s", err, previewOutput(output, 400))
+}
+
+// previewOutput trims captured subprocess output so one failure does not
+// dump kilobytes of yt-dlp noise into a structured log record.
+func previewOutput(b []byte, maxRunes int) string {
+	s := strings.TrimSpace(string(b))
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "...(truncated)"
 }
 
 // --- Middleware ----------------------------------------------------------
@@ -258,8 +306,10 @@ func tiktokReposter(a *App) th.Handler {
 		// Comment permalinks are also video URLs: quote the comment instead
 		// of replaying the video.
 		if act, videoURL, commentID := tiktokCommentDecision(msg); act {
-			go processTikTokComment(context.Background(), a.sanitizerSender(), a.log,
-				tiktokCommentHTTPClient, a.repReactor, a.tiktokVideos, msg, videoURL, commentID)
+			shared.Go(a.log, "tiktok-comment", func() {
+				processTikTokComment(context.Background(), a.sanitizerSender(), a.log,
+					tiktokCommentHTTPClient, a.repReactor, a.tiktokVideos, msg, videoURL, commentID)
+			})
 			return thctx.Next(update)
 		}
 		act, tiktokURL := tiktokDecision(msg)
@@ -274,7 +324,7 @@ func tiktokReposter(a *App) th.Handler {
 		// returns.
 		if isTikTokShortLink(tiktokURL) {
 			snd := a.sanitizerSender()
-			go func() {
+			shared.Go(a.log, "tiktok-shortlink", func() {
 				ctx := context.Background()
 				if final := resolveTikTokURL(ctx, tiktokCommentHTTPClient, tiktokURL); final != "" {
 					if videoURL, commentID, ok := tiktokCommentIDFromURL(final); ok {
@@ -287,11 +337,13 @@ func tiktokReposter(a *App) th.Handler {
 					return
 				}
 				processTikTok(ctx, snd, a.log, a.deferredQ, a.tiktokVideos, a.repReactor, msg, tiktokURL, "")
-			}()
+			})
 			return thctx.Next(update)
 		}
-		go processTikTok(context.Background(), a.sanitizerSender(), a.log,
-			a.deferredQ, a.tiktokVideos, a.repReactor, msg, tiktokURL, "")
+		shared.Go(a.log, "tiktok", func() {
+			processTikTok(context.Background(), a.sanitizerSender(), a.log,
+				a.deferredQ, a.tiktokVideos, a.repReactor, msg, tiktokURL, "")
+		})
 		return thctx.Next(update)
 	}
 }
@@ -338,6 +390,11 @@ func processTikTok(
 		var dlErr error
 		videoPath, dlErr = downloadTikTok(ctx, tiktokURL, workDir)
 		if dlErr != nil {
+			if errors.Is(dlErr, errPhotoPost) {
+				log.Info("tiktok: photo post has no video, declining", "chat_id", chatID, "url", tiktokURL)
+				sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
+				return
+			}
 			log.Warn("tiktok: download failed, queuing", "chat_id", chatID, "url", tiktokURL, "error", dlErr)
 			enqueueOrFail(ctx, snd, log, queue, msg, tiktokURL)
 			return
@@ -489,6 +546,13 @@ func tryTikTokExport(
 
 	videoPath, err := downloadTikTok(ctx, url, workDir)
 	if err != nil {
+		if errors.Is(err, errPhotoPost) {
+			// No retry can succeed on a photo post: report once and let
+			// the caller drop the job instead of keeping it forever.
+			log.Info("tiktok: photo post has no video, declining", "chat_id", chatID, "url", url)
+			sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
+			return nil
+		}
 		return fmt.Errorf("download: %w", err)
 	}
 	defer os.Remove(videoPath)

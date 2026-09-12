@@ -190,10 +190,14 @@ func Test403DoesNotRetry(t *testing.T) {
 	}
 }
 
-func TestNonAPIErrorNotRetried(t *testing.T) {
+// TestTransportErrorRetriesThenFails pins the transport ladder: a call
+// that never reaches Telegram (DNS, connect, TLS, read/write timeout) is
+// attempted MaxTransportAttempts times, then the error surfaces.
+func TestTransportErrorRetriesThenFails(t *testing.T) {
 	calls := atomic.Int32{}
-	want := errors.New("network reset")
-	err := retry.Do(context.Background(), retry.Policy{Sleep: (&instantSleep{}).Fn, Jitter: noJitter},
+	sleep := &instantSleep{}
+	want := errors.New("fasthttp do request: lookup api.telegram.org: i/o timeout")
+	err := retry.Do(context.Background(), retry.Policy{Sleep: sleep.Fn, Jitter: noJitter},
 		func(ctx context.Context) error {
 			calls.Add(1)
 			return want
@@ -201,8 +205,107 @@ func TestNonAPIErrorNotRetried(t *testing.T) {
 	if !errors.Is(err, want) {
 		t.Fatalf("expected wrapped want, got %v", err)
 	}
+	if calls.Load() != int32(retry.MaxTransportAttempts) {
+		t.Fatalf("expected %d calls, got %d", retry.MaxTransportAttempts, calls.Load())
+	}
+	expected := []time.Duration{retry.TransportBackoff(1), retry.TransportBackoff(2)}
+	if len(sleep.durations) != len(expected) {
+		t.Fatalf("expected %d sleeps, got %v", len(expected), sleep.durations)
+	}
+	for i, w := range expected {
+		if sleep.durations[i] != w {
+			t.Fatalf("sleep %d: want %s, got %s", i, w, sleep.durations[i])
+		}
+	}
+}
+
+// TestTransportThenSuccess: the resolver blip clears on the second
+// attempt, which is the case the ladder exists for.
+func TestTransportThenSuccess(t *testing.T) {
+	calls := atomic.Int32{}
+	err := retry.Do(context.Background(), retry.Policy{Sleep: (&instantSleep{}).Fn, Jitter: noJitter},
+		func(ctx context.Context) error {
+			if calls.Add(1) == 1 {
+				return errors.New("dial tcp: connection reset by peer")
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("got %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Fatalf("expected 2 calls, got %d", calls.Load())
+	}
+}
+
+// TestCanceledCallIsNotRetried: a cancelled caller means shutdown or an
+// expired handler, not a transient fault - retrying only delays the exit.
+func TestCanceledCallIsNotRetried(t *testing.T) {
+	calls := atomic.Int32{}
+	err := retry.Do(context.Background(), retry.Policy{Sleep: (&instantSleep{}).Fn, Jitter: noJitter},
+		func(ctx context.Context) error {
+			calls.Add(1)
+			return fmt.Errorf("send: %w", context.Canceled)
+		})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
 	if calls.Load() != 1 {
 		t.Fatalf("expected 1 call, got %d", calls.Load())
+	}
+}
+
+// TestAttemptTimeoutBoundsEachAttempt: with AttemptTimeout set, a call
+// that hangs is cut off per attempt and retried, so Do returns instead of
+// blocking forever on a stalled transport.
+func TestAttemptTimeoutBoundsEachAttempt(t *testing.T) {
+	calls := atomic.Int32{}
+	start := time.Now()
+	err := retry.Do(context.Background(),
+		retry.Policy{Sleep: (&instantSleep{}).Fn, Jitter: noJitter, AttemptTimeout: 30 * time.Millisecond},
+		func(ctx context.Context) error {
+			calls.Add(1)
+			<-ctx.Done()
+			return ctx.Err()
+		})
+	elapsed := time.Since(start)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected deadline exceeded, got %v", err)
+	}
+	if calls.Load() != int32(retry.MaxTransportAttempts) {
+		t.Fatalf("expected %d attempts, got %d", retry.MaxTransportAttempts, calls.Load())
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("hung for %s", elapsed)
+	}
+}
+
+// TestAttemptTimeoutLeavesCallerContextAlone: the per-attempt deadline
+// must not be charged to the caller context, which stays usable.
+func TestAttemptTimeoutLeavesCallerContextAlone(t *testing.T) {
+	ctx := context.Background()
+	calls := atomic.Int32{}
+	err := retry.Do(ctx, retry.Policy{Sleep: (&instantSleep{}).Fn, Jitter: noJitter, AttemptTimeout: time.Second},
+		func(c context.Context) error {
+			if calls.Add(1) == 1 {
+				return errors.New("temporary failure in name resolution")
+			}
+			return nil
+		})
+	if err != nil {
+		t.Fatalf("got %v", err)
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("caller context was cancelled: %v", ctx.Err())
+	}
+}
+
+func TestTransportBackoffLadder(t *testing.T) {
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second}
+	for i, w := range want {
+		if got := retry.TransportBackoff(i + 1); got != w {
+			t.Fatalf("attempt %d: want %s, got %s", i+1, w, got)
+		}
 	}
 }
 

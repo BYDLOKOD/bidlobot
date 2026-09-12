@@ -137,8 +137,9 @@ func (s *Service) OnAnswer(ctx context.Context, query telego.CallbackQuery, chal
 	}
 	s.editResolved(ctx, *c, text.MsgCaptchaSolved)
 	s.unmute(ctx, c.AbsChatID, c.UserID)
-	s.answer(ctx, query.ID, "")                // clear the spinner FIRST so the user is not blocked on the upload
-	go s.sendWelcome(context.Background(), *c) // async best-effort: the gif upload must never block the update loop
+	s.answer(ctx, query.ID, "") // clear the spinner FIRST so the user is not blocked on the upload
+	// Async best-effort: the gif upload must never block the update loop.
+	shared.Go(s.log, "captcha-welcome", func() { s.sendWelcome(context.Background(), *c) })
 	return nil
 }
 

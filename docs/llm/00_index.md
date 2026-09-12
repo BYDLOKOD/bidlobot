@@ -2,7 +2,7 @@
 id: llm-index
 kind: index
 written: 2026-05-14
-updated: 2026-08-16
+updated: 2026-09-12
 ---
 
 # docs/llm - LLM-facing reference (v3)
@@ -26,7 +26,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [45_summarize.md](45_summarize.md) - admin-only `/summarize`: OMP/Pi CLI + DeepSeek V4 Flash, RAM-only window, weighted digest with cost, deferred retry, privacy
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits + per-user cooldown notice, error handling, onboarding + admission gate, captcha, shutdown
 - [55_youtube_sanitizer.md](55_youtube_sanitizer.md) - YouTube `si=` strip: host scoping, repost-then-delete, exclusions, v1 gaps, privacy gate
-- [56_tiktok_repost.md](56_tiktok_repost.md) - TikTok video repost: yt-dlp download, 50 MiB cap, audio check, repost-then-delete, deferred queue on failure
+- [56_tiktok_repost.md](56_tiktok_repost.md) - TikTok video repost: tikwm mirror download with yt-dlp fallback, 50 MiB cap, audio check, photo-post decline, repost-then-delete, deferred queue on failure
 - [57_xpost.md](57_xpost.md) - X/Twitter post repost: FixTweet API, single-message album (text + photos + videos + canonical link), repost-then-delete, variant size selection, single-slot concurrency
 - [58_referral.md](58_referral.md) - referral catalog: /refs /refreg /refreport, chat-scoped buckets, registration UX, moderation
 - [59_reputation.md](59_reputation.md) - reputation economy: /praise /roast /rep /reptop, balance rules, live membership check
@@ -45,6 +45,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [devlog/07_privacy_leak_audit.md](devlog/07_privacy_leak_audit.md) - 2026-05-16: PII audit, working-tree sanitize, scrub runbook, creds rotation deferred.
 - [devlog/08_content_tools_era.md](devlog/08_content_tools_era.md) - 2026-05-26..08-11: captcha + admission gate, TikTok repost, X-post sidecar, referral, reputation, summarize migrated to OMP/Pi, deferred queue, DM console removed.
 - [devlog/09_xpost_v2_and_docs_v3.md](devlog/09_xpost_v2_and_docs_v3.md) - 2026-08-16: X-post reworked to single-message FixTweet repost (xshot sidecar deleted), docs/llm migrated to v3.
+- [devlog/10_media_resilience.md](devlog/10_media_resilience.md) - 2026-09-12: panic containment (recover middleware + shared.Go), transport retry class with per-attempt deadlines, TikTok download via the tikwm mirror with yt-dlp fallback.
 
 ## Removed surfaces (code deleted; docs deleted with them)
 

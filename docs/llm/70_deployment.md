@@ -12,7 +12,7 @@ touches:
   - .omp/skills/bidlobot-deploy/scripts/status.sh
   - cmd/bidlobot/
 written: 2026-05-14
-updated: 2026-08-16
+updated: 2026-09-12
 ---
 
 # Deployment
@@ -49,12 +49,16 @@ downloads twimg media directly).
   `bidlobot-backup`, `bidlobot-probe` into `/out`.
 - `debian:bookworm-slim` runtime. Installs `bash ca-certificates curl
   ffmpeg tini tzdata unzip wget` (ffmpeg/ffprobe for the TikTok
-  audio check), **yt-dlp pinned release** (2026.07.04, sha256-checked
-  at build; a newer release can be pinned via `YT_DLP_VERSION` arg),
-  and **Bun 1.3.14 + `@oh-my-pi/pi-coding-agent` 16.3.6** (the `omp`
-  CLI on PATH, version-checked at build). Runs as `bidlobot` (UID
-  65532), `WORKDIR /var/lib/bidlobot`, tini as PID 1, HEALTHCHECK on
-  the loopback `/health`.
+  audio check), **yt-dlp pinned release** (2026.03.17, sha256-checked
+  at build; a newer release can be pinned via `YT_DLP_VERSION` arg -
+  the pin holds until upstream fixes the TikTok extractor regression,
+  yt-dlp issue #17403), and **Bun 1.3.14 +
+  `@oh-my-pi/pi-coding-agent` 16.3.6** (the `omp` CLI on PATH,
+  version-checked at build). yt-dlp is the **fallback** TikTok source;
+  the primary path is the tikwm mirror
+  ([56_tiktok_repost.md](56_tiktok_repost.md)). Runs as `bidlobot`
+  (UID 65532), `WORKDIR /var/lib/bidlobot`, tini as PID 1,
+  HEALTHCHECK on the loopback `/health`.
 
 The `bidlobot-backup` binary stays in the image but cannot snapshot a
 running bot (bbolt exclusive flock) - use `deploy/backup.sh`
@@ -76,6 +80,14 @@ running bot (bbolt exclusive flock) - use `deploy/backup.sh`
 
 Host ports 8080/8081 are deliberately unmapped (occupied by other
 services on the deploy host); all probes go over container loopback.
+
+**Resolver override**: the `bot` service pins
+`dns: [192.168.0.1, 1.1.1.1, 8.8.8.8]`. Without it the container
+resolves through Docker's embedded resolver -> `127.0.0.53`
+(systemd-resolved) -> the router, and host-side `127.0.0.53` stalls in
+10-minute bursts (the cause of the DNS-failure class in the TikTok and
+Telegram error counts). `.lan` names still resolve because the router
+answers them. Applied with `docker compose up -d bot` (recreate).
 
 ## Environment
 
@@ -179,14 +191,18 @@ info (commit hash via `-X main.version=... -X main.commit=...`).
 `deploy/backup.sh` -- host-side stop / cp / start. Resolves the
 volume mount via `docker volume inspect bidlobot-data`, copies
 `bidlobot.db`, restarts the bot. ~10s downtime for a guaranteed-
-consistent snapshot. Cron suggestion (root):
+consistent snapshot. The script documents a **root** crontab entry that
+requires root twice over: `/var/backups` is root-owned, and the script
+defaults `COMPOSE_DIR` to `/opt/bidlobot` while the checkout lives in
+`/home/veschin/bidlobot`. Install it as root:
 
 ```cron
-17 3 * * * /opt/bidlobot/deploy/backup.sh >>/var/log/bidlobot-backup.log 2>&1
+17 3 * * * cd /home/veschin/bidlobot && BIDLOBOT_COMPOSE_DIR=/home/veschin/bidlobot ./deploy/backup.sh >> /var/log/bidlobot-backup.log 2>&1
 ```
 
 Default destination `/var/backups/bidlobot/...`, configurable via
-`BIDLOBOT_BACKUP_DIR`. Failed runs exit nonzero so cron alerts.
+`BIDLOBOT_BACKUP_DIR`; 7 files kept. Failed runs exit nonzero so cron
+alerts.
 
 ## Logs
 
