@@ -216,7 +216,9 @@ func xpostReposter(a *App) th.Handler {
 				processXPost(context.Background(), snd, a.log, xpostHTTPClient, xpostAPIBase, a.tweetTranslator, a.repReactor, msg, postURL)
 			})
 		default:
-			go sendDecline(context.Background(), snd, a.log, msg.Chat.ID, msg.GetMessageID(), publicPureFailure(), "xpost: decline note send failed")
+			shared.Go(a.log, "xpost-decline", func() {
+				sendDecline(context.Background(), snd, a.log, msg.Chat.ID, msg.GetMessageID(), publicPureFailure(), "xpost: decline note send failed")
+			})
 		}
 		return thctx.Next(update)
 	}

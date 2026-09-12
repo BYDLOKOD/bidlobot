@@ -21,8 +21,9 @@ bidlobot`, 2026-08-26..2026-09-12):
 - **Panic containment.** `App.recoverMiddleware` registered as the
   outermost handler in `Run` (before `healthMiddleware`), plus
   `shared.Go(log, name, fn)` as a panic-safe goroutine launcher.
-  Converted the six fire-and-forget spawns: flush, tiktok,
-  tiktok-comment, tiktok-shortlink, xpost, captcha-welcome.
+  Converted the seven fire-and-forget spawns: flush, tiktok,
+  tiktok-comment, tiktok-shortlink, xpost, xpost-decline,
+  captcha-welcome.
 - **Transport retry.** `retry.classify` gained `kindTransport` (any
   error that is neither a Telegram API error nor a caller
   cancellation), `MaxTransportAttempts = 3`, ladder 1/2/4s, and

@@ -13,8 +13,8 @@
   (`devlog/10_media_resilience.md`).
 - **P1** `App.recoverMiddleware` is the outermost handler in `Run`
   (panics become `update handler panic recovered` + stack); `shared.Go`
-  wraps the six fire-and-forget spawns (flush, tiktok,
-  tiktok-comment, tiktok-shortlink, xpost, captcha-welcome).
+  wraps the fire-and-forget spawns (flush, tiktok, tiktok-comment,
+  tiktok-shortlink, xpost, xpost-decline, captcha-welcome).
 - **P2** `retry` gained `kindTransport` (3 attempts, 1/2/4s) and
   `Policy.AttemptTimeout`; `tgclient` splits control (20s per attempt)
   from media (240s, 2 transport attempts); telego's fasthttp client has
