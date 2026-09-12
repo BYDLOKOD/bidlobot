@@ -1,79 +1,116 @@
-# Handoff - 2026-08-16 (xpost v2 + docs v3 session)
+# Handoff - 2026-09-12 (media resilience session)
 
 ## 1. State (what is true right now)
 
-- Working tree (NOT committed, NOT deployed): X-post rework + docs v3
-  migration. 31 modified + ~10 untracked files; `xshot/` deleted.
-- **X-post v2** (`internal/bot/xpost.go`, rewritten): a status URL in a
-  supergroup message becomes ONE bot message - tweet text as caption,
-  native photos/videos (sendMediaGroup / single send / text-only),
-  canonical link - then the original is deleted. Failures keep the
-  original + decline phrase (repost-first contract, same as TikTok).
-  Data source: public FixTweet API `api.fxtwitter.com` called directly
-  from the bot; videos downloaded from twimg with a host allowlist and
-  best-fitting-variant selection (bitrate x duration vs the 50 MiB
-  upload cap). Photos pass through as URLs (Telegram fetches), with a
-  download+upload fallback retry.
-- **SendMediaGroup** added to `internal/shared/tgclient` (rate-limited)
-  and the `youtubeMediaSender` interface + `textOnlySender` stub +
-  `recYTSender` test fake.
-- **xshot sidecar gone**: `xshot/` dir deleted, compose is a single
-  `bot` service, no depends_on.
-- **docs/llm on v3**: PRD.md (DRAFT - freeze pending owner approval),
-  ROADMAP.md (E1-E6 done, E7 xpost v2 active, E8-E11 open), TODO.md
-  (this batch, evidence filled), all specs carry v3 frontmatter with
-  verified touches, validate.sh replaced with the v3 script.
-  10_scope.md was deleted 2026-08-16 - fully absorbed into PRD.md
-  (git history preserves it).
-- Verified green: `go build ./...`, `go vet` (bot + tgclient), full
-  `go test -race ./...` (zero FAIL, includes 10 ProcessXPost pipeline
-  tests). `gofmt -l` clean except 4 PRE-EXISTING files not touched by
-  this session (gracekick.go, reputation/domain.go + 2 test-adjacent).
+- **Deployed.** `origin/master` = `631cb23` ("fix(resilience): contain
+  panics, retry transport faults, fetch TikTok via mirror"). Production
+  (`veschin@192.168.0.101`, checkout `~/bidlobot`) was recreated from it
+  and verified: container `running healthy`, `/health` -> `200
+  {"status":"ok"}`, one `"msg":"starting"` entry in the window, zero
+  ERROR lines, log sequence `starting` -> `captcha enabled` -> `health
+  server listening` -> `bot started, polling for updates`.
+- Working tree clean; docs and devlog are in the same commit
+  (`devlog/10_media_resilience.md`).
+- **P1** `App.recoverMiddleware` is the outermost handler in `Run`
+  (panics become `update handler panic recovered` + stack); `shared.Go`
+  wraps the six fire-and-forget spawns (flush, tiktok,
+  tiktok-comment, tiktok-shortlink, xpost, captcha-welcome).
+- **P2** `retry` gained `kindTransport` (3 attempts, 1/2/4s) and
+  `Policy.AttemptTimeout`; `tgclient` splits control (20s per attempt)
+  from media (240s, 2 transport attempts); telego's fasthttp client has
+  65s read / 240s write; the long poll sets `Timeout: 30`.
+- **P3** `internal/bot/tiktok_source.go`: download goes mirror-first via
+  tikwm (shares the comment pacer), yt-dlp is the fallback with a 45s
+  deadline per attempt; both paths are named in one error; photo posts
+  (`errPhotoPost`) decline instead of queueing forever.
+- **P4 applied.** `docker-compose.yml` pins
+  `dns: [192.168.0.1, 1.1.1.1, 8.8.8.8]`; in-container
+  `/etc/resolv.conf` now reads `ExtServers: [192.168.0.1 1.1.1.1
+  8.8.8.8]`, `Overrides: [nameservers]`, and both
+  `api.telegram.org` and `tikwm.com` resolve from inside the container.
+  Baseline for the follow-up count (24h before the change): **79**
+  lines matching `lookup api.telegram.org`.
+- **First backup ever taken** (P5, partially):
+  `/home/veschin/bidlobot-backups/bidlobot-20260912-082101.db`,
+  2097152 bytes, bbolt page magic `ed0cdaed`. `deploy/backup.sh` cannot
+  produce it as a normal user (see section 2).
 
 ## 2. Negatives (what does NOT exist)
 
-- No commit, no push, no deploy of this work (owner gates both).
-- No deferred/retry queue for xpost failures (decline only; TikTok
-  keeps its queue). ROADMAP E11.
-- xpost caption format (`sender / author / text / canonical url`) NOT
-  yet owner-approved - approval task in TODO.
-- PRD not frozen (DRAFT pending owner approval).
-- No browser/renderer anywhere - nothing replaces xshot's card look
-  (stats/likes are gone from reposts by design).
+- **No backup cron.** Installing it needs root on the deploy host and
+  `sudo` there requires a password, so it is uninstalled. The entry to
+  install and the root hand-run command are in
+  `70_deployment.md` "Backup". Until then the only snapshot is the
+  hand-made one above.
+- **`deploy/backup.sh` cannot run as the deploy user**: `/var/backups`
+  is root-owned, `COMPOSE_DIR` defaults to `/opt/bidlobot` (the checkout
+  is `/home/veschin/bidlobot`), and the volume path under
+  `/var/lib/docker/volumes` is root-only. Verified: as `veschin` it
+  stops the bot, prints `ERROR: ... bidlobot.db missing`, and starts it
+  again. The root-free alternative (`docker cp`, documented) works.
+- **The two queued TikTok jobs are still queued** until the owner runs
+  `/flush` in the production chat (`vt.tiktok.com/ZSqfcymnR`,
+  `vt.tiktok.com/ZSq5d4Rxh`). Both answer `code:0 success` through the
+  mirror from inside the container.
+- **`internal/domain/monthstats` has a pre-existing race**:
+  `TestBufferLiveTrackStartPersistedOnce` failed 8 of 12 runs on a
+  clean HEAD worktree. Mechanism: the eager first-`Add` goroutine calls
+  `SetLiveTrackStart` ("first write wins") with the first *seen*
+  timestamp, while the flush path writes the *earliest* one, so a
+  later timestamp can win and pin `LiveTrackStart` too late. Not fixed -
+  out of scope for this session.
+- Residual risk, accepted: the mirror download reuses the shared 30s
+  HTTP client (`tiktokCommentHTTPClient`), so a very large CDN transfer
+  can time out and fall through to yt-dlp. Measured throughput (~1 MiB
+  in 1.1-1.5s) leaves the bound comfortable for production sizes.
 
 ## 3. Queue
 
-- TODO.md: 3 open items - PRD freeze approval, caption-format
-  approval, VM100 deploy.
-- ROADMAP E7 (xpost v2 ship) blocks only on those; E8 (docs v3
-  completion) blocks on the freeze; E9-E11 are open carry-overs.
+- Owner: `/flush` in the production chat; then confirm
+  `tiktok flush: reposted` for both jobs. A failure must name both
+  paths (`mirror: ...; yt-dlp: ...`).
+- Owner: install the root cron entry (needs the host sudo password).
+- Next session, 24h after 2026-09-12 08:20 UTC: recount
+  `docker logs --since 24h bidlobot 2>&1 | grep -c 'lookup
+  api.telegram.org'` - target 0 against the 79 baseline.
+- Decide whether to fix the monthstats `LiveTrackStart` race.
 
 ## 4. Read order
 
-1. PRD.md -> ROADMAP.md -> TODO.md
-2. 57_xpost.md (xpost v2 contract)
-3. 60_architecture.md (middleware order - xpost sits after tiktok)
-4. 70_deployment.md (single-service compose)
+1. `docs/llm/56_tiktok_repost.md` (Video source, Pipeline, Failure
+   handling) - the new download contract.
+2. `docs/llm/60_architecture.md` (App-level middleware, Failure matrix).
+3. `docs/llm/50_telegram.md` "Rate limits" + "Error handling" - retry
+   classes and panic recovery.
+4. `docs/llm/70_deployment.md` "Backup" before touching host backups.
 
 ## 5. Smoke test (run before touching anything)
 
 ```sh
-go build ./... && go test -race ./...   # expect: zero FAIL lines
-cd docs/llm && ./validate.sh            # expect: exit 0
+go build ./... && go vet ./...
+go test -race ./...          # expect: only the monthstats flake can fail
+cd docs/llm && ./validate.sh # expect: exit 0
 ```
 
-After deploy (owner OK): post an X status link in the prod chat ->
-expect exactly ONE bot message (caption + media + canonical link) and
-the original deleted; logs show `xpost: reposted photos=... videos=...`.
+Live checks:
+
+```sh
+ssh veschin@192.168.0.101 'docker inspect bidlobot --format "{{.State.Status}} {{.State.Health.Status}}"; \
+  docker exec bidlobot wget -qO- http://127.0.0.1:8080/health; echo; \
+  docker exec bidlobot cat /etc/resolv.conf'
+```
 
 ## 6. Agent errors
 
-- First test filter `'TestXPost'` did not match `TestProcessXPost*`
-  names (substring), so pipeline tests first ran only in the full
-  suite and caught a real bug: the test helper registered the media
-  allowlist key as host:port while the code looked up hostname().
-  Fixed in the helper; production paths unaffected.
-- The fix-unicode extension rewrote the U+2026 ellipsis in
-  truncateUTF16 into three ASCII dots, breaking UTF-16 budget math
-  (tests caught the +2 overflow). Marker is now explicitly "..." with
-  a 3-unit reserve.
+- The first plan draft assumed `go test -race ./...` would be fully
+  green; the monthstats flake had to be reproduced on a clean worktree
+  to prove it predates this change (it did: 8/12).
+- The plan's `withTikwmStub` reuse did not fit the media endpoint (it
+  switches on `tikwmPathList`/`tikwmPathReply`), so the new tests carry
+  their own `withTikwmServer` helper; the pacer interval is zeroed.
+- P3 assumed photo posts are identifiable by an empty `data.play`. A
+  live probe showed they carry images *and* a play URL on a music host
+  that serves no MP4, so the sentinel is also returned when a post
+  carrying images fails to deliver bytes.
+- The plan expected `deploy/backup.sh` to succeed when run by hand; it
+  cannot as a non-root user. Root cause chain in section 2.

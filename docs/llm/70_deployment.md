@@ -191,18 +191,47 @@ info (commit hash via `-X main.version=... -X main.commit=...`).
 `deploy/backup.sh` -- host-side stop / cp / start. Resolves the
 volume mount via `docker volume inspect bidlobot-data`, copies
 `bidlobot.db`, restarts the bot. ~10s downtime for a guaranteed-
-consistent snapshot. The script documents a **root** crontab entry that
-requires root twice over: `/var/backups` is root-owned, and the script
-defaults `COMPOSE_DIR` to `/opt/bidlobot` while the checkout lives in
-`/home/veschin/bidlobot`. Install it as root:
+consistent snapshot.
+
+The script **must run as root**, for three independent reasons: it
+writes into the root-owned `/var/backups`; it defaults `COMPOSE_DIR` to
+`/opt/bidlobot` while the checkout lives in `/home/veschin/bidlobot`;
+and the resolved source path under `/var/lib/docker/volumes` is not
+readable by the deploy user. Run as a normal user it stops the bot,
+prints `ERROR: /var/lib/docker/volumes/bidlobot-data/_data/bidlobot.db
+missing; restarting bot then aborting` (verified 2026-09-12) and starts
+the bot again - no backup, no harm.
+
+Install as root:
 
 ```cron
 17 3 * * * cd /home/veschin/bidlobot && BIDLOBOT_COMPOSE_DIR=/home/veschin/bidlobot ./deploy/backup.sh >> /var/log/bidlobot-backup.log 2>&1
 ```
 
+Run it by hand once before trusting the cron:
+
+```sh
+sudo sh -c 'cd /home/veschin/bidlobot && BIDLOBOT_COMPOSE_DIR=/home/veschin/bidlobot ./deploy/backup.sh'
+```
+
+Without root, the same stop/copy/start works through the docker socket,
+which is how `docker cp` reads the file out of the container:
+
+```sh
+docker stop bidlobot
+docker cp bidlobot:/var/lib/bidlobot/bidlobot.db \
+    "/home/veschin/bidlobot-backups/bidlobot-$(date -u +%Y%m%d-%H%M%S).db"
+docker start bidlobot
+```
+
 Default destination `/var/backups/bidlobot/...`, configurable via
 `BIDLOBOT_BACKUP_DIR`; 7 files kept. Failed runs exit nonzero so cron
 alerts.
+
+**Status 2026-09-12**: no cron entry had ever been installed and no
+backup existed. The first consistent snapshot was taken by hand with
+the `docker cp` recipe above (2097152 bytes, bbolt page magic
+`ed0cdaed` at offset 16) into `/home/veschin/bidlobot-backups/`.
 
 ## Logs
 

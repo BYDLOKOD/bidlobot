@@ -8,7 +8,7 @@ touches:
   - internal/storage/captcha_repo.go
   - internal/storage/admission_attempt_repo.go
 written: 2026-08-16
-updated: 2026-08-16
+updated: 2026-09-12
 ---
 
 # New-member captcha & unauthorized-admission gate
@@ -65,9 +65,11 @@ transition (own unmute) never re-captchas.
   assets/welcome.mp4`) `SendAnimation` with onboarding questions
   ("Скинь свой (neo/fast)fetch / Чем ты занимаешься? / Какой у тебя
   грейд? / Сколько платят? / Почему решил зайти в чат?"). The send
-  MUST be async (`go svc.sendWelcome(context.Background(), ...)`) - a
-  synchronous multi-hundred-KB upload inside the sequential update
-  loop stalls every subsequent update for seconds.
+  MUST be async (`shared.Go(s.log, "captcha-welcome", func() {
+  s.sendWelcome(context.Background(), *c) })`) - a synchronous
+  multi-hundred-KB upload inside the sequential update loop stalls
+  every subsequent update for seconds, and the standalone goroutine is
+  recovered so a panic in the upload cannot kill the process.
 
 ### Timeout (`runCaptchaSweep`)
 
