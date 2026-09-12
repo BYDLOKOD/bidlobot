@@ -10,7 +10,7 @@ touches:
   - internal/bot/routes.go
   - internal/shared/format.go
 written: 2026-05-14
-updated: 2026-05-16
+updated: 2026-09-12
 ---
 
 # Chat Statistics
@@ -175,15 +175,19 @@ when a later import advances `MonthState.UpdatedAt` past the summary's
 re-import.
 
 **Idempotency.** `MonthState` holds a per-chat imported-message-id
-high-water-mark, a sealed-month set, and `LiveTrackStart` (the first live
-message ts for the chat, persisted by the buffer's first flush). The
-importer skips export rows with `id <= ImportHWM` and rows with
-`ts >= LiveTrackStart` **only when `LiveTrackStart` is non-zero** (a chat
-with no live data yet - e.g. the bot not added - imports everything), so
-every message is counted exactly once across the live and import paths.
-(The importer machinery lives in `internal/histimport`, still in-tree but
-**unwired** since caa8f55 - the dedupe state remains correct if an import
-path is ever re-added.)
+high-water-mark, a sealed-month set, and `LiveTrackStart` - the
+**earliest** live message ts for the chat, because a boundary that sits
+too late would leave the messages between it and the true first live
+message reachable by both the live and the import path. It is persisted
+eagerly by the buffer's first `Add` and re-checked on every flush, which
+keeps the running minimum: a later write never moves it, an earlier one
+lowers it. The importer skips export rows with `id <= ImportHWM` and rows
+with `ts >= LiveTrackStart` **only when `LiveTrackStart` is non-zero** (a
+chat with no live data yet - e.g. the bot not added - imports
+everything), so every message is counted exactly once across the live and
+import paths. (The importer machinery lives in `internal/histimport`,
+still in-tree but **unwired** since caa8f55 - the dedupe state remains
+correct if an import path is ever re-added.)
 
 **Commands.** `/stats months` lists months with data (newest first);
 `/stats month [YYYY-MM]` renders one month's board (default: the newest

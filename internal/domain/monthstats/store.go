@@ -68,9 +68,10 @@ const LongestExcerptRunes = 400
 
 // MonthState is the per-chat live-tracking ledger (singleton).
 // LiveTrackStart is the earliest message timestamp the live buffer has
-// flushed, recorded atomically (first write wins) so a retried flush
-// cannot move it. UpdatedAt is the last state write and drives
-// invalidation of memoized past-month summaries.
+// flushed, recorded atomically and only ever lowered - a later write
+// cannot move it, an earlier one corrects it. UpdatedAt is the last
+// landing state write and drives invalidation of memoized past-month
+// summaries.
 type MonthState struct {
 	AbsChatID      int64     `json:"abs_chat_id"`
 	LiveTrackStart time.Time `json:"live_track_start"` // first live Add ts for this chat
@@ -124,11 +125,13 @@ type Store interface {
 	ListMonths(ctx context.Context, absChatID int64) ([]string, error)
 
 	GetState(ctx context.Context, absChatID int64) (*MonthState, error)
-	// SetLiveTrackStart records LiveTrackStart (and UpdatedAt) for a
-	// chat only if it is not already recorded, in a single transaction
-	// that preserves every other MonthState field. This is the only safe
-	// way for the live buffer to set the boundary (a read-modify-write
-	// via GetState would clobber other fields back to zero).
+	// SetLiveTrackStart lowers LiveTrackStart to ts (setting it when
+	// unrecorded) and advances UpdatedAt when the write lands, in a
+	// single transaction that preserves every other MonthState field. A
+	// ts at or after the stored boundary is a no-op. This is the only
+	// safe way for the live buffer to set the boundary: a
+	// read-modify-write via GetState would clobber other fields back to
+	// zero, and a plain overwrite could move the boundary later.
 	SetLiveTrackStart(ctx context.Context, absChatID int64, ts time.Time) error
 
 	GetSummary(ctx context.Context, absChatID int64, month string) (*MonthSummary, error)

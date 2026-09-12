@@ -101,8 +101,7 @@ func TestMonthStatsStateAndSummaryRoundTrip(t *testing.T) {
 	if err := repo.SetLiveTrackStart(ctx, 100, ts); err != nil {
 		t.Fatal(err)
 	}
-	// A later SetLiveTrackStart must not move the recorded boundary
-	// (first write wins).
+	// A later SetLiveTrackStart must not move the recorded boundary.
 	if err := repo.SetLiveTrackStart(ctx, 100, ts.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +111,21 @@ func TestMonthStatsStateAndSummaryRoundTrip(t *testing.T) {
 	}
 	if got.AbsChatID != 100 || !got.LiveTrackStart.Equal(ts) || got.UpdatedAt.IsZero() {
 		t.Fatalf("state round-trip wrong: %+v", got)
+	}
+
+	// An EARLIER SetLiveTrackStart must lower it: the flush path records
+	// the earliest message it saw, and the eager first-Add persist may
+	// already have stored a later one.
+	earlier := ts.Add(-24 * time.Hour)
+	if err := repo.SetLiveTrackStart(ctx, 100, earlier); err != nil {
+		t.Fatal(err)
+	}
+	got, err = repo.GetState(ctx, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LiveTrackStart.Equal(earlier) {
+		t.Fatalf("LiveTrackStart = %v, want the earlier %v", got.LiveTrackStart, earlier)
 	}
 
 	if _, err := repo.GetSummary(ctx, 100, "2026-03"); !errors.Is(err, monthstats.ErrNotFound) {

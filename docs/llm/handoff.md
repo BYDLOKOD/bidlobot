@@ -52,13 +52,16 @@
   `/flush` in the production chat (`vt.tiktok.com/ZSqfcymnR`,
   `vt.tiktok.com/ZSq5d4Rxh`). Both answer `code:0 success` through the
   mirror from inside the container.
-- **`internal/domain/monthstats` has a pre-existing race**:
-  `TestBufferLiveTrackStartPersistedOnce` failed 8 of 12 runs on a
-  clean HEAD worktree. Mechanism: the eager first-`Add` goroutine calls
-  `SetLiveTrackStart` ("first write wins") with the first *seen*
-  timestamp, while the flush path writes the *earliest* one, so a
-  later timestamp can win and pin `LiveTrackStart` too late. Not fixed -
-  out of scope for this session.
+- **`internal/domain/monthstats` boundary race fixed** (commit 2 of this
+  session): the flush skipped any chat whose boundary was already
+  persisted by the eager first-`Add` write, so `LiveTrackStart` could
+  stay pinned at the first-SEEN ts instead of the earliest live message
+  ts that `30_stats.md` defines. The gate is gone, the flush now
+  persists the running minimum every time (the store no-ops a repeat),
+  the test double mirrors the bbolt repository, and
+  `TestBufferLiveTrackStartTracksEarliest` covers the ordering
+  deterministically. 25/25 green with `-race` (was 8/12 failing).
+  **Not deployed yet** - the running container predates this fix.
 - Residual risk, accepted: the mirror download reuses the shared 30s
   HTTP client (`tiktokCommentHTTPClient`), so a very large CDN transfer
   can time out and fall through to yt-dlp. Measured throughput (~1 MiB
@@ -70,10 +73,13 @@
   `tiktok flush: reposted` for both jobs. A failure must name both
   paths (`mirror: ...; yt-dlp: ...`).
 - Owner: install the root cron entry (needs the host sudo password).
+  Decision on 2026-09-12 was **manual backups for now**, so the cron is
+  intentionally not installed; re-ask before adding it.
+- Deploy the monthstats boundary fix (one recreate, ~15s) when
+  convenient.
 - Next session, 24h after 2026-09-12 08:20 UTC: recount
   `docker logs --since 24h bidlobot 2>&1 | grep -c 'lookup
   api.telegram.org'` - target 0 against the 79 baseline.
-- Decide whether to fix the monthstats `LiveTrackStart` race.
 
 ## 4. Read order
 
@@ -102,12 +108,13 @@ ssh veschin@192.168.0.101 'docker inspect bidlobot --format "{{.State.Status}} {
 
 ## 6. Agent errors
 
-- The first plan draft assumed `go test -race ./...` would be fully
-  green; the monthstats flake had to be reproduced on a clean worktree
-  to prove it predates this change (it did: 8/12).
+- The plan assumed `go test -race ./...` would be fully green; the
+  monthstats flake was reproduced on a clean worktree (8/12) to prove it
+  predated this change, then traced to three disagreeing layers (store
+  min, flush gate, test double) and fixed as its own commit.
 - The plan's `withTikwmStub` reuse did not fit the media endpoint (it
   switches on `tikwmPathList`/`tikwmPathReply`), so the new tests carry
-  their own `withTikwmServer` helper; the pacer interval is zeroed.
+  their own `withTikwmMediaServer` helper; the pacer interval is zeroed.
 - P3 assumed photo posts are identifiable by an empty `data.play`. A
   live probe showed they carry images *and* a play URL on a music host
   that serves no MP4, so the sentinel is also returned when a post

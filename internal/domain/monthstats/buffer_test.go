@@ -83,6 +83,12 @@ func (s *memStore) GetState(_ context.Context, chat int64) (*MonthState, error) 
 	return &c, nil
 }
 
+// SetLiveTrackStart mirrors MonthStatsRepo.SetLiveTrackStart: the
+// boundary is the MINIMUM observed timestamp, and UpdatedAt moves only
+// when a write actually lands. The eager first-Add persist and the flush
+// both call it, so the double has to accept a LATER write followed by an
+// EARLIER one - a double that refuses every write after the first hides
+// the exact ordering the flush depends on.
 func (s *memStore) SetLiveTrackStart(_ context.Context, chat int64, ts time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -91,8 +97,8 @@ func (s *memStore) SetLiveTrackStart(_ context.Context, chat int64, ts time.Time
 		st = &MonthState{AbsChatID: chat}
 		s.state[chat] = st
 	}
-	if !st.LiveTrackStart.IsZero() {
-		return nil // already set; never overwrite
+	if !st.LiveTrackStart.IsZero() && !ts.Before(st.LiveTrackStart) {
+		return nil // existing is earlier or the same; a later boundary never moves it
 	}
 	st.LiveTrackStart = ts
 	st.UpdatedAt = time.Now().UTC()
@@ -223,35 +229,78 @@ func TestBufferRemergeOnFlushError(t *testing.T) {
 	}
 }
 
-func TestBufferLiveTrackStartPersistedOnce(t *testing.T) {
+// TestBufferLiveTrackStartTracksEarliest pins the boundary contract from
+// 30_stats.md: LiveTrackStart is the earliest live message ts, because
+// the (unwired) importer skips rows with ts >= LiveTrackStart - a boundary
+// that sits too late would make those messages reachable by both paths.
+//
+// Deterministic by construction: the ordering that used to be decided by
+// goroutine scheduling (the eager first-Add persist landing before the
+// first flush) is forced by waiting for that write to land, so the flush
+// is always competing with an already-stored, later boundary.
+func TestBufferLiveTrackStartTracksEarliest(t *testing.T) {
 	st := newMemStore()
 	b := NewBuffer(st, testLogger())
-	early := time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)
 	late := time.Date(2026, 4, 20, 0, 0, 0, 0, time.UTC)
-	s1 := sample(100, 1, "2026-04", 5)
-	s1.TS = late
-	b.Add(s1)
-	s2 := sample(100, 2, "2026-04", 5)
-	s2.TS = early
-	b.Add(s2)
-	b.Flush()
+	early := time.Date(2026, 4, 10, 0, 0, 0, 0, time.UTC)
+	earliest := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 
-	got, err := st.GetState(context.Background(), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.LiveTrackStart.Equal(early) {
-		t.Fatalf("LiveTrackStart = %v, want earliest %v", got.LiveTrackStart, early)
-	}
-	// A second flush must not move it.
-	s3 := sample(100, 3, "2026-04", 5)
-	s3.TS = time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
-	b.Add(s3)
+	first := sample(100, 1, "2026-04", 5)
+	first.TS = late
+	b.Add(first)
+	// Crash safety: the first Add persists the boundary without waiting
+	// for a flush.
+	waitForLiveTrackStart(t, st, 100, late)
+
+	second := sample(100, 2, "2026-04", 5)
+	second.TS = early
+	b.Add(second)
 	b.Flush()
-	got2, _ := st.GetState(context.Background(), 100)
-	if !got2.LiveTrackStart.Equal(early) {
-		t.Fatalf("LiveTrackStart moved after second flush: %v", got2.LiveTrackStart)
+	if got := liveTrackStart(t, st, 100); !got.Equal(early) {
+		t.Fatalf("LiveTrackStart = %v, want the flush's earlier message %v", got, early)
 	}
+
+	third := sample(100, 3, "2026-04", 5)
+	third.TS = earliest
+	b.Add(third)
+	b.Flush()
+	if got := liveTrackStart(t, st, 100); !got.Equal(earliest) {
+		t.Fatalf("LiveTrackStart = %v, want a still earlier message %v", got, earliest)
+	}
+
+	fourth := sample(100, 4, "2026-04", 5)
+	fourth.TS = late
+	b.Add(fourth)
+	b.Flush()
+	if got := liveTrackStart(t, st, 100); !got.Equal(earliest) {
+		t.Fatalf("LiveTrackStart moved later to %v, want %v", got, earliest)
+	}
+}
+
+// waitForLiveTrackStart blocks until the eager first-Add persist has
+// landed, so a test can compete with a boundary that is already stored.
+func waitForLiveTrackStart(t *testing.T, st *memStore, chat int64, want time.Time) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		state, err := st.GetState(context.Background(), chat)
+		if err == nil && state.LiveTrackStart.Equal(want) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("eager LiveTrackStart persist did not land: state=%+v err=%v", state, err)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+func liveTrackStart(t *testing.T, st *memStore, chat int64) time.Time {
+	t.Helper()
+	state, err := st.GetState(context.Background(), chat)
+	if err != nil {
+		t.Fatalf("get state: %v", err)
+	}
+	return state.LiveTrackStart
 }
 
 func TestBufferConcurrentAdd(t *testing.T) {

@@ -35,9 +35,10 @@ type Buffer struct {
 	stopCh  chan struct{}
 
 	// liveStart tracks the earliest live message ts per chat so the
-	// first flush can persist MonthState.LiveTrackStart.
+	// flush can persist MonthState.LiveTrackStart (the boundary), and
+	// liveStartKick records which chats already fired the async
+	// first-Add persist.
 	liveStart     map[int64]time.Time
-	liveStartDone map[int64]bool
 	liveStartKick map[int64]bool // first-Add async-persist fired once per chat
 }
 
@@ -48,7 +49,6 @@ func NewBuffer(store Store, log *slog.Logger) *Buffer {
 		log:           log,
 		stopCh:        make(chan struct{}),
 		liveStart:     make(map[int64]time.Time),
-		liveStartDone: make(map[int64]bool),
 		liveStartKick: make(map[int64]bool),
 	}
 }
@@ -65,16 +65,16 @@ func (b *Buffer) Add(s Sample) {
 	// Persist LiveTrackStart eagerly on the FIRST message for a chat
 	// (atomic, off the hot path) so the boundary survives even if the
 	// process dies before the first flush. Fired at most once per chat
-	// per process; the flush path is the backstop if this goroutine
-	// loses on shutdown.
+	// per process and written with the first-seen ts; the flush then
+	// keeps the running minimum, so an earlier message seen later still
+	// lowers the boundary.
 	if !b.liveStartKick[s.AbsChatID] {
 		b.liveStartKick[s.AbsChatID] = true
 		chat, ts := s.AbsChatID, s.TS
 		go func() {
-			if b.store.SetLiveTrackStart(context.Background(), chat, ts) == nil {
-				b.mu.Lock()
-				b.liveStartDone[chat] = true
-				b.mu.Unlock()
+			if err := b.store.SetLiveTrackStart(context.Background(), chat, ts); err != nil {
+				b.log.Warn("monthstats: eager live-track boundary persist failed",
+					"chat_id", chat, "error", err)
 			}
 		}()
 	}
@@ -162,11 +162,13 @@ func (b *Buffer) flush(ctx context.Context) {
 	b.mu.Lock()
 	toFlush := b.pending
 	b.pending = make(map[FlushKey]*bufferEntry)
+	// Every chat's running minimum, not just the ones whose boundary has
+	// never been written: the eager first-Add persist may have stored a
+	// later ts, and only this flush can correct it downward. The store
+	// makes a repeat of the same boundary a no-op.
 	starts := make(map[int64]time.Time, len(b.liveStart))
 	for c, t := range b.liveStart {
-		if !b.liveStartDone[c] {
-			starts[c] = t
-		}
+		starts[c] = t
 	}
 	b.mu.Unlock()
 
@@ -208,18 +210,17 @@ func (b *Buffer) flush(ctx context.Context) {
 		return
 	}
 
-	// Flush succeeded: persist LiveTrackStart once per chat via the
-	// atomic single-txn setter (first write wins). A read-modify-write
-	// here could clobber the boundary back to zero, and a plain
-	// overwrite could move it. Non-fatal on error (retried next flush;
-	// the first-Add goroutine is the other backstop).
+	// Flush succeeded: persist the boundary via the atomic single-txn
+	// setter, which keeps the EARLIEST timestamp. A read-modify-write
+	// here could clobber the boundary back to zero, and the setter itself
+	// refuses to move it later, so replaying the same minimum costs one
+	// no-op transaction. Non-fatal on error (retried next flush; the
+	// first-Add goroutine is the other backstop).
 	for chat, earliest := range starts {
 		if err := b.store.SetLiveTrackStart(ctx, chat, earliest); err != nil {
-			continue
+			b.log.Warn("monthstats: live-track boundary persist failed",
+				"chat_id", chat, "error", err)
 		}
-		b.mu.Lock()
-		b.liveStartDone[chat] = true
-		b.mu.Unlock()
 	}
 }
 

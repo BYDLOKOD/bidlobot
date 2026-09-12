@@ -66,6 +66,37 @@ bidlobot`, 2026-08-26..2026-09-12):
 - `go test -race ./...` green across all packages; `gofmt -l` clean;
   `go build ./...` and `go vet ./...` clean.
 
+## Follow-up: monthstats boundary race (separate commit)
+
+Found by running the suite for this change: `TestBufferLiveTrackStartPersistedOnce`
+failed 8 of 12 runs. It is not a store race - three layers disagreed:
+
+- `MonthStatsRepo.SetLiveTrackStart` keeps the MINIMUM ts (a later write
+  is a no-op, an earlier one lands).
+- The package's in-memory test double refused every write after the
+  first, so it could not express the ordering the flush produces.
+- `Buffer.flush` skipped chats already marked `liveStartDone`, and the
+  eager first-`Add` persist set that flag - so once the first-seen ts was
+  stored, no flush could lower the boundary to the earliest live message
+  the chat had actually produced.
+
+The gate is the defect: `30_stats.md` defines `LiveTrackStart` as the
+earliest live message ts, because the (unwired) importer skips
+`ts >= LiveTrackStart`, and a boundary that sits too late leaves those
+messages reachable by both paths. Fix: the flush now persists the running
+minimum for every chat with a boundary and lets the store's min setter
+decide whether a write lands (a repeat is one no-op transaction), and the
+`liveStartDone` map is gone. The double now mirrors the repo, the eager
+persist logs its failure instead of dropping it, and the flaky test was
+replaced by `TestBufferLiveTrackStartTracksEarliest`, which forces the
+eager write to land before the flush and therefore asserts the same
+contract deterministically. A later-boundary case in the bbolt repo test
+was corrected (the comment said "first write wins"; the code lowers) and
+gained coverage for the lowering direction.
+
+Verified: 25/25 green with `-race` after the fix (8/12 failing before),
+and the new test fails deterministically against the pre-fix `buffer.go`.
+
 ## Notes
 
 - The old `TestNonAPIErrorNotRetried` encoded the retired contract (a
