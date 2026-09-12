@@ -66,6 +66,18 @@
   HTTP client (`tiktokCommentHTTPClient`), so a very large CDN transfer
   can time out and fall through to yt-dlp. Measured throughput (~1 MiB
   in 1.1-1.5s) leaves the bound comfortable for production sizes.
+- **`/health` reports 503 while the chat is quiet.** At 08:26 UTC on
+  2026-09-12 the container went `unhealthy` with reason `no updates
+  received since startup`, exactly when the 5-minute startup grace
+  expired, because no update had arrived since the 08:21:07 restart.
+  Verified NOT a wedged poll: the container holds an ESTABLISHED socket
+  to `149.154.166.110:443`, telego logged no `Getting updates:` error
+  (which would also have stopped the loop - default retry timeout is 0),
+  and eth0 counters moved +566 tx / +743 rx bytes over 40s, i.e. empty
+  long-poll cycles. The freshness window measures the last update, not
+  bot liveness, so a quiet chat always reports 503; a message in the
+  chat flips it back. Pre-existing, unchanged by this session (comment
+  in `health.go` now says so).
 
 ## 3. Queue
 

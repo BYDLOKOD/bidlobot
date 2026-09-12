@@ -20,8 +20,16 @@ import (
 const (
 	// HealthFreshnessWindow is the maximum age of the last incoming update
 	// before /health flips to 503. Five minutes is short enough to detect
-	// a wedged long-poll loop within a typical alerting interval but long
-	// enough to absorb a quiet supergroup over the weekend.
+	// a wedged long-poll loop within a typical alerting interval.
+	//
+	// The window is about the LAST UPDATE, not about bot liveness, so a
+	// chat that is merely quiet for longer than this reports 503
+	// ("no updates received since startup" / "last update ... ago") while
+	// the bot is connected and polling - observed 2026-09-12, ~16 minutes
+	// after a restart, with the poll socket ESTABLISHED to
+	// api.telegram.org and the loop cycling on empty responses. A weekend
+	// quiet period is NOT absorbed; lengthen the window or probe liveness
+	// separately if that matters more than fast detection.
 	HealthFreshnessWindow = 5 * time.Minute
 
 	// HealthStartupGrace gives the bot time to receive its first update
