@@ -109,10 +109,17 @@ Optional:
   rewritten).
 - `PI_BINARY` / `PI_MODEL` -- the summarize provider CLI + model.
   Defaults `omp` and `deepseek/deepseek-v4-flash`. The `omp` binary is
-  inside the image; a missing binary is a startup failure.
+  inside the image; a missing binary is a startup failure. Production
+  runs `deepseek/deepseek-flash` (the v4.1 flash model of the DeepSeek
+  API).
 - `DEEPSEEK_API_KEY` -- provider credential for the omp CLI. NOT read
   by the Go binary; compose forwards it from the host environment.
   `deploy.sh` pipes it from `pass show token/deepseek` over SSH.
+  **A manual `docker compose up -d` outside `deploy.sh` starts the
+  container without it** (the value is a pass-through, not a file
+  entry): summarization then fails with `No API key found for
+  deepseek`. Recreate through the deploy script, or export the key from
+  `pass` into the same shell first.
 - `CAPTCHA_ENABLED` (default false) / `CAPTCHA_TIMEOUT` (default `1m`,
   1m..30m) -- new-member math captcha + welcome animation.
 - `CLEANUP_DAILY_AT` / `CLEANUP_GRACE` / `CLEANUP_DAILY_BATCH` --

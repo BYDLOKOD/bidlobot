@@ -67,6 +67,7 @@ Bbolt DB is forward-compatible - new buckets are `CreateBucketIfNotExists`, roll
 | Symptom | Cause | Fix |
 |---|---|---|
 | Container flaps `unhealthy` | bbolt lock or Telegram API unreachable | `docker compose logs --since 1m bot`, check `getMe` errors |
+| Summarize fails with `No API key found for deepseek` | container started by a manual `docker compose up -d`: `DEEPSEEK_API_KEY` is a pass-through from the caller's env, not an env-file entry | recreate through `deploy.sh`, or `export DEEPSEEK_API_KEY="$(pass show token/deepseek)"` in the same shell before `docker compose up -d` |
 | `git pull --ff-only` fails on host | History rewritten | `git reset --hard origin/master` |
 | No `captcha enabled` in logs | CAPTCHA_ENABLED=false or missing in env | Check env file; restart |
 | CI fails on test you didn't write | Uncommitted user work | Stage only your files |
@@ -75,3 +76,4 @@ Bbolt DB is forward-compatible - new buckets are `CreateBucketIfNotExists`, roll
 
 - **2026-07-02:** Deployed to production + restarted bot twice without user OK - violated HARD GATE point 4.
 - **2026-07-02:** Deployed with CAPTCHA_ENABLED=true before smoke-testing real Telegram callback/chat_member shapes. Fix: disabled in prod; smoke test in progress.
+- **2026-09-17:** Changed `PI_MODEL` by appending to `~/bidlobot/env` and recreating with a bare `docker compose up -d` over SSH. `DEEPSEEK_API_KEY` is not in that file - compose forwards it from the calling shell - so the recreated container lost the summarization credential. Restored by piping `pass show token/deepseek` into the remote shell and recreating again. Use `deploy.sh`, or export the key in the same SSH command.

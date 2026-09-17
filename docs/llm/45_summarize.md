@@ -87,6 +87,12 @@ The provider credential (`DEEPSEEK_API_KEY`) is read by the `omp` CLI
 from its own environment - the Go binary never sees, parses, or logs
 it. Compose forwards it from the host env ([70_deployment.md](70_deployment.md)).
 
+Production sets `PI_MODEL=deepseek/deepseek-flash` in the deploy
+environment (2026-09-17): the DeepSeek API exposes `deepseek-flash` and
+`deepseek-v4-pro`, and `deepseek-flash` is the v4.1 flash model. The
+in-code default stays `deepseek/deepseek-v4-flash`, an OMP alias of the
+same family.
+
 ## Token budget
 
 Input budget 120K estimated tokens (rune/2 estimate - deliberately
