@@ -13,7 +13,7 @@ touches:
   - internal/bot/routes.go
   - internal/storage/migrate.go
 written: 2026-05-14
-updated: 2026-09-12
+updated: 2026-09-17
 ---
 
 # Telegram API Reference
@@ -108,6 +108,8 @@ Outgoing: bot limits itself to 15 messages/min per chat (below Telegram's 20/min
 Telegram 429 error: respect `retry_after` field (seconds) + 10% jitter. `retry_after` is per-chat since Feb 2025.
 
 Retry classes in `shared/retry` (all with 10% jitter, caller cancellation never retried): 429 -> one retry after `retry_after`; 5xx (Telegram API error or bare HTTP status) -> 1/2/4/8s ladder, 4 attempts; transport (DNS, connect, TLS, read/write timeout, connection reset) -> 1/2/4s ladder, 3 attempts. Every attempt runs under its own deadline: 20s for control calls, 240s for media sends (`tgclient`). The outbound HTTP client bounds a call even when the caller passes a deadline-less context: 65s read (above the 30s long poll), 240s write.
+
+A media retry re-sends the same body: `tgclient` rewinds every file-backed upload body (media, thumbnail, album item) to its start before each attempt, because telego streams a body into the multipart part once and a reader left at EOF uploads an empty part, which Telegram rejects with `400 file must be non-empty` - a class the ladder never retries (fixed 2026-09-17; see `devlog/11_upload_retry_rewind.md`).
 
 Per-user command cooldown (`internal/bot/cooldown.go`, applied by `gateMsg` to games, `/stats`, `/summarize`, `/refs*`, `/flush`): a user may trigger a given command once per its window (5-30s). An over-frequency call is dropped (handler not run) but is **not** fully silent: exactly **one** "slow down" notice is sent per window per (user,command) - bounded so a flooder cannot amplify, while a normal user still gets feedback. A fresh allowed call resets the notice state. The notice goes through the rate-limited sender; absent sender (minimal/test app) -> no notice, drop stays silent.
 

@@ -70,8 +70,9 @@
    mechanism, the evidence.
 2. `internal/shared/tgclient/client.go` (`rewindUploadBody`,
    `rewindUploadBodies`, `rewindUploadMedia`) - the fix.
-3. `docs/llm/56_tiktok_repost.md` "Failure handling" and
-   `docs/llm/60_architecture.md` "Failure handling" - the contract.
+3. `docs/llm/56_tiktok_repost.md` "Failure handling",
+   `docs/llm/60_architecture.md` "Failure handling" and
+   `docs/llm/50_telegram.md` "Rate limits" - the contract.
 
 ## 5. Smoke test (run before touching anything)
 
