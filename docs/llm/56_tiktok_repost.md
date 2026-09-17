@@ -9,7 +9,7 @@ touches:
   - internal/storage/deferred_repo.go
   - Dockerfile
 written: 2026-08-16
-updated: 2026-09-12
+updated: 2026-09-17
 ---
 
 # TikTok video repost
@@ -92,6 +92,17 @@ images keeps today's behaviour (fall back to yt-dlp, queue on failure).
 
 ## Failure handling
 
+- **Send failure** (`SendVideo`) splits by class
+  (`processTikTok`). A transport fault (timeout, reset, DNS) never
+  reached Telegram, so the job is persisted to the deferred queue and
+  `/flush` replays it. An API rejection - the request arrived and
+  Telegram answered 400 - is permanent: it gets the public decline note
+  and is never queued. Measured 2026-09-16: three reposts were lost
+  because `sendVideo` timed out, the transport retry reused the same
+  `*os.File` that telego had already streamed into the multipart part,
+  and Telegram answered `400 file must be non-empty`; the media wrappers
+  now rewind their bodies before every attempt
+  ([60_architecture.md](60_architecture.md) "Failure handling").
 - Download failure or missing audio -> the job is persisted to the
   **per-user deferred retry queue** (`deferred_jobs`, type `tiktok`,
   payload `TikTokPayload{URL, Username, FirstName, Caption}`; see

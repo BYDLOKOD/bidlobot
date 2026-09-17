@@ -11,7 +11,7 @@ touches:
   - internal/testutil/
   - internal/text/
 written: 2026-05-14
-updated: 2026-09-12
+updated: 2026-09-17
 ---
 
 # Architecture
@@ -242,13 +242,15 @@ No `edited_message`, no `chat_join_request`.
 | 429 | `retry.Do` | sleep `retry_after`+jitter, retry once |
 | 5xx (Telegram API error or HTTP status) | `retry.Do` | 1/2/4/8s backoff, 4 attempts |
 | transport (DNS, connect, TLS, read/write timeout, reset) | `retry.Do` | 1/2/4s backoff, 3 attempts; caller cancellation is never retried |
+| retried media upload | `tgclient` media wrappers | file bodies are rewound before every attempt: telego streams the body into the multipart part once, so a retry reusing the reader would upload an empty part and Telegram would answer `400 file must be non-empty` - a class the ladder never retries |
 | hung Bot API call | `retry.Do` + `tgclient` | per-attempt deadline: 20s control, 240s media; no deadline from the caller still leaves the HTTP client's 65s read / 240s write bounds |
 | `migrate_to_chat_id` | `tgclient` | `MigrateChatID` + replay |
 | panic in any route | `App.recoverMiddleware` | log with stack; the process and the update loop survive |
 | bbolt I/O | service | propagate; reply "временная ошибка" |
 | TikTok download/audio fail | `tiktok_repost.go` | mirror first, yt-dlp fallback; both failed -> enqueue to deferred queue; original kept |
 | TikTok photo post | `tiktok_source.go` | decline note; never queued (no retry can succeed) |
-| TikTok too-large/send fail | `tiktok_repost.go` | public decline note; original kept |
+| TikTok too-large / API-rejected send | `tiktok_repost.go` | public decline note; original kept; never queued (the answer is permanent) |
+| TikTok send fail on the network | `tiktok_repost.go` | transport fault never reached Telegram -> enqueue to the deferred queue; `/flush` replays it |
 | xpost any failure | `xpost.go` | decline note; original kept (never deleted) |
 | YT sanitizer repost fail | `youtube_sanitizer.go` | original left intact |
 | summarize provider fail | `summarize.go` | enqueue to deferred queue; placeholder stays |

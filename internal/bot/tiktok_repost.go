@@ -42,6 +42,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/shared"
@@ -442,8 +443,21 @@ func processTikTok(
 		ParseMode: telego.ModeHTML,
 	})
 	if sendErr != nil {
-		log.Warn("tiktok: repost failed; leaving original intact", "chat_id", chatID, "error", sendErr)
-		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
+		// An API rejection (bad file, chat forbidden, too large) is
+		// permanent, so the user gets the decline note. A transport fault
+		// never reached Telegram and is worth a replay: queue the job so
+		// /flush retries it instead of losing the repost to one network
+		// blip.
+		var apiErr *telegoapi.Error
+		if errors.As(sendErr, &apiErr) {
+			log.Warn("tiktok: repost rejected by the API; leaving original intact",
+				"chat_id", chatID, "error", sendErr)
+			sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
+			return
+		}
+		log.Warn("tiktok: repost failed on the network, queuing",
+			"chat_id", chatID, "url", tiktokURL, "error", sendErr)
+		enqueueOrFail(ctx, snd, log, queue, msg, tiktokURL)
 		return
 	}
 

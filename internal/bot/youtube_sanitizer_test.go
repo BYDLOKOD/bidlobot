@@ -278,6 +278,7 @@ type recYTSender struct {
 	Documents   []*telego.SendDocumentParams
 	MediaGroups []*telego.SendMediaGroupParams
 	GroupErr    error
+	VideoErr    error
 }
 
 func (r *recYTSender) SendMessage(_ context.Context, p *telego.SendMessageParams) (*telego.Message, error) {
@@ -302,6 +303,9 @@ func (r *recYTSender) SendVideo(_ context.Context, p *telego.SendVideoParams) (*
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Videos = append(r.Videos, p)
+	if r.VideoErr != nil {
+		return nil, r.VideoErr
+	}
 	return &telego.Message{MessageID: 1002}, nil
 }
 func (r *recYTSender) SendAnimation(_ context.Context, p *telego.SendAnimationParams) (*telego.Message, error) {

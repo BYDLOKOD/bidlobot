@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoapi"
 
 	"github.com/veschin/bidlobot/internal/storage"
 )
@@ -481,6 +483,79 @@ func TestProcessTikTok_NoAudio_NoQueue_Declines(t *testing.T) {
 	}
 	if !failureCatalogContains(snd.Messages[0].Text) {
 		t.Errorf("decline must be from FailureCatalog; got %q", snd.Messages[0].Text)
+	}
+}
+
+// TestProcessTikTok_TransportSendFailure_Queues covers a network fault
+// during the repost: Telegram never saw the request, so the job goes to
+// the deferred queue for /flush instead of being lost. A lost upload is
+// what a 2026-09-16 production incident looked like - sendVideo timed
+// out, the retry uploaded an empty body, and the job was dropped.
+func TestProcessTikTok_TransportSendFailure_Queues(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	q := &fakeDeferredQueue{}
+	snd := &recYTSender{VideoErr: errors.New("fasthttp do request: timeout")}
+	log := slog.New(slog.DiscardHandler)
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, q, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
+
+	if len(snd.Deletes) != 0 {
+		t.Errorf("expected 0 deletes, got %d", len(snd.Deletes))
+	}
+	if len(q.jobs) != 1 {
+		t.Fatalf("expected 1 queued job, got %d", len(q.jobs))
+	}
+	if q.jobs[0].MessageID != 42 || q.jobs[0].UserID != 200 {
+		t.Errorf("queued job = %+v", q.jobs[0])
+	}
+	if len(snd.Messages) != 0 {
+		t.Errorf("a queued retry must not also decline; got %d messages", len(snd.Messages))
+	}
+}
+
+// TestProcessTikTok_APISendFailure_Declines covers a rejection by
+// Telegram itself: the request reached the API, so no retry can change
+// the answer and the job must not sit in the queue forever.
+func TestProcessTikTok_APISendFailure_Declines(t *testing.T) {
+	dir := t.TempDir()
+	videoPath := filepath.Join(dir, "test.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake mp4"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	q := &fakeDeferredQueue{}
+	snd := &recYTSender{VideoErr: fmt.Errorf("telego: sendVideo: api: %w",
+		&telegoapi.Error{ErrorCode: 400, Description: "Bad Request: file must be non-empty"})}
+	log := slog.New(slog.DiscardHandler)
+	msg := &telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+	}
+
+	processTikTok(context.Background(), snd, log, q, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
+
+	if len(q.jobs) != 0 {
+		t.Errorf("an API rejection must not be queued, got %d jobs", len(q.jobs))
+	}
+	if len(snd.Messages) != 1 {
+		t.Fatalf("expected 1 decline, got %d", len(snd.Messages))
+	}
+	if !failureCatalogContains(snd.Messages[0].Text) {
+		t.Errorf("decline must be from FailureCatalog; got %q", snd.Messages[0].Text)
+	}
+	if len(snd.Deletes) != 0 {
+		t.Errorf("expected 0 deletes, got %d", len(snd.Deletes))
 	}
 }
 

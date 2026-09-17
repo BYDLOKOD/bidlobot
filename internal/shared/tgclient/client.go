@@ -31,6 +31,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"time"
 
@@ -198,6 +199,54 @@ func (c *Client) runWritePolicy(
 	return fmt.Errorf("tgclient: migration loop exceeded for method %s", method)
 }
 
+// rewindUploadBody positions a file-backed upload body back at its start.
+//
+// telego streams the body into the multipart part exactly once
+// (telegoapi/request_constructor.go: io.Copy(wr, file)), so an attempt that
+// reuses the reader of a failed one uploads an empty part. Telegram answers
+// that with 400 "Bad Request: file must be non-empty", a class the retry
+// ladder does not retry, which turns one transient network fault into a lost
+// upload. Every media wrapper rewinds before each attempt.
+func rewindUploadBody(file telego.InputFile) error {
+	seeker, ok := file.File.(io.Seeker)
+	if !ok {
+		return nil
+	}
+	_, err := seeker.Seek(0, io.SeekStart)
+	return err
+}
+
+// rewindUploadBodies rewinds the media body and its optional thumbnail.
+func rewindUploadBodies(file telego.InputFile, thumb *telego.InputFile) error {
+	return errors.Join(rewindUploadBody(file), rewindUploadThumbnail(thumb))
+}
+
+// rewindUploadThumbnail rewinds an optional thumbnail body.
+func rewindUploadThumbnail(thumb *telego.InputFile) error {
+	if thumb == nil {
+		return nil
+	}
+	return rewindUploadBody(*thumb)
+}
+
+// rewindUploadMedia rewinds every file-backed body of an album item.
+func rewindUploadMedia(items []telego.InputMedia) error {
+	var errs []error
+	for _, item := range items {
+		switch m := item.(type) {
+		case *telego.InputMediaPhoto:
+			errs = append(errs, rewindUploadBody(m.Media))
+		case *telego.InputMediaVideo:
+			errs = append(errs, rewindUploadBody(m.Media), rewindUploadThumbnail(m.Thumbnail))
+		case *telego.InputMediaDocument:
+			errs = append(errs, rewindUploadBody(m.Media), rewindUploadThumbnail(m.Thumbnail))
+		case *telego.InputMediaAnimation:
+			errs = append(errs, rewindUploadBody(m.Media), rewindUploadThumbnail(m.Thumbnail))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // SendMessage wraps telego.Bot.SendMessage.
 func (c *Client) SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
 	if params == nil {
@@ -272,6 +321,9 @@ func (c *Client) SendPhoto(ctx context.Context, params *telego.SendPhotoParams) 
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendPhoto",
 		func(ctx context.Context) error {
+			if err := rewindUploadBody(params.Photo); err != nil {
+				return err
+			}
 			m, e := c.bot.SendPhoto(ctx, params)
 			if e != nil {
 				return e
@@ -293,6 +345,9 @@ func (c *Client) SendVideo(ctx context.Context, params *telego.SendVideoParams) 
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendVideo",
 		func(ctx context.Context) error {
+			if err := rewindUploadBodies(params.Video, params.Thumbnail); err != nil {
+				return err
+			}
 			m, e := c.bot.SendVideo(ctx, params)
 			if e != nil {
 				return e
@@ -314,6 +369,9 @@ func (c *Client) SendAnimation(ctx context.Context, params *telego.SendAnimation
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendAnimation",
 		func(ctx context.Context) error {
+			if err := rewindUploadBodies(params.Animation, params.Thumbnail); err != nil {
+				return err
+			}
 			m, e := c.bot.SendAnimation(ctx, params)
 			if e != nil {
 				return e
@@ -335,6 +393,9 @@ func (c *Client) SendDocument(ctx context.Context, params *telego.SendDocumentPa
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendDocument",
 		func(ctx context.Context) error {
+			if err := rewindUploadBodies(params.Document, params.Thumbnail); err != nil {
+				return err
+			}
 			m, e := c.bot.SendDocument(ctx, params)
 			if e != nil {
 				return e
@@ -358,6 +419,9 @@ func (c *Client) SendMediaGroup(ctx context.Context, params *telego.SendMediaGro
 	var msgs []telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendMediaGroup",
 		func(ctx context.Context) error {
+			if err := rewindUploadMedia(params.Media); err != nil {
+				return err
+			}
 			m, e := c.bot.SendMediaGroup(ctx, params)
 			if e != nil {
 				return e
