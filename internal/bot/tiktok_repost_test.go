@@ -559,6 +559,40 @@ func TestProcessTikTok_APISendFailure_Declines(t *testing.T) {
 	}
 }
 
+// TestProcessTikTok_TransientAPIError_Queues covers the API answers that
+// outlived the retry ladder but stay replayable: a 429 or a 5xx. They
+// reached Telegram yet may pass on the next flush, so they queue.
+func TestProcessTikTok_TransientAPIError_Queues(t *testing.T) {
+	for _, code := range []int{429, 500} {
+		t.Run(fmt.Sprintf("code%d", code), func(t *testing.T) {
+			dir := t.TempDir()
+			videoPath := filepath.Join(dir, "test.mp4")
+			if err := os.WriteFile(videoPath, []byte("fake mp4"), 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			q := &fakeDeferredQueue{}
+			snd := &recYTSender{VideoErr: fmt.Errorf("telego: sendVideo: api: %w",
+				&telegoapi.Error{ErrorCode: code, Description: "transient"})}
+			log := slog.New(slog.DiscardHandler)
+			msg := &telego.Message{
+				MessageID: 42,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
+			}
+
+			processTikTok(context.Background(), snd, log, q, nil, nil, msg, "https://vt.tiktok.com/Ztest", videoPath)
+
+			if len(q.jobs) != 1 {
+				t.Fatalf("expected 1 queued job, got %d", len(q.jobs))
+			}
+			if len(snd.Messages) != 0 {
+				t.Errorf("a queued retry must not also decline; got %d messages", len(snd.Messages))
+			}
+		})
+	}
+}
+
 // TestEnqueueOrFail_WithQueue verifies that the job is stored silently
 // (no public decline) when a queue is wired.
 func TestEnqueueOrFail_WithQueue(t *testing.T) {

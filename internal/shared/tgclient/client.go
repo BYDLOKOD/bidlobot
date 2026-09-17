@@ -216,9 +216,14 @@ func rewindUploadBody(file telego.InputFile) error {
 	return err
 }
 
-// rewindUploadBodies rewinds the media body and its optional thumbnail.
-func rewindUploadBodies(file telego.InputFile, thumb *telego.InputFile) error {
-	return errors.Join(rewindUploadBody(file), rewindUploadThumbnail(thumb))
+// rewindUploadFiles rewinds the media body plus any optional file-backed
+// fields (thumbnail, cover).
+func rewindUploadFiles(file telego.InputFile, optional ...*telego.InputFile) error {
+	errs := []error{rewindUploadBody(file)}
+	for _, f := range optional {
+		errs = append(errs, rewindUploadThumbnail(f))
+	}
+	return errors.Join(errs...)
 }
 
 // rewindUploadThumbnail rewinds an optional thumbnail body.
@@ -237,11 +242,13 @@ func rewindUploadMedia(items []telego.InputMedia) error {
 		case *telego.InputMediaPhoto:
 			errs = append(errs, rewindUploadBody(m.Media))
 		case *telego.InputMediaVideo:
-			errs = append(errs, rewindUploadBody(m.Media), rewindUploadThumbnail(m.Thumbnail))
+			errs = append(errs, rewindUploadFiles(m.Media, m.Thumbnail, m.Cover))
+		case *telego.InputMediaAudio:
+			errs = append(errs, rewindUploadFiles(m.Media, m.Thumbnail))
 		case *telego.InputMediaDocument:
-			errs = append(errs, rewindUploadBody(m.Media), rewindUploadThumbnail(m.Thumbnail))
+			errs = append(errs, rewindUploadFiles(m.Media, m.Thumbnail))
 		case *telego.InputMediaAnimation:
-			errs = append(errs, rewindUploadBody(m.Media), rewindUploadThumbnail(m.Thumbnail))
+			errs = append(errs, rewindUploadFiles(m.Media, m.Thumbnail))
 		}
 	}
 	return errors.Join(errs...)
@@ -345,7 +352,7 @@ func (c *Client) SendVideo(ctx context.Context, params *telego.SendVideoParams) 
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendVideo",
 		func(ctx context.Context) error {
-			if err := rewindUploadBodies(params.Video, params.Thumbnail); err != nil {
+			if err := rewindUploadFiles(params.Video, params.Thumbnail, params.Cover); err != nil {
 				return err
 			}
 			m, e := c.bot.SendVideo(ctx, params)
@@ -369,7 +376,7 @@ func (c *Client) SendAnimation(ctx context.Context, params *telego.SendAnimation
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendAnimation",
 		func(ctx context.Context) error {
-			if err := rewindUploadBodies(params.Animation, params.Thumbnail); err != nil {
+			if err := rewindUploadFiles(params.Animation, params.Thumbnail); err != nil {
 				return err
 			}
 			m, e := c.bot.SendAnimation(ctx, params)
@@ -393,7 +400,7 @@ func (c *Client) SendDocument(ctx context.Context, params *telego.SendDocumentPa
 	var msg *telego.Message
 	err := c.runWritePolicy(ctx, c.mediaPolicy, params.ChatID.ID, "sendDocument",
 		func(ctx context.Context) error {
-			if err := rewindUploadBodies(params.Document, params.Thumbnail); err != nil {
+			if err := rewindUploadFiles(params.Document, params.Thumbnail); err != nil {
 				return err
 			}
 			m, e := c.bot.SendDocument(ctx, params)

@@ -448,6 +448,24 @@ func (c *readingTransportCaller) uploads() [][]byte {
 	return append([][]byte(nil), c.bodies...)
 }
 
+// tempFile writes payload into a fresh file in dir and returns it open
+// at offset 0, exactly as an upload caller would hand the file over.
+func tempFile(t *testing.T, dir, pattern string, payload []byte) *os.File {
+	t.Helper()
+	f, err := os.CreateTemp(dir, pattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err := f.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
 // TestSendVideoRewindsBodyOnTransportRetry pins the fix for the
 // production failure of 2026-09-16: sendVideo timed out mid-upload, the
 // transport retry reused the same *os.File, telego streamed it from EOF
@@ -455,25 +473,19 @@ func (c *readingTransportCaller) uploads() [][]byte {
 // transient fault into a lost repost. The retried attempt must carry the
 // video bytes again.
 func TestSendVideoRewindsBodyOnTransportRetry(t *testing.T) {
-	payload := bytes.Repeat([]byte("video-bytes-"), 256)
-	file, err := os.CreateTemp(t.TempDir(), "video-*.mp4")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { file.Close() })
-	if _, err := file.Write(payload); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := file.Seek(0, io.SeekStart); err != nil {
-		t.Fatal(err)
-	}
+	dir := t.TempDir()
+	videoPayload := bytes.Repeat([]byte("video-bytes-"), 256)
+	thumbPayload := bytes.Repeat([]byte("thumb-bytes-"), 32)
+	coverPayload := bytes.Repeat([]byte("cover-bytes-"), 32)
 
 	caller := &readingTransportCaller{}
 	c := newClientWithCaller(t, caller)
 
 	if _, err := c.SendVideo(context.Background(), &telego.SendVideoParams{
-		ChatID: telego.ChatID{ID: -100},
-		Video:  telego.InputFile{File: file},
+		ChatID:    telego.ChatID{ID: -100},
+		Video:     telego.InputFile{File: tempFile(t, dir, "video-*.mp4", videoPayload)},
+		Thumbnail: &telego.InputFile{File: tempFile(t, dir, "thumb-*.jpg", thumbPayload)},
+		Cover:     &telego.InputFile{File: tempFile(t, dir, "cover-*.jpg", coverPayload)},
 	}); err != nil {
 		t.Fatalf("retried send must succeed, got %v", err)
 	}
@@ -485,8 +497,10 @@ func TestSendVideoRewindsBodyOnTransportRetry(t *testing.T) {
 	if len(bodies[0]) == 0 {
 		t.Fatal("first attempt uploaded an empty body")
 	}
-	if !bytes.Contains(bodies[1], payload) {
-		t.Errorf("retried attempt uploaded %d bytes without the video payload", len(bodies[1]))
+	for _, payload := range [][]byte{videoPayload, thumbPayload, coverPayload} {
+		if !bytes.Contains(bodies[1], payload) {
+			t.Errorf("retried attempt uploaded %d bytes without payload %q", len(bodies[1]), payload[:11])
+		}
 	}
 }
 
@@ -494,25 +508,11 @@ func TestSendVideoRewindsBodyOnTransportRetry(t *testing.T) {
 // the X-post reposter uses: every item body must be rewound, not just
 // the first.
 func TestSendMediaGroupRewindsBodiesOnTransportRetry(t *testing.T) {
-	first := bytes.Repeat([]byte("first-photo-"), 128)
-	second := bytes.Repeat([]byte("second-photo-"), 128)
+	firstPayload := bytes.Repeat([]byte("first-photo-"), 128)
+	secondPayload := bytes.Repeat([]byte("second-photo-"), 128)
+	audioPayload := bytes.Repeat([]byte("audio-bytes-"), 128)
+	audioThumbPayload := bytes.Repeat([]byte("audio-thumb-"), 32)
 	dir := t.TempDir()
-
-	files := make([]*os.File, 0, 2)
-	for _, payload := range [][]byte{first, second} {
-		f, err := os.CreateTemp(dir, "photo-*.jpg")
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { f.Close() })
-		if _, err := f.Write(payload); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			t.Fatal(err)
-		}
-		files = append(files, f)
-	}
 
 	caller := &readingTransportCaller{
 		result: json.RawMessage(`[{"message_id":7,"date":1,"chat":{"id":-100,"type":"supergroup"}}]`),
@@ -522,8 +522,12 @@ func TestSendMediaGroupRewindsBodiesOnTransportRetry(t *testing.T) {
 	if _, err := c.SendMediaGroup(context.Background(), &telego.SendMediaGroupParams{
 		ChatID: telego.ChatID{ID: -100},
 		Media: []telego.InputMedia{
-			&telego.InputMediaPhoto{Media: telego.InputFile{File: files[0]}},
-			&telego.InputMediaPhoto{Media: telego.InputFile{File: files[1]}},
+			&telego.InputMediaPhoto{Media: telego.InputFile{File: tempFile(t, dir, "photo-1-*.jpg", firstPayload)}},
+			&telego.InputMediaPhoto{Media: telego.InputFile{File: tempFile(t, dir, "photo-2-*.jpg", secondPayload)}},
+			&telego.InputMediaAudio{
+				Media:     telego.InputFile{File: tempFile(t, dir, "audio-*.mp3", audioPayload)},
+				Thumbnail: &telego.InputFile{File: tempFile(t, dir, "audio-thumb-*.jpg", audioThumbPayload)},
+			},
 		},
 	}); err != nil {
 		t.Fatalf("retried album send must succeed, got %v", err)
@@ -533,8 +537,10 @@ func TestSendMediaGroupRewindsBodiesOnTransportRetry(t *testing.T) {
 	if len(bodies) != mediaMaxTransportAttempts {
 		t.Fatalf("attempts = %d, want %d", len(bodies), mediaMaxTransportAttempts)
 	}
-	if !bytes.Contains(bodies[1], first) || !bytes.Contains(bodies[1], second) {
-		t.Errorf("retried album attempt uploaded %d bytes without both photo payloads", len(bodies[1]))
+	for _, payload := range [][]byte{firstPayload, secondPayload, audioPayload, audioThumbPayload} {
+		if !bytes.Contains(bodies[1], payload) {
+			t.Errorf("retried album attempt uploaded %d bytes without payload %q", len(bodies[1]), payload[:11])
+		}
 	}
 }
 

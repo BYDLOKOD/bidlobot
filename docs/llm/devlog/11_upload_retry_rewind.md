@@ -53,18 +53,21 @@ a send failure produced the public decline note and nothing replayable.
 - **Rewind before every attempt** (`internal/shared/tgclient/client.go`).
   `rewindUploadBody` seeks a file-backed body to its start through
   `io.Seeker`; `rewindUploadThumbnail` and `rewindUploadMedia` cover
-  thumbnails and album items. Every media wrapper (`SendPhoto`,
-  `SendVideo`, `SendAnimation`, `SendDocument`, `SendMediaGroup`) calls
+  thumbnails, covers, and album items of every `InputMedia` kind. Every
+  media wrapper (`SendPhoto`, `SendVideo`, `SendAnimation`,
+  `SendDocument`, `SendMediaGroup`) calls
   them as the first statement of its send closure, which `retry.Do`
   runs once per attempt. A reader that is not seekable (a file_id or URL
   reference, both with a nil `File`) is left alone.
-- **Queue a network send failure** (`internal/bot/tiktok_repost.go`).
-  `processTikTok` now splits on error class: `errors.As(err,
-  &telegoapi.Error)` means Telegram answered, so the decline note stands
-  and the job is not queued; anything else never reached the API, so the
-  job goes to the deferred queue and `/flush` replays it. The
-  flush path (`tryTikTokExport`) already keeps a failed job in the
-  queue.
+- **Queue a transient send failure** (`internal/bot/tiktok_repost.go`).
+  `processTikTok` now splits on error class: a 4xx from Telegram itself
+  (`errors.As(err, &telegoapi.Error)` with a code below 500 other than
+  429 - bad file, forbidden chat, too large) is permanent, so the
+  decline note stands and the job is not queued; everything else - a
+  transport fault that never reached Telegram, a 429, or a 5xx that
+  outlived the retry ladder - is replayable and goes to the deferred
+  queue for `/flush`. The flush path (`tryTikTokExport`) already keeps a
+  failed job in the queue.
 
 ## Evidence
 

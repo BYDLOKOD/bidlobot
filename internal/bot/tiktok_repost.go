@@ -443,19 +443,19 @@ func processTikTok(
 		ParseMode: telego.ModeHTML,
 	})
 	if sendErr != nil {
-		// An API rejection (bad file, chat forbidden, too large) is
-		// permanent, so the user gets the decline note. A transport fault
-		// never reached Telegram and is worth a replay: queue the job so
-		// /flush retries it instead of losing the repost to one network
-		// blip.
+		// Permanent = Telegram answered 4xx (bad file, chat forbidden,
+		// too large): the decline note stands. Everything else is
+		// transient and replayable - a transport fault never reached
+		// Telegram, 429 and 5xx outlived the retry ladder - so the job
+		// goes to the deferred queue for /flush instead of being lost.
 		var apiErr *telegoapi.Error
-		if errors.As(sendErr, &apiErr) {
+		if errors.As(sendErr, &apiErr) && apiErr.ErrorCode < 500 && apiErr.ErrorCode != 429 {
 			log.Warn("tiktok: repost rejected by the API; leaving original intact",
 				"chat_id", chatID, "error", sendErr)
 			sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
 			return
 		}
-		log.Warn("tiktok: repost failed on the network, queuing",
+		log.Warn("tiktok: repost failed transiently, queuing",
 			"chat_id", chatID, "url", tiktokURL, "error", sendErr)
 		enqueueOrFail(ctx, snd, log, queue, msg, tiktokURL)
 		return
