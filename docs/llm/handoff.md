@@ -1,113 +1,85 @@
-# Handoff - 2026-09-12 (media resilience session)
+# Handoff - 2026-09-17 (upload retry rewind)
 
 ## 1. State (what is true right now)
 
-- **Deployed.** `origin/master` = `631cb23` ("fix(resilience): contain
-  panics, retry transport faults, fetch TikTok via mirror"). Production
-  (`veschin@192.168.0.101`, checkout `~/bidlobot`) was recreated from it
-  and verified: container `running healthy`, `/health` -> `200
-  {"status":"ok"}`, one `"msg":"starting"` entry in the window, zero
-  ERROR lines, log sequence `starting` -> `captcha enabled` -> `health
-  server listening` -> `bot started, polling for updates`.
-- Working tree clean; docs and devlog are in the same commit
-  (`devlog/10_media_resilience.md`).
-- **P1** `App.recoverMiddleware` is the outermost handler in `Run`
-  (panics become `update handler panic recovered` + stack); `shared.Go`
-  wraps the fire-and-forget spawns (flush, tiktok, tiktok-comment,
-  tiktok-shortlink, xpost, xpost-decline, captcha-welcome).
-- **P2** `retry` gained `kindTransport` (3 attempts, 1/2/4s) and
-  `Policy.AttemptTimeout`; `tgclient` splits control (20s per attempt)
-  from media (240s, 2 transport attempts); telego's fasthttp client has
-  65s read / 240s write; the long poll sets `Timeout: 30`.
-- **P3** `internal/bot/tiktok_source.go`: download goes mirror-first via
-  tikwm (shares the comment pacer), yt-dlp is the fallback with a 45s
-  deadline per attempt; both paths are named in one error; photo posts
-  (`errPhotoPost`) decline instead of queueing forever.
-- **P4 applied.** `docker-compose.yml` pins
-  `dns: [192.168.0.1, 1.1.1.1, 8.8.8.8]`; in-container
-  `/etc/resolv.conf` now reads `ExtServers: [192.168.0.1 1.1.1.1
-  8.8.8.8]`, `Overrides: [nameservers]`, and both
-  `api.telegram.org` and `tikwm.com` resolve from inside the container.
-  Baseline for the follow-up count (24h before the change): **79**
-  lines matching `lookup api.telegram.org`.
-- **First backup ever taken** (P5, partially):
-  `/home/veschin/bidlobot-backups/bidlobot-20260912-082101.db`,
-  2097152 bytes, bbolt page magic `ed0cdaed`. `deploy/backup.sh` cannot
-  produce it as a normal user (see section 2).
+- **New commit `b8d170b`** on `master`, local only: not pushed to
+  `origin`, not deployed. The running container on
+  (`veschin@192.168.0.101`, checkout `~/bidlobot`) still executes
+  `631cb23` and was started 2026-09-12T08:21:06Z.
+- **What changed.** `internal/shared/tgclient/client.go`: all five media
+  wrappers (`SendPhoto`, `SendVideo`, `SendAnimation`, `SendDocument`,
+  `SendMediaGroup`) rewind their file-backed bodies before every retry
+  attempt; `internal/bot/tiktok_repost.go`: `processTikTok` queues a
+  send failure that never reached Telegram and keeps the decline note
+  for an API rejection.
+- **Why.** Four TikTok reposts were lost in 96 hours (17 succeeded).
+  Each loss was `sendVideo` failing on the network and the transport
+  retry re-uploading the same `*os.File` that telego had already
+  streamed to EOF, so Telegram answered `400 file must be non-empty` -
+  a class the ladder does not retry. Details and the log correlation are
+  in `docs/llm/devlog/11_upload_retry_rewind.md`.
+- **Verified.** `go build ./...`, `go vet ./...`, `gofmt -l internal/`
+  clean; `go test ./...` green (21 packages); `go test -race` green for
+  `internal/shared/...` and `internal/bot/...`; `docs/llm/validate.sh`
+  exits 0. The two new tgclient tests fail against the pre-fix helper
+  (retried attempt carried 431 bytes of multipart framing and no video
+  payload).
 
 ## 2. Negatives (what does NOT exist)
 
-- **No backup cron.** Installing it needs root on the deploy host and
-  `sudo` there requires a password, so it is uninstalled. The entry to
-  install and the root hand-run command are in
-  `70_deployment.md` "Backup". Until then the only snapshot is the
-  hand-made one above.
-- **`deploy/backup.sh` cannot run as the deploy user**: `/var/backups`
-  is root-owned, `COMPOSE_DIR` defaults to `/opt/bidlobot` (the checkout
-  is `/home/veschin/bidlobot`), and the volume path under
-  `/var/lib/docker/volumes` is root-only. Verified: as `veschin` it
-  stops the bot, prints `ERROR: ... bidlobot.db missing`, and starts it
-  again. The root-free alternative (`docker cp`, documented) works.
-- **The two queued TikTok jobs are still queued** until the owner runs
-  `/flush` in the production chat (`vt.tiktok.com/ZSqfcymnR`,
-  `vt.tiktok.com/ZSq5d4Rxh`). Both answer `code:0 success` through the
-  mirror from inside the container.
-- **`internal/domain/monthstats` boundary race fixed** (commit 2 of this
-  session): the flush skipped any chat whose boundary was already
-  persisted by the eager first-`Add` write, so `LiveTrackStart` could
-  stay pinned at the first-SEEN ts instead of the earliest live message
-  ts that `30_stats.md` defines. The gate is gone, the flush now
-  persists the running minimum every time (the store no-ops a repeat),
-  the test double mirrors the bbolt repository, and
-  `TestBufferLiveTrackStartTracksEarliest` covers the ordering
-  deterministically. 25/25 green with `-race` (was 8/12 failing).
-  **Not deployed yet** - the running container predates this fix.
-- Residual risk, accepted: the mirror download reuses the shared 30s
-  HTTP client (`tiktokCommentHTTPClient`), so a very large CDN transfer
-  can time out and fall through to yt-dlp. Measured throughput (~1 MiB
-  in 1.1-1.5s) leaves the bound comfortable for production sizes.
-- **`/health` reports 503 while the chat is quiet.** At 08:26 UTC on
-  2026-09-12 the container went `unhealthy` with reason `no updates
-  received since startup`, exactly when the 5-minute startup grace
-  expired, because no update had arrived since the 08:21:07 restart.
-  Verified NOT a wedged poll: the container holds an ESTABLISHED socket
-  to `149.154.166.110:443`, telego logged no `Getting updates:` error
-  (which would also have stopped the loop - default retry timeout is 0),
-  and eth0 counters moved +566 tx / +743 rx bytes over 40s, i.e. empty
-  long-poll cycles. The freshness window measures the last update, not
-  bot liveness, so a quiet chat always reports 503; a message in the
-  chat flips it back. Pre-existing, unchanged by this session (comment
-  in `health.go` now says so).
+- **Nothing is deployed.** The container that answers `/health` and
+  reposts videos predates the fix, so the loss mode is still live on
+  every network blip.
+- **The four lost reposts are not recoverable from the queue.** They
+  were never queued - that is the defect. The originals are still in the
+  chat, so resending a link reposts it.
+- **The two jobs queued on 2026-09-12** (`vt.tiktok.com/ZSqfcymnR`,
+  `vt.tiktok.com/ZSq5d4Rxh`) were not re-checked this session; the owner
+  `/flush` in the production chat is still the way to know.
+- **Container network flapping persists.** 171 `lookup
+  api.telegram.org` / connection timeouts in 96 hours, 120 of them on
+  2026-09-16; requests that do succeed take 2.2-6.2s. The fix makes
+  uploads survive it, it does not remove it. The 24h recount against the
+  79-line baseline of 2026-09-12 is now **120**, i.e. the resolver
+  problem is worse, not fixed.
+- **Still undeployed from 2026-09-12**: the `monthstats` boundary fix
+  (`TestBufferLiveTrackStartTracksEarliest`).
+- **No backup cron**; the only snapshot is
+  `/home/veschin/bidlobot-backups/bidlobot-20260912-082101.db`.
+- **26 stale specs** reported by `validate.sh` (games, summarize,
+  youtube sanitizer, xpost, reputation) - all pre-existing, none in the
+  files this session touched.
 
 ## 3. Queue
 
-- Owner: `/flush` in the production chat; then confirm
-  `tiktok flush: reposted` for both jobs. A failure must name both
+- Owner decision: **deploy `b8d170b`** (one recreate, ~15s). It needs a
+  push to `origin` first, or a deploy straight from the local checkout.
+- After deploy, watch for two log shapes:
+  `tiktok: repost failed on the network, queuing` (new, expected on a
+  blip) and the absence of `400 "Bad Request: file must be non-empty"`.
+- Owner: `/flush` in the production chat; a failed job must name both
   paths (`mirror: ...; yt-dlp: ...`).
-- Owner: install the root cron entry (needs the host sudo password).
-  Decision on 2026-09-12 was **manual backups for now**, so the cron is
-  intentionally not installed; re-ask before adding it.
-- Deploy the monthstats boundary fix (one recreate, ~15s) when
-  convenient.
-- Next session, 24h after 2026-09-12 08:20 UTC: recount
-  `docker logs --since 24h bidlobot 2>&1 | grep -c 'lookup
-  api.telegram.org'` - target 0 against the 79 baseline.
+- Investigation left open: why the container's egress to
+  `api.telegram.org` times out in bursts while host-side resolution is
+  clean (4-7ms). Candidates: Docker DNS upstream rotation, ISP/TSPU
+  filtering. Needs a measurement session, not a code change.
 
 ## 4. Read order
 
-1. `docs/llm/56_tiktok_repost.md` (Video source, Pipeline, Failure
-   handling) - the new download contract.
-2. `docs/llm/60_architecture.md` (App-level middleware, Failure matrix).
-3. `docs/llm/50_telegram.md` "Rate limits" + "Error handling" - retry
-   classes and panic recovery.
-4. `docs/llm/70_deployment.md` "Backup" before touching host backups.
+1. `docs/llm/devlog/11_upload_retry_rewind.md` - the failure, the
+   mechanism, the evidence.
+2. `internal/shared/tgclient/client.go` (`rewindUploadBody`,
+   `rewindUploadBodies`, `rewindUploadMedia`) - the fix.
+3. `docs/llm/56_tiktok_repost.md` "Failure handling" and
+   `docs/llm/60_architecture.md` "Failure handling" - the contract.
 
 ## 5. Smoke test (run before touching anything)
 
 ```sh
-go build ./... && go vet ./...
-go test -race ./...          # expect: only the monthstats flake can fail
-cd docs/llm && ./validate.sh # expect: exit 0
+go build ./... && go vet ./... && gofmt -l internal/
+go test ./...                # expect 21 ok
+go test -race ./internal/shared/... ./internal/bot/...
+cd docs/llm && ./validate.sh # expect exit 0
 ```
 
 Live checks:
@@ -115,21 +87,17 @@ Live checks:
 ```sh
 ssh veschin@192.168.0.101 'docker inspect bidlobot --format "{{.State.Status}} {{.State.Health.Status}}"; \
   docker exec bidlobot wget -qO- http://127.0.0.1:8080/health; echo; \
-  docker exec bidlobot cat /etc/resolv.conf'
+  docker logs --since 24h bidlobot 2>&1 | grep -c "lookup api.telegram.org"'
 ```
 
 ## 6. Agent errors
 
-- The plan assumed `go test -race ./...` would be fully green; the
-  monthstats flake was reproduced on a clean worktree (8/12) to prove it
-  predated this change, then traced to three disagreeing layers (store
-  min, flush gate, test double) and fixed as its own commit.
-- The plan's `withTikwmStub` reuse did not fit the media endpoint (it
-  switches on `tikwmPathList`/`tikwmPathReply`), so the new tests carry
-  their own `withTikwmMediaServer` helper; the pacer interval is zeroed.
-- P3 assumed photo posts are identifiable by an empty `data.play`. A
-  live probe showed they carry images *and* a play URL on a music host
-  that serves no MP4, so the sentinel is also returned when a post
-  carrying images fails to deliver bytes.
-- The plan expected `deploy/backup.sh` to succeed when run by hand; it
-  cannot as a non-root user. Root cause chain in section 2.
+- First reading blamed an empty CDN download for `file must be
+  non-empty`. The log disproved it: every 400 sat 2-4s after a
+  `sendVideo` transport timeout, and the mirror path never failed in 96
+  hours. The bug was in the retry, not in the download.
+- The first version of the album test failed on `cannot unmarshal object
+  into Go value of type []telego.Message` - the fake caller returned a
+  single message where `sendMediaGroup` expects an array.
+- `rewindUploadBodies(params.Photo, params.Thumbnail)` did not compile:
+  `SendPhotoParams` has no `Thumbnail` field in telego v1.8.0.
