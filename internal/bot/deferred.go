@@ -75,6 +75,14 @@ func (a *App) flushDeferredJobs(userID int64, reportChatID int64, jobs []storage
 			}
 		case storage.DeferredSummarize:
 			err = a.retrySummarize(ctx, job)
+		case storage.DeferredInstagram:
+			var p storage.InstagramPayload
+			if jErr := json.Unmarshal(job.Payload, &p); jErr != nil {
+				err = fmt.Errorf("decode payload: %w", jErr)
+			} else {
+				err = tryInstagramExport(ctx, snd, a.log, a.repReactor, a.igOptions,
+					job.ChatID, job.MessageID, job.UserID, p.URL, p.Username, p.FirstName, p.Caption)
+			}
 		default:
 			continue
 		}

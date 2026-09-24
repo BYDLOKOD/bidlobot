@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -41,6 +42,15 @@ type Config struct {
 	// accepted from BidloBot config - the Pi CLI carries its own credential.
 	PIBinary string
 	PIModel  string
+
+	// Instagram repost egress. A growing share of ISPs blocks Instagram
+	// outright (Russia blocks it at the IP level) and many posts answer an
+	// anonymous client with a login wall, so the yt-dlp download accepts
+	// an optional proxy and a Netscape-format cookie jar. Both empty =
+	// direct, anonymous. The bot starts either way; a blocked egress just
+	// means Instagram links fail into the deferred queue.
+	InstagramProxy   string
+	InstagramCookies string
 
 	// Required: the Telegram user id of the bot owner. Only this user may
 	// add the bot to a supergroup; any non-owner add triggers an immediate
@@ -81,6 +91,9 @@ func loadConfig() Config {
 
 		PIBinary: envOr("PI_BINARY", "omp"),
 		PIModel:  envOr("PI_MODEL", "deepseek/deepseek-v4-flash"),
+
+		InstagramProxy:   strings.TrimSpace(os.Getenv("INSTAGRAM_PROXY")),
+		InstagramCookies: strings.TrimSpace(os.Getenv("INSTAGRAM_COOKIES")),
 
 		BotOwnerID: parseOwnerID(os.Getenv("BOT_OWNER_ID")),
 
@@ -198,10 +211,46 @@ func (c Config) Validate() error {
 		errs = append(errs, errors.New("BOT_OWNER_ID is required: positive int64 Telegram user ID"))
 	}
 
+	// Both Instagram egress settings are optional; only an explicitly
+	// supplied bad value is an error. A typo'd proxy would otherwise only
+	// surface as every Instagram repost landing in the deferred queue.
+	if c.InstagramProxy != "" {
+		if err := validateProxyURL(c.InstagramProxy); err != nil {
+			errs = append(errs, fmt.Errorf("INSTAGRAM_PROXY: %w", err))
+		}
+	}
+	if c.InstagramCookies != "" {
+		switch info, err := os.Stat(c.InstagramCookies); {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("INSTAGRAM_COOKIES: %w", err))
+		case info.IsDir():
+			errs = append(errs, fmt.Errorf("INSTAGRAM_COOKIES: %s is a directory, want a Netscape cookie file", c.InstagramCookies))
+		}
+	}
+
 	if len(errs) == 0 {
 		return nil
 	}
 	return errors.Join(errs...)
+}
+
+// validateProxyURL accepts the schemes yt-dlp's --proxy understands.
+// A proxy string without a host is always a typo: the download would fail
+// for every link instead of failing loudly at startup.
+func validateProxyURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("not a URL: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "socks4", "socks4a", "socks5", "socks5h":
+	default:
+		return fmt.Errorf("unsupported scheme %q (want http|https|socks4|socks4a|socks5|socks5h)", u.Scheme)
+	}
+	if u.Host == "" {
+		return errors.New("missing host")
+	}
+	return nil
 }
 
 // validateDBPath ensures DBPath exists and is writable, or that its

@@ -145,6 +145,83 @@ func TestLoadConfig_ReadsEnv(t *testing.T) {
 	}
 }
 
+// TestConfig_InstagramProxy validates the optional egress override: only
+// an explicitly supplied bad value is an error (unset = direct download).
+func TestConfig_InstagramProxy(t *testing.T) {
+	dir := t.TempDir()
+
+	for _, proxy := range []string{
+		"http://proxy.example:3128",
+		"https://proxy.example:8080",
+		"socks5://127.0.0.1:1080",
+		"socks5h://127.0.0.1:1080",
+	} {
+		t.Run("valid "+proxy, func(t *testing.T) {
+			c := Config{Token: validToken, DBPath: dir, LogLevel: "info", BotOwnerID: 1, InstagramProxy: proxy}
+			if err := c.Validate(); err != nil {
+				t.Fatalf("proxy %q expected to be accepted: %v", proxy, err)
+			}
+		})
+	}
+
+	for _, proxy := range []string{
+		"ftp://proxy.example:21", // yt-dlp has no ftp proxy support
+		"socks5://",              // no host
+		"127.0.0.1:1080",         // missing scheme: parses as scheme "127.0.0.1"
+	} {
+		t.Run("invalid "+proxy, func(t *testing.T) {
+			c := Config{Token: validToken, DBPath: dir, LogLevel: "info", BotOwnerID: 1, InstagramProxy: proxy}
+			err := c.Validate()
+			if err == nil || !strings.Contains(err.Error(), "INSTAGRAM_PROXY") {
+				t.Fatalf("proxy %q expected to be rejected, got %v", proxy, err)
+			}
+		})
+	}
+}
+
+// TestConfig_InstagramCookies verifies the cookie jar path is checked at
+// startup: a typo would otherwise only show up as every Instagram repost
+// landing in the deferred queue.
+func TestConfig_InstagramCookies(t *testing.T) {
+	dir := t.TempDir()
+	jar := filepath.Join(dir, "cookies.txt")
+	if err := os.WriteFile(jar, []byte("# Netscape HTTP Cookie File\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	ok := Config{Token: validToken, DBPath: dir, LogLevel: "info", BotOwnerID: 1, InstagramCookies: jar}
+	if err := ok.Validate(); err != nil {
+		t.Fatalf("existing cookie file expected to be accepted: %v", err)
+	}
+
+	missing := Config{Token: validToken, DBPath: dir, LogLevel: "info", BotOwnerID: 1,
+		InstagramCookies: filepath.Join(dir, "nope.txt")}
+	err := missing.Validate()
+	if err == nil || !strings.Contains(err.Error(), "INSTAGRAM_COOKIES") {
+		t.Fatalf("missing cookie file expected to be rejected, got %v", err)
+	}
+
+	isDir := Config{Token: validToken, DBPath: dir, LogLevel: "info", BotOwnerID: 1, InstagramCookies: dir}
+	if err := isDir.Validate(); err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("directory expected to be rejected, got %v", err)
+	}
+}
+
+// TestLoadConfig_ReadsInstagramEnv pins the env names: the download is
+// wired from these two strings and nothing else.
+func TestLoadConfig_ReadsInstagramEnv(t *testing.T) {
+	t.Setenv("INSTAGRAM_PROXY", "socks5h://127.0.0.1:1080")
+	t.Setenv("INSTAGRAM_COOKIES", "/etc/bidlobot/ig-cookies.txt")
+
+	c := loadConfig()
+	if c.InstagramProxy != "socks5h://127.0.0.1:1080" {
+		t.Errorf("InstagramProxy = %q", c.InstagramProxy)
+	}
+	if c.InstagramCookies != "/etc/bidlobot/ig-cookies.txt" {
+		t.Errorf("InstagramCookies = %q", c.InstagramCookies)
+	}
+}
+
 // Ensure errors.Join is in use so we get one error per problem.
 func TestConfig_AggregateUsesErrorsJoin(t *testing.T) {
 	c := Config{Token: "", DBPath: "", LogLevel: "x"}

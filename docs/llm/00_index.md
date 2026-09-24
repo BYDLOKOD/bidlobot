@@ -31,6 +31,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [58_referral.md](58_referral.md) - referral catalog: /refs /refreg /refreport, chat-scoped buckets, registration UX, moderation
 - [59_reputation.md](59_reputation.md) - reputation economy: /praise /roast /rep /reptop, balance rules, live membership check
 - [60_architecture.md](60_architecture.md) - layered composition, middleware order, bbolt schema, invariants, failure matrix, deferred queue
+- [61_instagram_repost.md](61_instagram_repost.md) - Instagram reel/post repost: yt-dlp source (no mirror), no audio gate, photo/carousel decline, deferred queue on failure, `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES`
 - [65_admission.md](65_admission.md) - owner-only installation gate (BOT_OWNER_ID, LeaveChat) + opt-in new-member captcha with welcome animation
 - [70_deployment.md](70_deployment.md) - docker-compose stack (single bot service), env vars, image contents (yt-dlp/ffmpeg/omp), healthcheck, backup, rollback
 
@@ -46,6 +47,8 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [devlog/08_content_tools_era.md](devlog/08_content_tools_era.md) - 2026-05-26..08-11: captcha + admission gate, TikTok repost, X-post sidecar, referral, reputation, summarize migrated to OMP/Pi, deferred queue, DM console removed.
 - [devlog/09_xpost_v2_and_docs_v3.md](devlog/09_xpost_v2_and_docs_v3.md) - 2026-08-16: X-post reworked to single-message FixTweet repost (xshot sidecar deleted), docs/llm migrated to v3.
 - [devlog/10_media_resilience.md](devlog/10_media_resilience.md) - 2026-09-12: panic containment (recover middleware + shared.Go), transport retry class with per-attempt deadlines, TikTok download via the tikwm mirror with yt-dlp fallback.
+- [devlog/11_upload_retry_rewind.md](devlog/11_upload_retry_rewind.md) - 2026-09-17: retried media uploads uploaded nothing (telego streams the body once; every media wrapper now rewinds before each attempt).
+- [devlog/12_instagram_repost.md](devlog/12_instagram_repost.md) - 2026-09-24: Instagram reel/post repost. No usable mirror (measured), so yt-dlp is the only source; photo/carousel/login-walled posts decline instead of queueing; `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES` close the ISP-block gap.
 
 ## Removed surfaces (code deleted; docs deleted with them)
 

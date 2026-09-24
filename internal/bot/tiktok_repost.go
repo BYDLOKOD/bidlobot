@@ -267,19 +267,25 @@ func ytDlpAttempt(ctx context.Context, dlURL, workDir string) (string, error) {
 
 	output, err := cmd.CombinedOutput()
 	if err == nil {
-		// Find the downloaded file in the workDir.
-		entries, rdErr := os.ReadDir(workDir)
-		if rdErr != nil {
-			return "", fmt.Errorf("reading work dir: %w", rdErr)
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				return filepath.Join(workDir, e.Name()), nil
-			}
-		}
-		return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
+		return fileFromWorkDir(workDir)
 	}
 	return "", fmt.Errorf("%w\n%s", err, previewOutput(output, 400))
+}
+
+// fileFromWorkDir returns the media file a successful yt-dlp run wrote
+// into workDir. Shared by the TikTok and Instagram download paths; both
+// clean up anything left behind with os.Remove.
+func fileFromWorkDir(workDir string) (string, error) {
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		return "", fmt.Errorf("reading work dir: %w", err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			return filepath.Join(workDir, e.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
 }
 
 // previewOutput trims captured subprocess output so one failure does not

@@ -41,6 +41,7 @@ internal/
     youtube_sanitizer.go  YT si= strip (delete+repost)
     tiktok_repost.go      TikTok video repost (mirror -> yt-dlp)
     tiktok_source.go      tikwm mirror: resolve + stream the MP4
+    instagram_repost.go   Instagram reel/post repost (yt-dlp only)
     xpost.go              X/Twitter sidecar client
     referral.go           referral catalog UX
     reputation.go         praise/roast/rep economy
@@ -196,9 +197,9 @@ migration (documented, not silently handled).
    reintroduce public moderation, advertise it in
    `helpSupergroup`/`setCommands` group scope, or route destructive
    actions through inline (inline posts publicly).
-4. **Content middlewares are repost-then-delete (YT, TikTok) or
-   add-only (xpost)**, never delete-first. A failed repost leaves the
-   original intact.
+4. **Content middlewares are repost-then-delete (YT, TikTok,
+   Instagram) or add-only (xpost)**, never delete-first. A failed
+   repost leaves the original intact.
 5. **No third-party pings.** No user-triggered command emits
    `@handle` / `tg://user?id=` / `text_mention` for a third party;
    attribution headers render inert display names.
@@ -251,6 +252,10 @@ No `edited_message`, no `chat_join_request`.
 | TikTok photo post | `tiktok_source.go` | decline note; never queued (no retry can succeed) |
 | TikTok 4xx send rejection (too large, forbidden) | `tiktok_repost.go` | public decline note; original kept; never queued (the answer is permanent) |
 | TikTok transient send failure (transport, 429, 5xx) | `tiktok_repost.go` | enqueue to the deferred queue; `/flush` replays it |
+| Instagram download fail (transport, 429, 5xx) | `instagram_repost.go` | yt-dlp retried 3x; still failing -> enqueue to deferred queue; original kept |
+| Instagram photo/carousel/login-walled post | `instagram_repost.go` | decline note; never queued (no retry can produce a video) |
+| Instagram 4xx send rejection (too large, forbidden) | `instagram_repost.go` | public decline note; original kept; never queued |
+| Instagram transient send failure (transport, 429, 5xx) | `instagram_repost.go` | enqueue to the deferred queue; `/flush` replays it |
 | xpost any failure | `xpost.go` | decline note; original kept (never deleted) |
 | YT sanitizer repost fail | `youtube_sanitizer.go` | original left intact |
 | summarize provider fail | `summarize.go` | enqueue to deferred queue; placeholder stays |
@@ -264,11 +269,14 @@ No `edited_message`, no `chat_join_request`.
 ## Deferred queue
 
 `internal/bot/deferred.go` + `storage/deferred_repo.go`. Per-user
-retry queue for failed **TikTok exports** and **summarize** calls
-(commits 81f45c9, 47cdd99). Public `/flush` (30s cooldown) processes
+retry queue for failed **TikTok exports**, **Instagram exports** and
+**summarize** calls (commits 81f45c9, 47cdd99; Instagram added
+2026-09-24). Public `/flush` (30s cooldown) processes
 the caller's own jobs sequentially in a background goroutine: tiktok
 -> `tryTikTokExport` (full download->validate->upload->delete cycle;
-error keeps the job), summarize -> `retrySummarize` (re-runs
+error keeps the job), instagram -> `tryInstagramExport` (same cycle,
+minus the audio gate; a post that carries no video is reported once
+and dropped), summarize -> `retrySummarize` (re-runs
 `Summarize`, edits the placeholder with 25s timeout). Success ->
 `Delete(key)`. Storage: `deferred_jobs`, key `dj:<zero-padded
 UnixNano>` (lexicographic FIFO), JSON `DeferredJob{user_id, type,

@@ -14,6 +14,7 @@ embedded bbolt database, long-polling. Ships as a docker-compose stack
 | Referral catalog | `/refs`, `/refreg`, `/refreport` (admin) - chat-scoped referral links |
 | YouTube sanitizer | strips `si=` share-tracking param (delete + attributed repost) |
 | TikTok repost | downloads TikTok video, reposts attributed, deletes original |
+| Instagram repost | downloads an Instagram reel/post video (via `yt-dlp`), reposts attributed, deletes original |
 | X/Twitter repost | re-sends an X post as one message (text + native media + canonical link, via the FixTweet API), deletes original |
 | Chat summarization | admin `/summarize [N]` (alias `/итог`) - DeepSeek V4 Flash via OMP/Pi, weighted digest with cost footer |
 | New-member captcha | opt-in (`CAPTCHA_ENABLED`): math challenge, kick on wrong/no answer, welcome animation on solve |
@@ -57,8 +58,8 @@ provider-side.
 
 If `can_read_all=false`: `@BotFather` -> `/setprivacy` -> off, then
 **remove and re-add the bot** to every chat (privacy is cached at
-join). The content features (sanitizer, TikTok, xpost, summarize
-recorder) need message content.
+join). The content features (sanitizer, TikTok, Instagram, xpost,
+summarize recorder) need message content.
 
 > Important: only one process per token can poll `getUpdates` at a time.
 > Stop any production deployment before starting a local instance with the

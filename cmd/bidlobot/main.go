@@ -174,6 +174,13 @@ func main() {
 	app.SetBotOwnerID(cfg.BotOwnerID)
 	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	app.SetDeferredQueue(storage.NewDeferredRepo(db))
+	// Instagram repost egress: an optional proxy and cookie jar for the
+	// yt-dlp download (INSTAGRAM_PROXY / INSTAGRAM_COOKIES). Unset - the
+	// default - keeps the download direct and anonymous.
+	app.SetInstagramOptions(bot.InstagramDownloadOptions{
+		Proxy:   cfg.InstagramProxy,
+		Cookies: cfg.InstagramCookies,
+	})
 	// TikTok repost index: lets a comment quote reply to a video the bot
 	// already reposted into the chat.
 	app.AttachTikTokVideoIndex(storage.NewTikTokVideoRepo(db))

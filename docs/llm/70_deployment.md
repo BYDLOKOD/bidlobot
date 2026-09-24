@@ -33,8 +33,9 @@ downloads twimg media directly).
   startup; only this user may add the bot to a chat.
 - `/setinline` Enabled with a placeholder string (read-only launcher).
 - `/setprivacy` - a **hard prerequisite now**: the content features
-  (YouTube `si=` sanitizer, TikTok repost, X-post repost, summarize
-  recorder) all read full message text, so privacy must be **OFF**
+  (YouTube `si=` sanitizer, TikTok repost, Instagram repost, X-post
+  repost, summarize recorder) all read full message text, so privacy
+  must be **OFF**
   (`@BotFather` -> `/setprivacy` -> Disable) and the bot **removed +
   re-added** to every chat (privacy is cached at join). With privacy
   ON the bot only sees commands/@-mentions/replies, and all content
@@ -56,7 +57,9 @@ downloads twimg media directly).
   `@oh-my-pi/pi-coding-agent` 16.3.6** (the `omp` CLI on PATH,
   version-checked at build). yt-dlp is the **fallback** TikTok source;
   the primary path is the tikwm mirror
-  ([56_tiktok_repost.md](56_tiktok_repost.md)). Runs as `bidlobot`
+  ([56_tiktok_repost.md](56_tiktok_repost.md)), and it is the **only**
+  source for the Instagram repost
+  ([61_instagram_repost.md](61_instagram_repost.md)). Runs as `bidlobot`
   (UID 65532), `WORKDIR /var/lib/bidlobot`, tini as PID 1,
   HEALTHCHECK on the loopback `/health`.
 
@@ -122,6 +125,15 @@ Optional:
   `pass` into the same shell first.
 - `CAPTCHA_ENABLED` (default false) / `CAPTCHA_TIMEOUT` (default `1m`,
   1m..30m) -- new-member math captcha + welcome animation.
+- `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES` -- egress for the Instagram
+  repost download ([61_instagram_repost.md](61_instagram_repost.md)).
+  Several ISPs block Instagram outright (Russia blocks it at the IP
+  level) and a growing share of posts is login-walled, so the yt-dlp
+  call accepts an HTTP/SOCKS proxy (`socks5h://` resolves DNS through
+  the proxy) and a Netscape-format cookie jar. Both are validated at
+  startup and default to unset: direct, anonymous. With a blocked
+  egress and neither set, every Instagram link fails into the deferred
+  queue.
 - `CLEANUP_DAILY_AT` / `CLEANUP_GRACE` / `CLEANUP_DAILY_BATCH` --
   legacy gracekick tuning, still validated, **but the scheduler is
   idle** (no `/cleanup` command exists to seed a campaign). Harmless
