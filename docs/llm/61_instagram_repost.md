@@ -172,8 +172,13 @@ this pipeline with the yt-dlp binary swapped per run:
 | 2026.07.04 (the pin now) | 2396150-byte mp4; reposted, original deleted, queue empty |
 | 2026.08.19 (the measurement build) | 2396150-byte mp4, same outcome |
 
-Neither `--proxy` nor `--cookies` were needed from that egress; the
-deployment egress still decides whether `INSTAGRAM_PROXY` is required.
+The production container was measured after the 2026-09-25 deploy: it runs
+yt-dlp 2026.07.04, the new code is in the running binary, and it downloaded
+the same 2396150-byte file anonymously (`docker exec bidlobot yt-dlp ...`).
+Neither `INSTAGRAM_PROXY` nor `INSTAGRAM_COOKIES` is set for this
+deployment; both stay available for an egress that needs them. The one step
+not measured outside a chat is the Telegram upload itself.
+
 The pin sits on the last release before the TikTok extractor regression of
 2026-08-10 (yt-dlp issue #17403), so the yt-dlp TikTok fallback keeps
 working ([56_tiktok_repost.md](56_tiktok_repost.md),
