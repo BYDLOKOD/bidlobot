@@ -438,7 +438,7 @@ func TestProcessTikTok_NoAudio_QueuesNotUploads(t *testing.T) {
 	if len(q.jobs) != 1 {
 		t.Fatalf("expected 1 queued job, got %d", len(q.jobs))
 	}
-	var p storage.TikTokPayload
+	var p storage.RepostPayload
 	json.Unmarshal(q.jobs[0].Payload, &p)
 	if p.URL != "https://vt.tiktok.com/Ztest" {
 		t.Errorf("queued URL = %q", p.URL)
@@ -606,7 +606,7 @@ func TestEnqueueOrFail_WithQueue(t *testing.T) {
 		Caption:   "cap",
 	}
 
-	enqueueOrFail(context.Background(), snd, log, q, msg, "https://vt.tiktok.com/Ztest")
+	enqueueRepostOrFail(context.Background(), snd, log, q, msg, storage.DeferredTikTok, "https://vt.tiktok.com/Ztest")
 
 	if len(q.jobs) != 1 {
 		t.Fatalf("expected 1 job, got %d", len(q.jobs))
@@ -618,7 +618,7 @@ func TestEnqueueOrFail_WithQueue(t *testing.T) {
 	if job.Type != storage.DeferredTikTok {
 		t.Errorf("job type = %q, want %q", job.Type, storage.DeferredTikTok)
 	}
-	var p storage.TikTokPayload
+	var p storage.RepostPayload
 	json.Unmarshal(job.Payload, &p)
 	if p.URL != "https://vt.tiktok.com/Ztest" {
 		t.Errorf("payload URL = %q", p.URL)
@@ -645,7 +645,7 @@ func TestEnqueueOrFail_NoQueue_Declines(t *testing.T) {
 		From:      &telego.User{ID: 200, Username: "alice", FirstName: "Alice"},
 	}
 
-	enqueueOrFail(context.Background(), snd, log, nil, msg, "https://vt.tiktok.com/Ztest")
+	enqueueRepostOrFail(context.Background(), snd, log, nil, msg, storage.DeferredTikTok, "https://vt.tiktok.com/Ztest")
 
 	if len(snd.Messages) != 1 {
 		t.Fatalf("expected 1 decline, got %d", len(snd.Messages))
@@ -655,8 +655,8 @@ func TestEnqueueOrFail_NoQueue_Declines(t *testing.T) {
 	}
 }
 
-func TestTiktokCaption(t *testing.T) {
-	got := tiktokCaption("alice", "Alice", "check this out")
+func TestRepostCaption(t *testing.T) {
+	got := repostCaption("alice", "Alice", "check this out")
 	if !strings.Contains(got, "alice") {
 		t.Errorf("caption should contain display name; got %q", got)
 	}
@@ -664,7 +664,7 @@ func TestTiktokCaption(t *testing.T) {
 		t.Errorf("caption should contain raw caption; got %q", got)
 	}
 	// No caption -> just the header, no trailing newline.
-	got = tiktokCaption("bob", "Bob", "")
+	got = repostCaption("bob", "Bob", "")
 	if strings.Contains(got, "\n") {
 		t.Errorf("empty caption should not add newline; got %q", got)
 	}

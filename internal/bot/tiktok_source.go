@@ -37,10 +37,6 @@ const tikwmPathVideo = "/api/"
 // mirrorDownloadTimeout bounds one metadata call plus the CDN transfer.
 const mirrorDownloadTimeout = 120 * time.Second
 
-// errPhotoPost marks a photo/carousel post, which has no video stream.
-// Callers decline it instead of queueing a job that cannot succeed.
-var errPhotoPost = errors.New("tiktok: photo post has no video stream")
-
 // tiktokMediaResponse is one tikwm media row. Images is the photo-post
 // signal: a video row carries no images key at all (measured on the
 // production egress 2026-09-12), while a /photo/ post carries one entry
@@ -105,7 +101,7 @@ func downloadFromMirror(ctx context.Context, client *http.Client, rawURL, workDi
 	}
 	if media.Data.Play == "" {
 		if len(media.Data.Images) > 0 {
-			return "", errPhotoPost
+			return "", errNoVideo
 		}
 		return "", errors.New("tikwm: no play url")
 	}
@@ -162,5 +158,5 @@ func mediaFailure(media tiktokMediaResponse, err error) error {
 	if len(media.Data.Images) == 0 {
 		return err
 	}
-	return fmt.Errorf("%w: %v", errPhotoPost, err)
+	return fmt.Errorf("%w: %v", errNoVideo, err)
 }

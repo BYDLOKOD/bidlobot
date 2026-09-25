@@ -169,8 +169,8 @@ func TestDownloadFromMirrorPhotoPostIsSentinel(t *testing.T) {
 	})
 
 	_, err := downloadFromMirror(context.Background(), srv0(), "https://www.tiktok.com/@u/photo/1", t.TempDir())
-	if !errors.Is(err, errPhotoPost) {
-		t.Fatalf("error = %v, want errPhotoPost", err)
+	if !errors.Is(err, errNoVideo) {
+		t.Fatalf("error = %v, want errNoVideo", err)
 	}
 }
 
@@ -185,8 +185,8 @@ func TestDownloadFromMirrorNoPlayURL(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	if errors.Is(err, errPhotoPost) {
-		t.Fatalf("error = %v, must not be errPhotoPost", err)
+	if errors.Is(err, errNoVideo) {
+		t.Fatalf("error = %v, must not be errNoVideo", err)
 	}
 }
 

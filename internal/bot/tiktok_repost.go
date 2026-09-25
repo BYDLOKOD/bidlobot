@@ -28,56 +28,23 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
 
 	"github.com/mymmrac/telego"
-	"github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/storage"
 )
 
-// --- Constants -----------------------------------------------------------
-const (
-	// msgTikTokHeader is the attribution header for a reposted TikTok.
-	// %s = sender display name (UserDisplay, no @, no tg://user?id=).
-	msgTikTokHeader = "\U0001F464 <b>%s</b> \u043F\u0438\u0441\u0430\u043B(\u0430):"
-)
-
-const (
-
-	// maxVideoSize is Telegram's bot upload limit for video (50 MB).
-	maxVideoSize = 50 * 1024 * 1024
-
-	// tiktokDownloadAttemptTimeout caps one yt-dlp invocation. Three
-	// attempts get three separate deadlines, so a slow third attempt is
-	// not cut off by the first two.
-	tiktokDownloadAttemptTimeout = 45 * time.Second
-)
-
-// --- Deferred queue interface --------------------------------------------
-
-// DeferredQueuer is the persistence surface for per-user deferred jobs
-// (TikTok exports, summarize retries). nil (not wired) means failures
-// fall back to a public decline reply instead of being queued.
-type DeferredQueuer interface {
-	Enqueue(ctx context.Context, job storage.DeferredJob) error
-	ListByUser(ctx context.Context, userID int64) ([]storage.DeferredJob, error)
-	Delete(ctx context.Context, key string) error
-	GarbageCollect(ctx context.Context, before time.Time) (int, error)
-}
+// --- TikTok link detection -----------------------------------------------
 
 // --- Video repost index interface ----------------------------------------
 
@@ -130,21 +97,9 @@ var tiktokHosts = map[string]struct{}{
 // Conservative: stops at whitespace and trailing punctuation.
 var tiktokURLRe = regexp.MustCompile(`(?i)\b((?:https?://)?(?:www\.|m\.)?(?:(?:vm|vt)\.)?tiktok\.com[/\S]*[^\s<>"')\]]*)`)
 
-// isTikTokHost lower-cases host, drops any port, strips a single leading
-// "www." or "m." or "vm." or "vt." label, and checks the exact allowlist.
+// isTikTokHost normalizes host and checks the exact allowlist.
 func isTikTokHost(host string) bool {
-	host = strings.ToLower(host)
-	if h, _, ok := strings.Cut(host, ":"); ok {
-		host = h
-	}
-	for _, pfx := range []string{"www.", "m.", "vm.", "vt."} {
-		if rest, ok := strings.CutPrefix(host, pfx); ok {
-			host = rest
-			break
-		}
-	}
-	_, ok := tiktokHosts[host]
-	return ok
+	return hostAllowed(host, []string{"www.", "m.", "vm.", "vt."}, tiktokHosts)
 }
 
 // --- Decision gate (unit-testable) --------------------------------------
@@ -153,11 +108,7 @@ func isTikTokHost(host string) bool {
 // the first TikTok URL found in the message text/caption. Returns
 // act=false when the message must be passed through untouched.
 func tiktokDecision(msg *telego.Message) (act bool, tiktokURL string) {
-	if msg == nil {
-		return false, ""
-	}
-	if msg.From == nil || msg.From.IsBot ||
-		shared.IsAnonymousAdmin(msg.From.ID) || msg.SenderChat != nil {
+	if !repostableSender(msg) {
 		return false, ""
 	}
 
@@ -190,16 +141,6 @@ func tiktokDecision(msg *telego.Message) (act bool, tiktokURL string) {
 	return false, ""
 }
 
-// ensureScheme prepends https:// to a URL if it has no scheme.
-// url.Parse on a scheme-less host/path pair (e.g. tiktok.com/@user/video/123)
-// treats the whole string as opaque data with an empty Host.
-func ensureScheme(raw string) string {
-	if strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://") {
-		return raw
-	}
-	return "https://" + raw
-}
-
 // --- Video download ------------------------------------------------------
 
 // ytdlpDownload is the yt-dlp fallback path; a variable so tests can
@@ -217,7 +158,7 @@ func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error)
 	if mirrorErr == nil {
 		return path, nil
 	}
-	if errors.Is(mirrorErr, errPhotoPost) {
+	if errors.Is(mirrorErr, errNoVideo) {
 		return "", mirrorErr
 	}
 	path, dlpErr := ytdlpDownload(ctx, rawURL, workDir)
@@ -227,70 +168,14 @@ func downloadTikTok(ctx context.Context, rawURL, workDir string) (string, error)
 	return "", fmt.Errorf("mirror: %w; yt-dlp: %w", mirrorErr, dlpErr)
 }
 
-// downloadTikTokViaYtDlp runs yt-dlp up to three times, each attempt
-// under its own deadline: one shared deadline leaves the third attempt
-// with whatever the first two did not spend, usually nothing.
+// downloadTikTokViaYtDlp runs the yt-dlp fallback for a TikTok link.
 func downloadTikTokViaYtDlp(ctx context.Context, rawURL, workDir string) (string, error) {
-	dlURL := ensureScheme(rawURL)
-
-	const maxAttempts = 3
-	var lastErr error
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		path, err := ytDlpAttempt(ctx, dlURL, workDir)
-		if err == nil {
-			return path, nil
-		}
-		lastErr = fmt.Errorf("yt-dlp attempt %d: %w", attempt, err)
-		if attempt < maxAttempts {
-			time.Sleep(2 * time.Second)
-		}
-	}
-	return "", lastErr
-}
-
-// ytDlpAttempt runs one yt-dlp invocation and returns the file it wrote
-// into workDir.
-func ytDlpAttempt(ctx context.Context, dlURL, workDir string) (string, error) {
-	dlCtx, cancel := context.WithTimeout(ctx, tiktokDownloadAttemptTimeout)
-	defer cancel()
-
-	cmd := exec.CommandContext(dlCtx,
-		"yt-dlp",
+	return ytDlpRetry(ctx, rawURL, workDir, ytDlpRun{
 		// Prefer an h264 single-file variant: TikTok serves the bytevc1
 		// (h265) variant muted to non-browser clients, and the ffprobe
 		// audio gate would reject it. h264 variants carry aac audio.
-		"-f", "b[vcodec=h264]/b",
-		"--no-playlist",
-		"-o", workDir+"/video.%(ext)s",
-		dlURL,
-	)
-
-	output, err := cmd.CombinedOutput()
-	if err == nil {
-		// Find the downloaded file in the workDir.
-		entries, rdErr := os.ReadDir(workDir)
-		if rdErr != nil {
-			return "", fmt.Errorf("reading work dir: %w", rdErr)
-		}
-		for _, e := range entries {
-			if !e.IsDir() {
-				return filepath.Join(workDir, e.Name()), nil
-			}
-		}
-		return "", fmt.Errorf("yt-dlp succeeded but no file found in %s", workDir)
-	}
-	return "", fmt.Errorf("%w\n%s", err, previewOutput(output, 400))
-}
-
-// previewOutput trims captured subprocess output so one failure does not
-// dump kilobytes of yt-dlp noise into a structured log record.
-func previewOutput(b []byte, maxRunes int) string {
-	s := strings.TrimSpace(string(b))
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return string(r[:maxRunes]) + "...(truncated)"
+		args: []string{"-f", "b[vcodec=h264]/b"},
+	})
 }
 
 // --- Middleware ----------------------------------------------------------
@@ -391,13 +276,13 @@ func processTikTok(
 		var dlErr error
 		videoPath, dlErr = downloadTikTok(ctx, tiktokURL, workDir)
 		if dlErr != nil {
-			if errors.Is(dlErr, errPhotoPost) {
+			if errors.Is(dlErr, errNoVideo) {
 				log.Info("tiktok: photo post has no video, declining", "chat_id", chatID, "url", tiktokURL)
 				sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
 				return
 			}
 			log.Warn("tiktok: download failed, queuing", "chat_id", chatID, "url", tiktokURL, "error", dlErr)
-			enqueueOrFail(ctx, snd, log, queue, msg, tiktokURL)
+			enqueueRepostOrFail(ctx, snd, log, queue, msg, storage.DeferredTikTok, tiktokURL)
 			return
 		}
 		defer os.Remove(videoPath)
@@ -405,64 +290,24 @@ func processTikTok(
 		defer os.Remove(videoPath)
 	}
 
-	// Step 2: Size check.
-	fi, err := os.Stat(videoPath)
-	if err != nil {
-		log.Error("tiktok: stat video", "chat_id", chatID, "path", videoPath, "error", err)
-		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
-		return
-	}
-	if fi.Size() > maxVideoSize {
-		log.Info("tiktok: video too large", "chat_id", chatID, "size", fi.Size())
-		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
-		return
-	}
-
-	// Step 3: Audio check. TikTok sometimes serves a muted variant to
+	// Step 2: Audio check. TikTok sometimes serves a muted variant to
 	// non-browser clients; never upload a silent video.
 	if !ffprobeHasAudio(videoPath) {
 		log.Warn("tiktok: no audio stream, queuing", "chat_id", chatID, "url", tiktokURL)
-		enqueueOrFail(ctx, snd, log, queue, msg, tiktokURL)
+		enqueueRepostOrFail(ctx, snd, log, queue, msg, storage.DeferredTikTok, tiktokURL)
 		return
 	}
 
-	// Step 4: Open for upload.
-	file, err := os.Open(videoPath)
-	if err != nil {
-		log.Error("tiktok: opening video for upload", "chat_id", chatID, "error", err)
+	// Step 3: Repost (upload first, delete after).
+	sent, out, _ := repostVideoTail(ctx, snd, log, owners, msg.From, chatID, msgID, videoPath,
+		repostCaption(msg.From.Username, msg.From.FirstName, msg.Caption), "tiktok")
+	switch out {
+	case repostPermanent:
 		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
 		return
-	}
-	defer file.Close()
-
-	// Step 5: Repost (first, before delete - repost-first contract).
-	sent, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Video:     telego.InputFile{File: file},
-		Caption:   tiktokCaption(msg.From.Username, msg.From.FirstName, msg.Caption),
-		ParseMode: telego.ModeHTML,
-	})
-	if sendErr != nil {
-		// Permanent = Telegram answered 4xx (bad file, chat forbidden,
-		// too large): the decline note stands. Everything else is
-		// transient and replayable - a transport fault never reached
-		// Telegram, 429 and 5xx outlived the retry ladder - so the job
-		// goes to the deferred queue for /flush instead of being lost.
-		var apiErr *telegoapi.Error
-		if errors.As(sendErr, &apiErr) && apiErr.ErrorCode < 500 && apiErr.ErrorCode != 429 {
-			log.Warn("tiktok: repost rejected by the API; leaving original intact",
-				"chat_id", chatID, "error", sendErr)
-			sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
-			return
-		}
-		log.Warn("tiktok: repost failed transiently, queuing",
-			"chat_id", chatID, "url", tiktokURL, "error", sendErr)
-		enqueueOrFail(ctx, snd, log, queue, msg, tiktokURL)
+	case repostTransient:
+		enqueueRepostOrFail(ctx, snd, log, queue, msg, storage.DeferredTikTok, tiktokURL)
 		return
-	}
-
-	if owners != nil {
-		owners.RecordOwner(chatID, sent.GetMessageID(), msg.From)
 	}
 
 	// Record the repost so a later comment quote can reply to this
@@ -475,67 +320,6 @@ func processTikTok(
 			}
 		}
 	}
-
-	// Step 6: Delete original (only after successful repost).
-	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		MessageID: msgID,
-	}); delErr != nil {
-		log.Info("tiktok: reposted but delete failed; original kept",
-			"chat_id", chatID, "message_id", msgID, "error", delErr)
-	}
-
-	log.Info("tiktok: reposted", "chat_id", chatID, "message_id", msgID)
-}
-
-// tiktokCaption builds the HTML caption for a reposted TikTok: attribution
-// header (display name only) plus the original caption if any.
-func tiktokCaption(username, firstName, rawCaption string) string {
-	display := shared.UserDisplay(username, firstName)
-	caption := strings.Replace(msgTikTokHeader, "%s", display, 1)
-	if rawCaption != "" {
-		caption += "\n" + html.EscapeString(rawCaption)
-	}
-	return caption
-}
-
-// enqueueOrFail enqueues a deferred TikTok job for the calling user if a
-// queue is wired. If the queue is nil or the enqueue fails, it falls back
-// to a public decline reply so the user is not left in silence.
-func enqueueOrFail(
-	ctx context.Context,
-	snd youtubeMediaSender,
-	log *slog.Logger,
-	queue DeferredQueuer,
-	msg *telego.Message,
-	tiktokURL string,
-) {
-	if queue != nil {
-		payload, _ := json.Marshal(storage.TikTokPayload{
-			URL:       tiktokURL,
-			Username:  msg.From.Username,
-			FirstName: msg.From.FirstName,
-			Caption:   msg.Caption,
-		})
-		job := storage.DeferredJob{
-			UserID:    msg.From.ID,
-			Type:      storage.DeferredTikTok,
-			ChatID:    msg.Chat.ID,
-			MessageID: msg.GetMessageID(),
-			Payload:   payload,
-			CreatedAt: time.Now().UTC(),
-		}
-		if err := queue.Enqueue(ctx, job); err != nil {
-			log.Error("tiktok: enqueue failed, falling back to decline",
-				"chat_id", msg.Chat.ID, "error", err)
-		} else {
-			log.Info("tiktok: queued for later export",
-				"chat_id", msg.Chat.ID, "url", tiktokURL)
-			return
-		}
-	}
-	sendDecline(ctx, snd, log, msg.Chat.ID, msg.GetMessageID(),
-		publicPureFailure(), "tiktok: decline note send failed")
 }
 
 // tryTikTokExport attempts the full download->validate->upload->delete
@@ -560,7 +344,7 @@ func tryTikTokExport(
 
 	videoPath, err := downloadTikTok(ctx, url, workDir)
 	if err != nil {
-		if errors.Is(err, errPhotoPost) {
+		if errors.Is(err, errNoVideo) {
 			// No retry can succeed on a photo post: report once and let
 			// the caller drop the job instead of keeping it forever.
 			log.Info("tiktok: photo post has no video, declining", "chat_id", chatID, "url", url)
@@ -571,39 +355,26 @@ func tryTikTokExport(
 	}
 	defer os.Remove(videoPath)
 
-	fi, err := os.Stat(videoPath)
-	if err != nil {
-		return fmt.Errorf("stat: %w", err)
-	}
-	if fi.Size() > maxVideoSize {
-		return fmt.Errorf("too large (%d bytes)", fi.Size())
-	}
-
 	if !ffprobeHasAudio(videoPath) {
 		return fmt.Errorf("no audio stream")
 	}
 
-	file, err := os.Open(videoPath)
-	if err != nil {
-		return fmt.Errorf("open: %w", err)
+	sent, out, tailErr := repostVideoTail(ctx, snd, log, owners, &telego.User{
+		ID:        userID,
+		Username:  username,
+		FirstName: firstName,
+	}, chatID, msgID, videoPath, repostCaption(username, firstName, caption), "tiktok flush")
+	if out == repostPermanent && isAPIPermanent(tailErr) {
+		// Telegram refused the upload: no retry can fix it. Report once and
+		// let the caller drop the job instead of re-downloading it on every
+		// /flush for the rest of the TTL.
+		log.Info("tiktok flush: upload rejected by the API, dropping job",
+			"chat_id", chatID, "url", url, "error", tailErr)
+		sendDecline(ctx, snd, log, chatID, msgID, publicPureFailure(), "tiktok: decline note send failed")
+		return nil
 	}
-	defer file.Close()
-
-	sent, sendErr := snd.SendVideo(ctx, &telego.SendVideoParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Video:     telego.InputFile{File: file},
-		Caption:   tiktokCaption(username, firstName, caption),
-		ParseMode: telego.ModeHTML,
-	})
-	if sendErr != nil {
-		return fmt.Errorf("send: %w", sendErr)
-	}
-	if owners != nil {
-		owners.RecordOwner(chatID, sent.GetMessageID(), &telego.User{
-			ID:        userID,
-			Username:  username,
-			FirstName: firstName,
-		})
+	if tailErr != nil {
+		return fmt.Errorf("send: %w", tailErr)
 	}
 
 	if videos != nil {
@@ -624,37 +395,7 @@ func tryTikTokExport(
 		}
 	}
 
-	if delErr := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		MessageID: msgID,
-	}); delErr != nil {
-		log.Info("tiktok flush: reposted but delete failed; original kept",
-			"chat_id", chatID, "message_id", msgID, "error", delErr)
-	}
-
-	log.Info("tiktok flush: reposted", "chat_id", chatID, "message_id", msgID, "url", url)
 	return nil
 }
 
-// sendDecline replies to the original message with a failure note.
-// The original message is NOT deleted - the user can resend the link.
-func sendDecline(
-	ctx context.Context,
-	snd youtubeMediaSender,
-	log *slog.Logger,
-	chatID int64,
-	msgID int,
-	note string,
-	failureEvent string,
-) {
-	_, err := snd.SendMessage(ctx, &telego.SendMessageParams{
-		ChatID: telego.ChatID{ID: chatID},
-		Text:   note,
-		ReplyParameters: &telego.ReplyParameters{
-			MessageID: msgID,
-		},
-	})
-	if err != nil {
-		log.Warn(failureEvent, "chat_id", chatID, "message_id", msgID, "error", err)
-	}
-}
+// --- End of TikTok-specific code -----------------------------------------

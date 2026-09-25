@@ -27,7 +27,7 @@ func TestDeferredQueue_EnqueueListByUser(t *testing.T) {
 		{200, "https://vt.tiktok.com/CCC"},
 		{200, "https://vt.tiktok.com/DDD"},
 	} {
-		payload, _ := json.Marshal(TikTokPayload{URL: tc.url})
+		payload, _ := json.Marshal(RepostPayload{URL: tc.url})
 		if err := repo.Enqueue(ctx, DeferredJob{
 			UserID:    tc.userID,
 			Type:      DeferredTikTok,
@@ -54,7 +54,7 @@ func TestDeferredQueue_EnqueueListByUser(t *testing.T) {
 	}
 
 	// Verify payload round-trips.
-	var p TikTokPayload
+	var p RepostPayload
 	json.Unmarshal(jobs[0].Payload, &p)
 	if p.URL != "https://vt.tiktok.com/AAA" {
 		t.Errorf("first job URL = %q, want AAA", p.URL)

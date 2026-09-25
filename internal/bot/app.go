@@ -94,6 +94,10 @@ type App struct {
 	// repReactor is the reaction->rep pipeline (👍 +rep, 👎/🤡 -rep).
 	// nil (default) means reactions are ignored for reputation.
 	repReactor *repReactor
+	// igOptions carries the optional egress knobs for the Instagram
+	// repost download (proxy, cookie jar). The zero value - no proxy, no
+	// cookies - is the default: a direct, anonymous yt-dlp call.
+	igOptions InstagramDownloadOptions
 }
 
 // InFlight exposes the WaitGroup for executors that need to register
@@ -146,9 +150,16 @@ func (a *App) SetAdmissionAttemptStore(store AdmissionAttemptStore) {
 }
 
 // SetDeferredQueue wires the per-user deferred-job queue for failed
-// TikTok exports and summarize retries. Call before Run.
+// TikTok and Instagram exports and summarize retries. Call before Run.
 func (a *App) SetDeferredQueue(q DeferredQueuer) {
 	a.deferredQ = q
+}
+
+// SetInstagramOptions wires the optional egress settings for the
+// Instagram repost download (INSTAGRAM_PROXY / INSTAGRAM_COOKIES). Call
+// before Run; the zero value keeps the download direct and anonymous.
+func (a *App) SetInstagramOptions(opts InstagramDownloadOptions) {
+	a.igOptions = opts
 }
 
 // AttachTikTokVideoIndex wires the recorded TikTok repost index the

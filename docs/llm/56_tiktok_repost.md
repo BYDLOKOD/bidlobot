@@ -9,7 +9,7 @@ touches:
   - internal/storage/deferred_repo.go
   - Dockerfile
 written: 2026-08-16
-updated: 2026-09-17
+updated: 2026-09-25
 ---
 
 # TikTok video repost
@@ -47,14 +47,15 @@ family as stats counting.
    then **removed** (commit 5d3a12a) - both paths download the file
    as-is. If both fail, the error names each path (`mirror: ...;
    yt-dlp: ...`).
-2. **Size check**: 50 MiB ceiling (`maxVideoSize`) - Telegram Bot API
+2. **Audio check** via `ffprobe`; a video without an audio stream is
+   queued for a later retry (TikTok clips are expected to have audio; a
+   muted variant may come back with audio). If ffprobe is missing or
+   fails it degrades to "assume audio present", so a broken probe never
+   blocks reposts.
+3. **Size check**: 50 MiB ceiling (`maxVideoSize`) - Telegram Bot API
    upload cap. The mirror path refuses an oversized video twice: on the
    reported metadata size before downloading, and on the number of bytes
    actually streamed. Oversized -> public decline note, original kept.
-3. **Audio check** via `ffprobe`; a video without an audio stream is
-   declined (TikTok clips are expected to have audio). If ffprobe is
-   missing/fails it degrades to "assume audio present" so a broken
-   probe never blocks reposts.
 4. **Repost**: `SendVideo` with HTML caption `👤 <b>display</b> писал(а):`
    + the original caption. Display name only - no `@`, no
    `tg://user?id=`, no `text_mention` (the
@@ -62,6 +63,11 @@ family as stats counting.
 5. **Delete** the original ONLY after the repost succeeded. Delete
    failure is logged and the original kept (visible duplicate, lesser
    evil).
+
+Steps 3-5 are the shared tail of `repost_common.go` (`repostVideoTail`),
+which the Instagram reposter uses as well
+([61_instagram_repost.md](61_instagram_repost.md)); only the detector, the
+downloader and the audio gate are TikTok-specific.
 
 ## Video source
 
@@ -84,7 +90,7 @@ and downloads together.
 **Photo posts**. A `/photo/` post carries a non-empty `data.images`
 array and no usable video stream. Measured 2026-09-12: tikwm answers
 such a query with `data.size: 0` and a `data.play` URL on a music host
-that never serves an MP4. The download therefore reports `errPhotoPost`
+that never serves an MP4. The download therefore reports `errNoVideo`
 both when `play` is empty and when a post carrying images fails to
 deliver bytes; the pipeline then posts the randomized decline phrase
 instead of queueing a job no retry could complete. A post without
@@ -106,15 +112,17 @@ images keeps today's behaviour (fall back to yt-dlp, queue on failure).
   ([60_architecture.md](60_architecture.md) "Failure handling").
 - Download failure or missing audio -> the job is persisted to the
   **per-user deferred retry queue** (`deferred_jobs`, type `tiktok`,
-  payload `TikTokPayload{URL, Username, FirstName, Caption}`; see
+  payload `RepostPayload{URL, Username, FirstName, Caption}`; see
   [60_architecture.md](60_architecture.md) "Deferred queue"). The
   original message is never deleted on failure.
-- Photo post (`errPhotoPost`) -> decline note, **never queued**: the
+- Photo post (`errNoVideo`) -> decline note, **never queued**: the
   queue would keep a job that no retry can complete. In the flush path
   (`tryTikTokExport`) the job is dropped after the note.
 - Too-large, stat/open errors, and 4xx send rejections -> public decline
   note (`sendDecline`, randomized phrase from the failure catalog), no
-  enqueue.
+  enqueue. In the flush path (`tryTikTokExport`) such a job is dropped
+  after the note, so `/flush` does not re-download it for the rest of
+  the TTL.
 - Runs **fire-and-forget** through `shared.Go` (`shared.Go(a.log,
   "tiktok", ...)`), which wraps the goroutine in a `recover` so a panic
   cannot take the process down; the per-update ctx is cancelled when the

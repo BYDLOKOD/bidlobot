@@ -14,6 +14,7 @@ var bktDeferred = []byte("deferred_jobs")
 // Deferred job types.
 const (
 	DeferredTikTok    = "tiktok"
+	DeferredInstagram = "instagram"
 	DeferredSummarize = "summarize"
 )
 
@@ -36,8 +37,11 @@ type DeferredJob struct {
 	CreatedAt time.Time       `json:"created_at"`
 }
 
-// TikTokPayload is the type-specific data for a DeferredTikTok job.
-type TikTokPayload struct {
+// RepostPayload is the type-specific data for a video-repost job
+// (DeferredTikTok, DeferredInstagram). The download is retried from the
+// permalink, so the sender identity and the original caption must survive
+// the queue.
+type RepostPayload struct {
 	URL       string `json:"url"`
 	Username  string `json:"username"`
 	FirstName string `json:"first_name"`

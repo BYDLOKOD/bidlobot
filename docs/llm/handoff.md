@@ -1,128 +1,99 @@
-# Handoff - 2026-09-17 (upload retry rewind, deployed)
+# Handoff - 2026-09-25 (Instagram repost on a shared repost module)
 
 ## 1. State (what is true right now)
 
-- **Deployed.** `origin/master` = `2394f1a`; production
-  (`veschin@192.168.0.101`, checkout `~/bidlobot`) was reset to it and
-  the container recreated: `running healthy` after 8s, log sequence
-  `starting` -> `captcha enabled` -> `bot started, polling for updates`.
-- **What changed.** `internal/shared/tgclient/client.go`: all five media
-  wrappers (`SendPhoto`, `SendVideo`, `SendAnimation`, `SendDocument`,
-  `SendMediaGroup`) rewind every file-backed body - media, thumbnail,
-  cover, album item - before every retry attempt;
-  `internal/bot/tiktok_repost.go`: `processTikTok` queues a transient
-  send failure (transport, 429, 5xx) and keeps the decline note for a
-  4xx rejection, which no retry can fix.
-- **Why.** Four TikTok reposts were lost in 96 hours (17 succeeded).
-  Each loss was `sendVideo` failing on the network and the transport
-  retry re-uploading the same `*os.File` that telego had already
-  streamed to EOF, so Telegram answered `400 file must be non-empty` -
-  a class the ladder does not retry. Details and the log correlation are
-  in `docs/llm/devlog/11_upload_retry_rewind.md`.
-- **Verified.** `go build ./...`, `go vet ./...`, `gofmt -l internal/`
-  clean; `go test ./...` green (21 packages); `go test -race` green for
-  `internal/shared/...` and `internal/bot/...`; `docs/llm/validate.sh`
-  exits 0. The two new tgclient tests fail against the pre-fix helper
-  (the retried attempt carried 931 bytes of multipart framing and no
-  video, thumbnail or cover payload; the album case 2119 bytes without
-  any item payload).
-- **Independent review.** A reviewer agent ran the code-guard toolset
-  over the diff and closed one gap in the fix: telego also streams a
-  file-backed `Cover` (`SendVideo`, `InputMediaVideo`) and
-  `InputMediaAudio` album items, so the rewind now covers those too and
-  both tests assert the payloads. It also narrowed the permanent branch
-  to 4xx: a 429 or 5xx that outlives the ladder is replayable.
-- **Summarize model switched** (separate change, no code):
-  `~/bidlobot/env` gained `PI_MODEL=deepseek/deepseek-flash`. The
-  DeepSeek API exposes exactly `deepseek-flash` and `deepseek-v4-pro`,
-  and `deepseek-flash` is the v4.1 flash model. Verified from inside the
-  container: `omp -p ... --model deepseek/deepseek-flash` answers.
-  `env.bak.20260917-075603` holds the pre-change file.
+- **Not deployed, not committed.** `master` = `195eb9a`; this session's
+  work sits in the working tree of `~/ai/bidlobot`.
+- **What changed.** Instagram reel/post repost added, built on a shared
+  module instead of a copy of the TikTok reposter:
+  `internal/bot/repost_common.go` (new) holds the sender gate, the yt-dlp
+  retry ladder, the upload-then-delete tail, the queue helper, the caption
+  builder, the host normaliser, `sendDecline` and the 50 MiB cap;
+  `internal/bot/instagram_repost.go` (new) holds only Instagram-specific
+  parts (link detection, `-f b[ext=mp4]/b`, `--proxy`/`--cookies`,
+  permanent-string table, one download slot);
+  `internal/bot/tiktok_repost.go` was reduced to TikTok-specific code and
+  now calls the same shared parts. `DeferredInstagram` +
+  one `RepostPayload` (was `TikTokPayload`) in
+  `internal/storage/deferred_repo.go`; dispatch in `deferred.go`;
+  middleware in `routes.go` after `tiktokReposter`; egress settings
+  `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES` validated in `config.go` and
+  wired in `main.go`.
+- **Why.** An external PR (BYDLOKOD/bidlobot#2, fork `kreanx/bidlobot`)
+  implemented the feature by duplicating the whole TikTok pipeline. The
+  rework keeps the behaviour and drops the duplication.
+- **Verified.** `gofmt -l internal/ cmd/` empty, `go vet ./...` clean,
+  `go test ./...` green (all packages), `bash docs/llm/validate.sh`
+  0 errors / 2 warns (new files have no git history yet). The TikTok
+  repost suite passes with mechanical renames only - that is the evidence
+  the shared tail did not change behaviour.
+- Decisions taken from the PR unchanged: the three permanent yt-dlp
+  strings, no audio gate, the yt-dlp pin untouched.
 
-## 2. Negatives (what does NOT exist)
+## 2. Negatives (what does NOT exist / is not proven)
 
-- **The four lost reposts are not recoverable from the queue.** They
-  were never queued - that is the defect. The originals are still in the
-  chat, so resending a link reposts it.
-- **The two jobs queued on 2026-09-12** (`vt.tiktok.com/ZSqfcymnR`,
-  `vt.tiktok.com/ZSq5d4Rxh`) were not re-checked; the owner `/flush` in
-  the production chat is still the way to know.
-- **Container network flapping persists.** 171 `lookup
-  api.telegram.org` / connection timeouts in 96 hours, 120 of them on
-  2026-09-16; requests that do succeed take 2.2-6.2s. The fix makes
-  uploads survive it, it does not remove it. The 24h recount against the
-  79-line baseline of 2026-09-12 is **120**, i.e. worse, not fixed.
-- **No backup cron**; the only snapshot is
-  `/home/veschin/bidlobot-backups/bidlobot-20260912-082101.db`.
-- **`PI_MODEL` lives only in the host env file**, not in `docker-compose.yml`
-  or `.env.example`; the local `.env` still runs the in-code default.
+- **Instagram extraction is not verified on the pinned yt-dlp.** The
+  image ships 2026.03.17 (pinned for the TikTok extractor regression,
+  issue #17403); every link measurement was taken on 2026.08.19. The
+  permanent strings exist in both, but 2026.03.17 parses
+  `window._sharedData` and posts to `instagram.com/graphql/query`, while
+  2026.08.19 uses `/api/graphql` with client impersonation. Until this is
+  measured, the feature may decline or queue every link in production.
+- **The deployment egress cannot reach Instagram**; without
+  `INSTAGRAM_PROXY` (or cookies for login-walled posts) every link lands
+  in the deferred queue for 48h.
+- **No mirror fallback.** One resolver, one point of failure.
+- **Carousels and photo posts are declined**, not assembled or converted.
 - **26 stale specs** reported by `validate.sh` (games, summarize,
-  youtube sanitizer, xpost, reputation) - all pre-existing, none in the
-  files this session touched.
+  youtube sanitizer, xpost, reputation, xpost) - pre-existing, none in
+  the files this session touched.
+- The working tree is uncommitted, so `touches` paths of the new spec
+  report "no git history" until the first commit.
 
 ## 3. Queue
 
-- After the next network blip, confirm the new shape in the logs:
-  `tiktok: repost failed transiently, queuing` and no
-  `400 "Bad Request: file must be non-empty"` anywhere.
-- Owner: `/flush` in the production chat; a failed job must name both
-  paths (`mirror: ...; yt-dlp: ...`).
-- Owner: send one real `/summarize` to confirm the switched model
-  end-to-end in the chat (only an `omp` probe was run from the
-  container).
-- Investigation left open: why the container's egress to
-  `api.telegram.org` times out in bursts while host-side resolution is
-  clean (4-7ms). Candidates: Docker DNS upstream rotation, ISP/TSPU
-  filtering. Needs a measurement session, not a code change.
-- The `monthstats` boundary fix from 2026-09-12 is now deployed as part
-  of `2394f1a` (it arrived in `origin` as `32d0220`).
+- Measure Instagram extraction with the pinned binary before trusting the
+  feature: run the 2026.03.17 release binary against one public permalink
+  from an egress that reaches Instagram, or bump `YT_DLP_VERSION` and
+  re-check the TikTok extractor (issue #17403) before shipping.
+- Decide the egress settings with the owner: `INSTAGRAM_PROXY` value and
+  whether a cookie jar is mounted (`~/bidlobot/env`, then the deploy
+  script - a bare `docker compose up -d` drops `DEEPSEEK_API_KEY`).
+- After deploy, watch for `instagram: download failed, queuing` and
+  `instagram: post has no video, declining`, then `/flush` once.
+- Roll the 26 stale specs forward, or record why not.
 
 ## 4. Read order
 
-1. `docs/llm/devlog/11_upload_retry_rewind.md` - the failure, the
-   mechanism, the evidence.
-2. `internal/shared/tgclient/client.go` (`rewindUploadBody`,
-   `rewindUploadFiles`, `rewindUploadMedia`) - the fix.
-3. `docs/llm/56_tiktok_repost.md` "Failure handling",
-   `docs/llm/60_architecture.md` "Failure handling" and
-   `docs/llm/50_telegram.md` "Rate limits" - the contract.
-4. `docs/llm/70_deployment.md` (`PI_MODEL`, `DEEPSEEK_API_KEY`) before
-   touching the host env.
+1. `docs/llm/61_instagram_repost.md` - detection, pipeline, failure
+   classes, egress, open question about the pinned yt-dlp.
+2. `internal/bot/repost_common.go` - the shared pipeline both reposters
+   use.
+3. `internal/bot/instagram_repost.go` - Instagram-only parts.
+4. `docs/llm/60_architecture.md` ("Failure handling", "Deferred queue")
+   and `docs/llm/70_deployment.md` (env table) before touching wiring.
 
 ## 5. Smoke test (run before touching anything)
 
 ```sh
-go build ./... && go vet ./... && gofmt -l internal/
-go test ./...                # expect 21 ok
-go test -race ./internal/shared/... ./internal/bot/...
-cd docs/llm && ./validate.sh # expect exit 0
-```
-
-Live checks:
-
-```sh
-ssh veschin@192.168.0.101 'docker inspect bidlobot --format "{{.State.Status}} {{.State.Health.Status}}"; \
-  docker exec bidlobot wget -qO- http://127.0.0.1:8080/health; echo; \
-  docker exec bidlobot printenv PI_MODEL DEEPSEEK_API_KEY; \
-  docker logs --since 24h bidlobot 2>&1 | grep -c "lookup api.telegram.org"'
+go build ./... && go vet ./... && gofmt -l internal/ cmd/
+go test ./...                 # expect all ok
+bash docs/llm/validate.sh     # expect 0 errors
 ```
 
 ## 6. Agent errors
 
-- First reading blamed an empty CDN download for `file must be
-  non-empty`. The log disproved it: every 400 sat 2-4s after a
-  `sendVideo` transport timeout, and the mirror path never failed in 96
-  hours. The bug was in the retry, not in the download.
-- The first version of the album test failed on `cannot unmarshal object
-  into Go value of type []telego.Message` - the fake caller returned a
-  single message where `sendMediaGroup` expects an array.
-- `rewindUploadBodies(params.Photo, params.Thumbnail)` did not compile:
-  `SendPhotoParams` has no `Thumbnail` field in telego v1.8.0.
-- **`PI_MODEL` was appended to `~/bidlobot/env` and applied with a bare
-  `docker compose up -d` over SSH.** `DEEPSEEK_API_KEY` is a compose
-  pass-through from the calling shell, not an env-file entry, so the
-  recreated container lost the summarization credential and `omp`
-  answered `No API key found for deepseek`. Fixed by piping
-  `pass show token/deepseek` into the remote shell and recreating. The
-  trap is now in `.omp/skills/bidlobot-deploy/SKILL.md` ("Failure
-  modes", "Session mistakes") and in `70_deployment.md`.
+- **The TikTok module was edited without being asked.** The instruction
+  "reuse components to the maximum" was read as "remove the duplication",
+  and removing it rewrites the live reposter. The user objected; the plan
+  was confirmed afterwards (shared logic in its own file, service details
+  in the service files). Ask before touching a working production path,
+  even when the duplication sits there.
+- Two questions were asked about decisions the user had already settled
+  (which failures are permanent, whether to touch the yt-dlp pin). The
+  answer was "the TikTok implementation is the model". Copy the existing
+  path's decisions instead of reopening them.
+- One edit wrote a placeholder identifier (`tiktokCaptionFree_placeholder`)
+  instead of the intended call; caught by the next edit and a build.
+- The `deferred.go` edit that added the Instagram branch first deleted the
+  `summarize` branch's body; caught by the follow-up edit and a build.

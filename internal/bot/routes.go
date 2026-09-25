@@ -100,6 +100,10 @@ func registerRoutes(
 	// attributed. Same privacy gate as the YouTube sanitizer.
 	sgGroup.Use(tiktokReposter(a))
 
+	// Instagram reel/post repost: yt-dlp download, repost attributed.
+	// Same privacy gate as the TikTok reposter, which it runs after.
+	sgGroup.Use(instagramReposter(a))
+
 	// X post render and media downloads run asynchronously behind one slot.
 	sgGroup.Use(xpostReposter(a))
 
