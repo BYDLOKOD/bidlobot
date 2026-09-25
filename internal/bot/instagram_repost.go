@@ -62,10 +62,11 @@ type InstagramDownloadOptions struct {
 // igPermanentMarkers are the yt-dlp sentences that mean "no retry will
 // produce a video": a photo post, an image carousel, or a post Instagram
 // will not describe to an anonymous client (deleted, private, login
-// walled). Measured 2026-09-24 against yt-dlp 2026.08.19; the version the
-// image pins (2026.03.17) prints the same sentences. Anything else (DNS
-// failure, TLS reset, timeout, HTTP 5xx, rate limit) stays retryable and
-// goes to the deferred queue.
+// walled). Measured 2026-09-24 against yt-dlp 2026.08.19; all three are
+// still present in 2026.07.04, the version the image pins (two in the
+// Instagram extractor, "No video formats found!" in YoutubeDL.py). Anything
+// else (DNS failure, TLS reset, timeout, HTTP 5xx, rate limit) stays
+// retryable and goes to the deferred queue.
 var igPermanentMarkers = []string{
 	"There is no video in this post",
 	"No video formats found!",

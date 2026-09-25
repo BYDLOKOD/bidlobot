@@ -147,7 +147,7 @@ link) - the same gate as the YT sanitizer and the X post sidecar
 
 ## Image requirements
 
-The runtime image installs `yt-dlp` (pinned release 2026.03.17,
+The runtime image installs `yt-dlp` (pinned release 2026.07.04,
 sha256-checked) and `ffmpeg`/`ffprobe`
 ([70_deployment.md](70_deployment.md)). yt-dlp is the fallback path
 only; the mirror needs nothing but the shared HTTP client. No env

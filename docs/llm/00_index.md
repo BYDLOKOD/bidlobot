@@ -49,6 +49,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [devlog/10_media_resilience.md](devlog/10_media_resilience.md) - 2026-09-12: panic containment (recover middleware + shared.Go), transport retry class with per-attempt deadlines, TikTok download via the tikwm mirror with yt-dlp fallback.
 - [devlog/11_upload_retry_rewind.md](devlog/11_upload_retry_rewind.md) - 2026-09-17: retried media uploads uploaded nothing (telego streams the body once; every media wrapper now rewinds before each attempt).
 - [devlog/12_instagram_repost.md](devlog/12_instagram_repost.md) - 2026-09-25: Instagram reel/post repost built on a shared repost pipeline (`repost_common.go`); yt-dlp only (no usable mirror), no audio gate, `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES`.
+- [devlog/13_instagram_repost_audit.md](devlog/13_instagram_repost_audit.md) - 2026-09-25: Instagram repost audited end to end (host normalisation, `/flush` drop policy, shared send-error classifier, testable slot branch), then a live permalink proved the pinned yt-dlp 2026.03.17 could not download at all - pin raised to 2026.07.04.
 
 ## Removed surfaces (code deleted; docs deleted with them)
 

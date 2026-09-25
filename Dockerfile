@@ -39,10 +39,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/bidlobot ./cmd/bidlobot
 
 FROM debian:bookworm-slim AS runtime
-# Pinned to 2026.03.17: TikTok changed anti-bot on 2026-08-10 and broke the
-# extractor in newer releases (yt-dlp issue #17403, still open). The old
-# extractor still works. Bump back once upstream ships a fix.
-ARG YT_DLP_VERSION=2026.03.17
+# Pinned to 2026.07.04: the last release before TikTok changed anti-bot on
+# 2026-08-10 and broke its extractor (yt-dlp issue #17403, still open), and
+# a release with the current Instagram extraction path. 2026.03.17 could not
+# download an Instagram reel at all - measured 2026-09-25 against a live
+# permalink it answered "Requested content is not available, rate-limit
+# reached or login required", while 2026.07.04 fetched the same 2396150-byte
+# file. Bump once upstream fixes the TikTok extractor.
+ARG YT_DLP_VERSION=2026.07.04
 
 
 RUN apt-get update && \
@@ -50,7 +54,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     curl -fsSL "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp_linux" \
         -o /tmp/yt-dlp && \
-    echo "c2b0189f581fe4a2ddd41954f1bcb7d327db04b07ed0dea97e4f1b3e09b5dd8e  /tmp/yt-dlp" | sha256sum -c - && \
+    echo "6bbb3d314cde4febe36e5fa1d55462e29c974f63444e707871834f6d8cc210ae  /tmp/yt-dlp" | sha256sum -c - && \
     install -m 0755 /tmp/yt-dlp /usr/local/bin/yt-dlp && \
     rm /tmp/yt-dlp && \
     export BUN_INSTALL=/opt/bun && \

@@ -107,16 +107,16 @@ deadline per attempt (`ytDlpRetry`, shared with the TikTok yt-dlp path).
   response") - maps to the shared `errNoVideo` sentinel: the retry ladder
   stops after the first attempt, the chat gets the randomized decline
   phrase (`publicPureFailure`), and the job is **never queued**.
-- **Login-walled and rate-limited answers stay retryable, by design.** The
-  pinned yt-dlp 2026.03.17 reports a private post as "This content is only
-  available for registered users who follow this account" and an
-  anonymous rate limit as "Requested content is not available, rate-limit
-  reached or login required" (checked against the extractor sources of
-  2026.03.17 and 2026.08.19). Neither sentence is a permanent marker, so
-  such a link runs the whole ladder and lands in the queue. That is
-  deliberate: `/flush` retries with the same `--proxy`/`--cookies`, so a
-  configured cookie jar can still complete the job, while a decline note
-  would drop the link for good.
+- **Login-walled and rate-limited answers stay retryable, by design.** A
+  private post or an anonymous rate limit surfaces as a login-required
+  sentence ("This content is only available for registered users who
+  follow this account", "Requested content is not available, rate-limit
+  reached or login required") or as an empty media response, depending on
+  the extractor version. The login-required sentences are not permanent
+  markers, so such a link runs the whole ladder and lands in the queue.
+  That is deliberate: `/flush` retries with the same `--proxy`/`--cookies`,
+  so a configured cookie jar can still complete the job, while a decline
+  note would drop the link for good.
 - **Any other download failure** (DNS, TLS reset, timeout, HTTP 5xx) is
   retryable: the job is persisted to the per-user deferred queue
   (`deferred_jobs`, type `instagram`, payload `RepostPayload{URL,
@@ -162,15 +162,22 @@ deferred queue" instead of refusing to start.
 
 ## Verification
 
-The image pins yt-dlp **2026.03.17** (the pin holds until upstream fixes
-the TikTok extractor regression, yt-dlp issue #17403), while the link
-measurements above were taken on 2026.08.19. The failure strings exist in
-both releases, but the extraction paths differ: 2026.03.17 still parses
-`window._sharedData` from the web page and posts to
-`instagram.com/graphql/query`. Instagram extraction must therefore be
-checked against the pinned binary before this feature is trusted in
-production; `INSTAGRAM_PROXY` decides whether the deployment egress can
-reach Instagram at all.
+Measured 2026-09-25 against a live public permalink
+(`instagram.com/reel/Ddo2_g3MIEN/`) from the development egress, running
+this pipeline with the yt-dlp binary swapped per run:
+
+| yt-dlp | result |
+|--------|--------|
+| 2026.03.17 (the previous pin, sha256-checked against the Dockerfile) | no file: `[Instagram] ... Requested content is not available, rate-limit reached or login required`; the pipeline queued the job and sent nothing |
+| 2026.07.04 (the pin now) | 2396150-byte mp4; reposted, original deleted, queue empty |
+| 2026.08.19 (the measurement build) | 2396150-byte mp4, same outcome |
+
+Neither `--proxy` nor `--cookies` were needed from that egress; the
+deployment egress still decides whether `INSTAGRAM_PROXY` is required.
+The pin sits on the last release before the TikTok extractor regression of
+2026-08-10 (yt-dlp issue #17403), so the yt-dlp TikTok fallback keeps
+working ([56_tiktok_repost.md](56_tiktok_repost.md),
+[70_deployment.md](70_deployment.md)).
 
 ## Privacy
 
