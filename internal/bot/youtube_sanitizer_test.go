@@ -280,6 +280,7 @@ type recYTSender struct {
 	Deletes     []*telego.DeleteMessageParams
 	Messages    []*telego.SendMessageParams
 	Copies      []*telego.CopyMessageParams
+	GroupCopies []*telego.CopyMessagesParams
 	Photos      []*telego.SendPhotoParams
 	Videos      []*telego.SendVideoParams
 	Animations  []*telego.SendAnimationParams
@@ -300,6 +301,12 @@ func (r *recYTSender) CopyMessage(_ context.Context, p *telego.CopyMessageParams
 	defer r.mu.Unlock()
 	r.Copies = append(r.Copies, p)
 	return &telego.MessageID{MessageID: 1006}, nil
+}
+func (r *recYTSender) CopyMessages(_ context.Context, p *telego.CopyMessagesParams) ([]telego.MessageID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.GroupCopies = append(r.GroupCopies, p)
+	return []telego.MessageID{{MessageID: 1007}}, nil
 }
 func (r *recYTSender) DeleteMessage(_ context.Context, p *telego.DeleteMessageParams) error {
 	r.mu.Lock()
@@ -446,9 +453,8 @@ func TestHandleSanitizeTextLinkEntityFaithfulCopy(t *testing.T) {
 // by the handleSanitize tests above. telego exposes no test
 // constructor for th.Context and ctx.Next panics on a zero-value
 // Context (nil route stack), so the thin Next-wrapping closure itself
-// is not exercised in a unit test - documented limitation. The closure
-// is a two-line wrapper around sanitizeDecision + handleSanitize, both
-// fully covered here.
+// is not exercised in a unit test - documented limitation; only
+// sanitizeDecision and handleSanitize are covered here.
 func TestSanitizeDecisionExclusions(t *testing.T) {
 	cases := []struct {
 		name    string

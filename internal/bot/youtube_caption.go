@@ -10,12 +10,9 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// copyMessages can explicitly remove a caption; copyMessage's optional
-// empty caption is omitted by the SDK and would keep the original instead.
-type youtubeCaptionlessCopier interface {
-	CopyMessages(context.Context, *telego.CopyMessagesParams) ([]telego.MessageID, error)
-}
-
+// CopyMessages with RemoveCaption is used for long captions: telego marks
+// CopyMessage's Caption omitempty, so an empty caption would keep the
+// original instead of removing it.
 type youtubeCaptionPart struct {
 	text     string
 	entities []telego.MessageEntity
@@ -114,15 +111,11 @@ func youtubeCaptionBoundary(text string, maxUnits int) (int, int) {
 // no caption, then sends the complete cleaned caption. Any partial failure
 // retains the original and attempts to remove only the bot's new messages.
 func copyLongYouTubeCaption(ctx context.Context, snd youtubeCopySender, log *slog.Logger, msg *telego.Message, plan *sanitizedPost) (int, error) {
-	copier, ok := snd.(youtubeCaptionlessCopier)
-	if !ok {
-		return 0, errors.New("sender cannot copy media without its caption")
-	}
 	parts, err := splitYouTubeCaption(plan.caption, plan.capEntities)
 	if err != nil {
 		return 0, err
 	}
-	ids, err := copier.CopyMessages(ctx, &telego.CopyMessagesParams{
+	ids, err := snd.CopyMessages(ctx, &telego.CopyMessagesParams{
 		ChatID:          telego.ChatID{ID: msg.Chat.ID},
 		MessageThreadID: msg.MessageThreadID,
 		FromChatID:      telego.ChatID{ID: msg.Chat.ID},

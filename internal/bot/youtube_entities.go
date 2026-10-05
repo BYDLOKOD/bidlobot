@@ -1,28 +1,8 @@
 package bot
 
-// YouTube `si=` content-preserving URL/entity sanitizer core.
-//
-// Telegram clients append a `si` share-tracking parameter to YouTube
-// links created by the native share sheet. This file removes only those
-// query pairs (plus the separator bytes required to keep the query
-// well-formed) and nothing else: scheme case, host, path, surviving
-// params, their order and escaping, and the fragment all survive
-// byte-for-byte.
-//
-// Two entry points share one deletion-span helper so visible bare URLs
-// and the hidden targets of text_link entities are cleaned identically:
-//
-//   - StripShareTracking works on a single raw URL string.
-//   - SanitizeMessageText works on a whole message body plus its
-//     entities, remapping UTF-16 entity offsets over the deletions.
-//
-// All internal work is expressed as offset spans in ORIGINAL
-// coordinates; the text is rebuilt once, at the end. URLs are never
-// round-tripped through net/url (which would canonicalize them);
-// url.Parse is used only to decide host eligibility and
-// url.QueryUnescape only to match query keys. youtubeHosts/isYouTubeHost,
-// urlScanRe and trailingPunct live in youtube_sanitizer.go and are
-// reused here.
+// YouTube `si=` sanitizer: drops only `si` query pairs (plus the minimal
+// separators), preserving every other byte. No net/url canonicalization;
+// spans stay in ORIGINAL coordinates and the text is rebuilt once.
 
 import (
 	"fmt"
@@ -34,24 +14,15 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// offsetSpan is a half-open range [start,end) in some coordinate space:
-// a byte range into the original text/URL, or a UTF-16 code-unit range
-// for entity offsets. Callers keep the unit straight; the functions
-// here operate on whichever space the caller passes.
+// offsetSpan is a half-open [start,end) range in a caller-chosen space:
+// bytes into the original text/URL, or UTF-16 units for entity offsets.
 type offsetSpan struct {
 	start, end int
 }
 
-// StripShareTracking removes every query pair whose decoded key is
-// exactly `si` from a YouTube URL, plus the minimum separator bytes
-// needed to keep the surviving query well-formed. Everything else is
-// returned byte-for-byte identical; no net/url canonicalization is ever
-// applied.
-//
-// Returns (cleaned, true) when at least one `si` pair was removed,
-// otherwise (rawURL, false) with the input returned verbatim. Malformed
-// or unparseable URLs, non-YouTube hosts and URLs without `si` are left
-// untouched.
+// StripShareTracking removes every `si` query pair from a YouTube URL
+// plus the minimal separator bytes. Returns (cleaned, true) on removal,
+// else (rawURL, false); malformed, non-YouTube and si-less URLs pass through.
 func StripShareTracking(rawURL string) (string, bool) {
 	spans, ok := siDeletions(rawURL)
 	if !ok {
@@ -59,37 +30,22 @@ func StripShareTracking(rawURL string) (string, bool) {
 	}
 	cleaned := deleteSpans(rawURL, spans)
 	if cleaned == "" {
-		// Defensive: a non-empty input that strips to empty should not
-		// happen (we remove query pairs, never the whole URL), but never
-		// emit "".
+		// Defensive: never emit an empty result for non-empty input.
 		return rawURL, false
 	}
 	return cleaned, true
 }
 
-// siDeletions returns the byte spans to delete from rawURL to drop
-// every `si` query pair, together with the separators needed to keep the
-// result well-formed. ok is false when rawURL is not a YouTube URL or
-// carries no `si` pair, in which case the caller returns the input
-// verbatim.
-//
-// Query pairs are separated by '&'. For each maximal run of consecutive
-// tracked pairs the trailing separator is removed when a surviving pair
-// follows; otherwise the preceding separator is removed; and when every
-// query pair is tracked the '?' is removed too. Fragments are never
-// touched. Keys are matched after url.QueryUnescape, so an encoded
-// `%73i` is recognised as `si`.
-//
-// Returned spans are ascending and non-overlapping.
+// siDeletions returns ascending, non-overlapping byte spans that remove
+// every `si` pair (key matched after url.QueryUnescape, so `%73i` counts)
+// plus the joining separator of each run ('&', or '?' when every pair is
+// tracked); ok is false for non-YouTube, no-query or no-`si` input.
 func siDeletions(rawURL string) ([]offsetSpan, bool) {
 	if rawURL == "" {
 		return nil, false
 	}
 
-	// Host eligibility only. A scheme-less link parses with an empty
-	// Host and the host folded into Path, so prepend a temporary scheme
-	// for the parse; all offsets below are computed over the raw input,
-	// so the synthetic scheme never reaches the result.
+	// Host eligibility only; the synthetic scheme never shifts offsets.
 	parseTarget := rawURL
 	if !strings.Contains(rawURL, "://") {
 		parseTarget = "https://" + rawURL
@@ -112,11 +68,12 @@ func siDeletions(rawURL string) ([]offsetSpan, bool) {
 		return nil, false // empty query
 	}
 
-	type qpair struct {
-		tracked    bool
-		start, end int
-	}
-	var pairs []qpair
+	// One scan. pendingRunStart marks the current run of tracked pairs;
+	// lastPairEnd is the last pair actually scanned, so a trailing run
+	// keeps a dangling '&' (which is not a pair) instead of eating it.
+	var spans []offsetSpan
+	pendingRunStart, lastPairEnd := -1, qEnd
+	sawSurvivor := false
 	for pos := qIdx + 1; pos < qEnd; {
 		pairEnd := qEnd
 		if amp := strings.IndexByte(rawURL[pos:qEnd], '&'); amp >= 0 {
@@ -131,57 +88,41 @@ func siDeletions(rawURL string) ([]offsetSpan, bool) {
 		if derr != nil {
 			dec = key
 		}
-		pairs = append(pairs, qpair{tracked: dec == "si", start: pos, end: pairEnd})
+		lastPairEnd = pairEnd
+		if dec == "si" {
+			if pendingRunStart < 0 {
+				pendingRunStart = pos
+			}
+		} else {
+			sawSurvivor = true
+			if pendingRunStart >= 0 {
+				spans = append(spans, offsetSpan{pendingRunStart, pos})
+				pendingRunStart = -1
+			}
+		}
 		if pairEnd == qEnd {
 			break
 		}
 		pos = pairEnd + 1
 	}
-
-	trackedAny := false
-	for _, p := range pairs {
-		if p.tracked {
-			trackedAny = true
-			break
-		}
-	}
-	if !trackedAny {
-		return nil, false
-	}
-
-	var spans []offsetSpan
-	n := len(pairs)
-	for i := 0; i < n; {
-		if !pairs[i].tracked {
-			i++
-			continue
-		}
-		j := i
-		for j+1 < n && pairs[j+1].tracked {
-			j++
-		}
-		switch {
-		case j+1 < n:
-			// A surviving pair follows: drop the run and the separator
-			// that joins it to that pair.
-			spans = append(spans, offsetSpan{pairs[i].start, pairs[j+1].start})
-		case i > 0:
-			// Run at the end of the query: drop the preceding separator
-			// together with the run.
-			spans = append(spans, offsetSpan{pairs[i].start - 1, pairs[j].end})
-		default:
-			// Every query pair is tracked: drop the '?' as well.
+	if pendingRunStart >= 0 {
+		if sawSurvivor {
+			// Trailing run: drop it plus the separator before it, but
+			// keep a dangling '&' at the very end of the query.
+			spans = append(spans, offsetSpan{pendingRunStart - 1, lastPairEnd})
+		} else {
+			// Every pair tracked: drop the '?' too.
 			spans = append(spans, offsetSpan{qIdx, qEnd})
 		}
-		i = j + 1
+	}
+	if len(spans) == 0 {
+		return nil, false
 	}
 	return spans, true
 }
 
-// deleteSpans rebuilds s with every span removed in a single pass,
-// copying only when there is something to delete. Spans MUST be
-// ascending and non-overlapping; out-of-range or inverted spans are
-// ignored defensively.
+// deleteSpans rebuilds s without the spans, which MUST be ascending and
+// non-overlapping; invalid spans are skipped defensively.
 func deleteSpans(s string, spans []offsetSpan) string {
 	if len(spans) == 0 {
 		return s
@@ -200,38 +141,16 @@ func deleteSpans(s string, spans []offsetSpan) string {
 	return b.String()
 }
 
-// SanitizeMessageText removes tracked `si` query pairs from the YouTube
-// URLs visible in text and from the hidden targets of text_link
-// entities. It returns the corrected text, corrected entities, whether
-// anything changed, and an error when safe remapping is impossible.
-//
-// Visible anchor text of text_link entities is never treated as a URL
-// and never edited; only the entity's URL is cleaned. Explicit `url`
-// entities are authoritative: scanner candidates overlapping a url
-// entity are dropped and each url entity is cleaned over its own range,
-// so its boundaries can never be blended with unrelated text. Overlapping
-// url entities are ambiguous and fail the call. Bare URLs not covered by
-// a url entity are cleaned directly. All resulting deletion spans are
-// merged only to rebuild the visible text; distinct URL candidates are
-// never unioned.
-//
-// Every entity field survives; only Offset/Length (and a text_link URL)
-// are adjusted. The input text and entity slice are never mutated; on no
-// change they are returned as-is.
-//
-// Entity ranges are UTF-16 code units. A range that is out of bounds,
-// has zero/negative length, or splits a surrogate pair makes the whole
-// call fail with an error, and the input is returned unchanged. Invalid
-// UTF-8 in the text fails the same way.
+// SanitizeMessageText cleans visible YouTube URLs and text_link targets,
+// returning text, entities, changed and an error. Entity ranges are
+// UTF-16; text_link anchor text is never scanned and url entities are
+// authoritative. Inputs are never mutated and bad ranges/UTF-8 fail closed.
 func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, []telego.MessageEntity, bool, error) {
 	if !utf8.ValidString(text) {
 		return text, entities, false, fmt.Errorf("bot: message text is not valid UTF-8")
 	}
 	u16Len := utf16Length(text)
 
-	// Validate every entity range once, then resolve all requested
-	// UTF-16 boundaries (two per entity) to byte indices in a single
-	// rune walk over the text.
 	boundsReq := make([]int, 0, len(entities)*2)
 	for i := range entities {
 		e := &entities[i]
@@ -253,8 +172,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 		b1[i] = bounds[entities[i].Offset+entities[i].Length]
 	}
 
-	// Visible spans of text_link anchors: excluded from URL scanning so
-	// their on-screen contents are preserved verbatim.
+	// text_link anchor spans are never scanned as URLs.
 	var anchors []offsetSpan
 	for i := range entities {
 		if entities[i].Type == "text_link" {
@@ -262,8 +180,8 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 		}
 	}
 
-	// Explicit url entities are authoritative. Reject ambiguous overlap
-	// between two of them; skip any that would cut through an anchor.
+	// url entities are authoritative: reject mutual overlap and skip any
+	// that cuts through an anchor.
 	var urlRanges []offsetSpan
 	for i := range entities {
 		if entities[i].Type != "url" {
@@ -281,10 +199,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 		urlRanges = append(urlRanges, offsetSpan{b0[i], b1[i]})
 	}
 
-	// Deletion spans, in original byte coordinates. Each authoritative
-	// url entity is cleaned over its own range; a bare-URL scanner
-	// candidate is used only when it overlaps neither a url entity nor a
-	// text_link anchor.
+	// Deletion spans in original byte coordinates.
 	var delBytes []offsetSpan
 	for _, r := range urlRanges {
 		if sub, ok := siDeletions(text[r.start:r.end]); ok {
@@ -313,8 +228,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 	}
 	delBytes = mergeSpans(delBytes)
 
-	// Hidden-link cleaning: rebuild a text_link URL only when it actually
-	// changes, and remember the result so it is built once.
+	// Clean each text_link URL, remembering only the changed ones.
 	var hidden map[int]string
 	for i := range entities {
 		if entities[i].Type != "text_link" || entities[i].URL == "" {
@@ -334,18 +248,15 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 
 	newText := deleteSpans(text, delBytes)
 
-	// Convert the (byte) deletion spans to UTF-16 once, then remap the
-	// already-known entity offsets directly in UTF-16 space.
+	// Map the merged byte spans to UTF-16 in one walk over disjoint slices.
 	delU16 := make([]offsetSpan, 0, len(delBytes))
-	if len(delBytes) > 0 {
-		convReq := make([]int, 0, len(delBytes)*2)
-		for _, sp := range delBytes {
-			convReq = append(convReq, sp.start, sp.end)
-		}
-		conv := resolveByteToUTF16(text, convReq)
-		for _, sp := range delBytes {
-			delU16 = append(delU16, offsetSpan{conv[sp.start], conv[sp.end]})
-		}
+	prevByte, u16 := 0, 0
+	for _, sp := range delBytes {
+		u16 += utf16Length(text[prevByte:sp.start])
+		start := u16
+		u16 += utf16Length(text[sp.start:sp.end])
+		delU16 = append(delU16, offsetSpan{start, u16})
+		prevByte = sp.end
 	}
 
 	out := make([]telego.MessageEntity, 0, len(entities))
@@ -353,8 +264,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 		ns := remapOffset(entities[i].Offset, delU16)
 		ne := remapOffset(entities[i].Offset+entities[i].Length, delU16)
 		if ne == ns {
-			// The entity's entire contents were deleted; a zero-width
-			// entity carries no meaning.
+			// Fully deleted; a zero-width entity carries no meaning.
 			continue
 		}
 		e := entities[i] // value copy; the input slice is never mutated
@@ -369,8 +279,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 }
 
 // mergeSpans sorts spans and folds overlapping or touching ranges into
-// single spans. It is applied to deletion spans before the text rebuild
-// so the same bytes are never removed twice.
+// single spans.
 func mergeSpans(spans []offsetSpan) []offsetSpan {
 	if len(spans) < 2 {
 		return spans
@@ -395,10 +304,8 @@ func mergeSpans(spans []offsetSpan) []offsetSpan {
 	return out
 }
 
-// remapOffset translates an offset in the original space to its position
-// in the text with the given ascending, non-overlapping spans deleted.
-// An offset inside a deleted span collapses onto the span's start, so
-// both ends of a fully deleted entity land on the same point.
+// remapOffset shifts an original-space offset past the deleted spans; an
+// offset inside a span collapses onto its start.
 func remapOffset(pos int, spans []offsetSpan) int {
 	delta := 0
 	for _, sp := range spans {
@@ -415,8 +322,8 @@ func remapOffset(pos int, spans []offsetSpan) int {
 	return pos - delta
 }
 
-// overlapsAny reports whether r shares at least one unit with any span.
-// Empty spans cover no units and never overlap.
+// overlapsAny reports whether r shares a unit with any span; empty spans
+// never overlap.
 func overlapsAny(r offsetSpan, spans []offsetSpan) bool {
 	if r.start >= r.end {
 		return false
@@ -432,8 +339,7 @@ func overlapsAny(r offsetSpan, spans []offsetSpan) bool {
 	return false
 }
 
-// utf16Length returns the number of UTF-16 code units in s, matching
-// Telegram's entity offset/length unit.
+// utf16Length counts UTF-16 code units, Telegram's entity unit.
 func utf16Length(s string) int {
 	n := 0
 	for _, r := range s {
@@ -446,10 +352,8 @@ func utf16Length(s string) int {
 	return n
 }
 
-// resolveUTF16ToByte maps the requested UTF-16 code-unit offsets to byte
-// indices with a single rune walk over s. Requests must be non-negative;
-// an offset past the end of the text or one that splits a surrogate pair
-// returns an error. The returned map has one entry per distinct request.
+// resolveUTF16ToByte maps requested UTF-16 offsets to byte indices in one
+// rune walk; negative, past-end or surrogate-splitting offsets error.
 func resolveUTF16ToByte(s string, requested []int) (map[int]int, error) {
 	out := make(map[int]int, len(requested))
 	if len(requested) == 0 {
@@ -493,42 +397,4 @@ func resolveUTF16ToByte(s string, requested []int) (map[int]int, error) {
 		return nil, fmt.Errorf("bot: UTF-16 offset %d out of range", uniq[k])
 	}
 	return out, nil
-}
-
-// resolveByteToUTF16 maps the requested byte indices to UTF-16 code-unit
-// offsets with a single rune walk over s. Every request MUST fall on a
-// rune boundary (all callers derive them from ASCII separators or entity
-// boundaries). The returned map has one entry per distinct request.
-func resolveByteToUTF16(s string, requested []int) map[int]int {
-	out := make(map[int]int, len(requested))
-	if len(requested) == 0 {
-		return out
-	}
-	req := append([]int(nil), requested...)
-	sort.Ints(req)
-	uniq := req[:0]
-	for i, v := range req {
-		if i == 0 || v != req[i-1] {
-			uniq = append(uniq, v)
-		}
-	}
-	k := 0
-	for k < len(uniq) && uniq[k] == 0 {
-		out[0] = 0
-		k++
-	}
-	u := 0
-	for i, r := range s {
-		if r > 0xFFFF {
-			u += 2
-		} else {
-			u++
-		}
-		end := i + utf8.RuneLen(r)
-		for k < len(uniq) && uniq[k] == end {
-			out[end] = u
-			k++
-		}
-	}
-	return out
 }
