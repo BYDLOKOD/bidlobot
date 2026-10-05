@@ -140,14 +140,11 @@ func TestStripShareTrackingOrderIndependent(t *testing.T) {
 // TestStripShareTrackingTrickyEncodings locks in behavior for inputs
 // that previously needed a manual probe:
 //   - duplicate si keys: both removed.
-//   - a percent-encoded value in a surviving param round-trips
-//     (%26 stays %26); a literal-space %20 is re-emitted as the
-//     query-equivalent '+' - both decode to a space, so this is a
-//     benign canonicalization, not a semantic change.
-//   - an uppercase scheme is lowercased by net/url (RFC 3986: schemes
-//     are case-insensitive); the host casing is preserved. This is the
-//     only normalization stdlib applies and is functionally
-//     equivalent - documented, not a bug.
+//   - surviving param bytes are preserved EXACTLY: a percent-encoded
+//     value round-trips verbatim (%26 stays %26, %20 stays %20) and no
+//     case normalization touches the scheme.
+//   - the scheme and host keep the user's original casing; only the
+//     `si` pairs (and their separators) are deleted.
 func TestStripShareTrackingTrickyEncodings(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -155,8 +152,8 @@ func TestStripShareTrackingTrickyEncodings(t *testing.T) {
 	}{
 		{"https://youtu.be/ID?si=a&si=b", "https://youtu.be/ID"},
 		{"https://www.youtube.com/watch?v=a%26b&si=x", "https://www.youtube.com/watch?v=a%26b"},
-		{"https://www.youtube.com/watch?v=ID&si=trk&list=PL%20space", "https://www.youtube.com/watch?v=ID&list=PL+space"},
-		{"HTTPS://WWW.YOUTUBE.COM/watch?v=ID&si=x", "https://WWW.YOUTUBE.COM/watch?v=ID"},
+		{"https://www.youtube.com/watch?v=ID&si=trk&list=PL%20space", "https://www.youtube.com/watch?v=ID&list=PL%20space"},
+		{"HTTPS://WWW.YOUTUBE.COM/watch?v=ID&si=x", "HTTPS://WWW.YOUTUBE.COM/watch?v=ID"},
 	}
 	for _, c := range cases {
 		got, changed := StripShareTracking(c.in)
@@ -202,7 +199,7 @@ func TestSanitizeMessageText(t *testing.T) {
 			wantChanged: true,
 		},
 		{
-			name: "text_link entity: changed true but text unmodified",
+			name: "text_link entity: hidden URL cleaned, anchor text preserved",
 			text: "click here",
 			entities: []telego.MessageEntity{
 				{Type: "text_link", Offset: 6, Length: 4, URL: "https://youtu.be/ID?si=trk"},
@@ -252,12 +249,22 @@ func TestSanitizeMessageText(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, changed := SanitizeMessageText(tc.text, tc.entities)
+			got, gotEnts, changed, err := SanitizeMessageText(tc.text, tc.entities)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if changed != tc.wantChanged {
 				t.Fatalf("changed = %v, want %v (text=%q)", changed, tc.wantChanged, got)
 			}
 			if got != tc.wantText {
 				t.Errorf("text = %q, want %q", got, tc.wantText)
+			}
+			if changed {
+				for _, e := range gotEnts {
+					if strings.Contains(e.URL, "si=") {
+						t.Errorf("entity URL still carries si: %q", e.URL)
+					}
+				}
 			}
 		})
 	}
@@ -272,6 +279,7 @@ type recYTSender struct {
 
 	Deletes     []*telego.DeleteMessageParams
 	Messages    []*telego.SendMessageParams
+	Copies      []*telego.CopyMessageParams
 	Photos      []*telego.SendPhotoParams
 	Videos      []*telego.SendVideoParams
 	Animations  []*telego.SendAnimationParams
@@ -286,6 +294,12 @@ func (r *recYTSender) SendMessage(_ context.Context, p *telego.SendMessageParams
 	defer r.mu.Unlock()
 	r.Messages = append(r.Messages, p)
 	return &telego.Message{MessageID: 1000}, nil
+}
+func (r *recYTSender) CopyMessage(_ context.Context, p *telego.CopyMessageParams) (*telego.MessageID, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.Copies = append(r.Copies, p)
+	return &telego.MessageID{MessageID: 1006}, nil
 }
 func (r *recYTSender) DeleteMessage(_ context.Context, p *telego.DeleteMessageParams) error {
 	r.mu.Lock()
@@ -343,9 +357,9 @@ func ytTestMessage(text string) *telego.Message {
 func TestHandleSanitizeTextDeletesAndReposts(t *testing.T) {
 	snd := &recYTSender{}
 	msg := ytTestMessage("look https://youtu.be/ID?si=trk")
-	newText, _ := SanitizeMessageText(msg.Text, msg.Entities)
+	_, plan := sanitizeDecision(msg)
 
-	handleSanitize(context.Background(), snd, testLogger(), msg, newText, "")
+	handleSanitize(context.Background(), snd, testLogger(), msg, plan)
 
 	if len(snd.Deletes) != 1 {
 		t.Fatalf("expected 1 delete, got %d", len(snd.Deletes))
@@ -354,123 +368,75 @@ func TestHandleSanitizeTextDeletesAndReposts(t *testing.T) {
 		t.Errorf("delete targeted message %d, want 42", snd.Deletes[0].MessageID)
 	}
 	if len(snd.Messages) != 1 {
-		t.Fatalf("expected 1 repost message, got %d", len(snd.Messages))
-	}
-	body := snd.Messages[0].Text
-	if !strings.Contains(body, "alice") {
-		t.Errorf("repost missing attribution, got %q", body)
-	}
-	if !strings.Contains(body, "https://youtu.be/ID") || strings.Contains(body, "si=trk") {
-		t.Errorf("repost body should carry cleaned link without si, got %q", body)
-	}
-	if snd.Messages[0].ParseMode != telego.ModeHTML {
-		t.Errorf("repost should use HTML parse mode, got %q", snd.Messages[0].ParseMode)
-	}
-	// Repost is a fresh message, not a reply.
-	if snd.Messages[0].ReplyParameters != nil {
-		t.Errorf("repost must not be a reply")
-	}
-}
-
-func TestHandleSanitizePhotoRepostByFileID(t *testing.T) {
-	snd := &recYTSender{}
-	msg := ytTestMessage("")
-	msg.Caption = "see https://youtu.be/ID?si=trk"
-	msg.Photo = []telego.PhotoSize{
-		{FileID: "small", Width: 90, Height: 90},
-		{FileID: "big", Width: 1280, Height: 720},
-	}
-	newCap, _ := SanitizeMessageText(msg.Caption, msg.CaptionEntities)
-
-	handleSanitize(context.Background(), snd, testLogger(), msg, "", newCap)
-
-	if len(snd.Deletes) != 1 {
-		t.Fatalf("expected delete, got %d", len(snd.Deletes))
-	}
-	if len(snd.Photos) != 1 {
-		t.Fatalf("expected 1 SendPhoto, got %d (messages=%d)", len(snd.Photos), len(snd.Messages))
-	}
-	if snd.Photos[0].Photo.FileID != "big" {
-		t.Errorf("should resend largest photo file_id, got %q", snd.Photos[0].Photo.FileID)
-	}
-	cap := snd.Photos[0].Caption
-	if !strings.Contains(cap, "alice") || !strings.Contains(cap, "https://youtu.be/ID") || strings.Contains(cap, "si=trk") {
-		t.Errorf("photo caption wrong: %q", cap)
-	}
-}
-
-func TestHandleSanitizeVideoRepostByFileID(t *testing.T) {
-	snd := &recYTSender{}
-	msg := ytTestMessage("")
-	msg.Caption = "https://www.youtube.com/watch?v=ID&si=trk"
-	msg.Video = &telego.Video{FileID: "vid123"}
-	nc, _ := SanitizeMessageText(msg.Caption, msg.CaptionEntities)
-
-	handleSanitize(context.Background(), snd, testLogger(), msg, "", nc)
-
-	if len(snd.Videos) != 1 || snd.Videos[0].Video.FileID != "vid123" {
-		t.Fatalf("expected SendVideo with file_id vid123, got %+v", snd.Videos)
-	}
-	if strings.Contains(snd.Videos[0].Caption, "si=trk") {
-		t.Errorf("video caption still has si: %q", snd.Videos[0].Caption)
-	}
-}
-
-// Repost-first contract (critic S1): the cleaned copy is posted BEFORE
-// any delete, so a missing Delete right can never destroy content - the
-// repost stands and the original is simply kept (a stale si= duplicate
-// is the lesser evil vs. data loss).
-func TestHandleSanitizeDeleteFailsRepostStandsOriginalKept(t *testing.T) {
-	snd := &recYTSender{DeleteErr: errors.New("not enough rights to delete")}
-	msg := ytTestMessage("look https://youtu.be/ID?si=trk")
-	newText, _ := SanitizeMessageText(msg.Text, msg.Entities)
-
-	handleSanitize(context.Background(), snd, testLogger(), msg, newText, "")
-
-	// Exactly one send: the reposted cleaned copy (no second text
-	// fallback - the repost already succeeded).
-	if len(snd.Messages) != 1 {
-		t.Fatalf("expected the reposted cleaned copy, got %d messages", len(snd.Messages))
-	}
-	// Delete was attempted after the successful repost and failed; the
-	// original is therefore kept (not lost).
-	if len(snd.Deletes) != 1 {
-		t.Fatalf("expected a delete attempt after repost, got %d", len(snd.Deletes))
+		t.Fatalf("expected 1 cleaned copy, got %d", len(snd.Messages))
 	}
 	m := snd.Messages[0]
-	if !strings.Contains(m.Text, "https://youtu.be/ID") || strings.Contains(m.Text, "si=trk") {
-		t.Errorf("repost should carry the cleaned link without si=, got %q", m.Text)
+	if m.Text != "look https://youtu.be/ID" {
+		t.Errorf("copy text = %q, want exact cleaned body", m.Text)
 	}
-	if !strings.Contains(m.Text, "писал") {
-		t.Errorf("repost should carry the attribution header, got %q", m.Text)
+	// The copy is a standalone message, not a reply.
+	if m.ReplyParameters != nil {
+		t.Errorf("standalone copy must not be a reply")
 	}
 }
 
-func TestHandleSanitizeTextLinkEntityUsesReplyFallback(t *testing.T) {
+// Copy-first contract: the cleaned copy is posted BEFORE any delete,
+// so a failed delete can never destroy content - the copy stands and
+// the original is kept.
+func TestHandleSanitizeDeleteFailsCopyStandsOriginalKept(t *testing.T) {
+	snd := &recYTSender{DeleteErr: errors.New("not enough rights to delete")}
+	msg := ytTestMessage("look https://youtu.be/ID?si=trk")
+	_, plan := sanitizeDecision(msg)
+
+	handleSanitize(context.Background(), snd, testLogger(), msg, plan)
+
+	// Exactly one send: the cleaned copy (no fallback notice - the
+	// copy already succeeded).
+	if len(snd.Messages) != 1 {
+		t.Fatalf("expected the cleaned copy, got %d messages", len(snd.Messages))
+	}
+	// Delete was attempted after the successful copy and failed; the
+	// original is therefore kept (not lost).
+	if len(snd.Deletes) != 1 {
+		t.Fatalf("expected a delete attempt after the copy, got %d", len(snd.Deletes))
+	}
+	m := snd.Messages[0]
+	if m.Text != "look https://youtu.be/ID" {
+		t.Errorf("copy text = %q, want exact cleaned body", m.Text)
+	}
+}
+
+func TestHandleSanitizeTextLinkEntityFaithfulCopy(t *testing.T) {
 	snd := &recYTSender{}
 	msg := ytTestMessage("click here")
 	msg.Entities = []telego.MessageEntity{
 		{Type: "text_link", Offset: 6, Length: 4, URL: "https://youtu.be/ID?si=trk"},
 	}
-	newText, changed := SanitizeMessageText(msg.Text, msg.Entities)
-	if !changed {
-		t.Fatal("text_link to tracked yt link must report changed")
+	act, plan := sanitizeDecision(msg)
+	if !act {
+		t.Fatal("text_link to tracked yt link must act")
 	}
 
-	handleSanitize(context.Background(), snd, testLogger(), msg, newText, "")
+	handleSanitize(context.Background(), snd, testLogger(), msg, plan)
 
-	// Body is not visibly changed -> must NOT delete, must reply.
-	if len(snd.Deletes) != 0 {
-		t.Errorf("text_link case must not delete (cannot faithfully repost), got %d deletes", len(snd.Deletes))
-	}
+	// Hidden link: the visible anchor is byte-identical, the corrected
+	// entity list carries the cleaned URL, and the original is deleted
+	// after the confirmed copy - no reply, no notice.
 	if len(snd.Messages) != 1 {
-		t.Fatalf("expected reply-fallback message, got %d", len(snd.Messages))
+		t.Fatalf("expected one faithful copy, got %d messages", len(snd.Messages))
 	}
-	if snd.Messages[0].ReplyParameters == nil {
-		t.Errorf("text_link fallback must be a reply")
+	m := snd.Messages[0]
+	if m.Text != "click here" {
+		t.Errorf("anchor text must be preserved, got %q", m.Text)
 	}
-	if !strings.Contains(snd.Messages[0].Text, "https://youtu.be/ID") {
-		t.Errorf("text_link fallback should list the cleaned link, got %q", snd.Messages[0].Text)
+	if len(m.Entities) != 1 || m.Entities[0].URL != "https://youtu.be/ID" {
+		t.Errorf("copy entity = %+v, want cleaned URL https://youtu.be/ID", m.Entities)
+	}
+	if m.ReplyParameters != nil {
+		t.Errorf("faithful copy must not be a reply")
+	}
+	if len(snd.Deletes) != 1 {
+		t.Errorf("expected delete after confirmed copy, got %d", len(snd.Deletes))
 	}
 }
 
@@ -503,7 +469,7 @@ func TestSanitizeDecisionExclusions(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			m := ytTestMessage("https://youtu.be/ID?si=trk")
 			c.mut(m)
-			act, _, _ := sanitizeDecision(m)
+			act, _ := sanitizeDecision(m)
 			if act != c.wantAct {
 				t.Errorf("sanitizeDecision act = %v, want %v", act, c.wantAct)
 			}
@@ -511,7 +477,7 @@ func TestSanitizeDecisionExclusions(t *testing.T) {
 	}
 
 	t.Run("nil message", func(t *testing.T) {
-		if act, _, _ := sanitizeDecision(nil); act {
+		if act, _ := sanitizeDecision(nil); act {
 			t.Error("nil message must not act")
 		}
 	})
