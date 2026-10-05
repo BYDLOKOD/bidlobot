@@ -11,7 +11,7 @@ touches:
   - internal/testutil/
   - internal/text/
 written: 2026-05-14
-updated: 2026-09-25
+updated: 2026-10-05
 ---
 
 # Architecture
@@ -38,7 +38,7 @@ internal/
     captcha.go         new-member captcha wiring (opt-in)
     deferred.go        /flush per-user retry queue
     summarize.go       /summarize + /итог handler
-    youtube_sanitizer.go  YT si= strip (delete+repost)
+    youtube_sanitizer.go  YT si= strip (copy-then-delete, entity-preserving)
     repost_common.go      shared repost pipeline: sender gate, yt-dlp ladder, upload-then-delete tail, deferred queue
     tiktok_repost.go      TikTok video repost (mirror -> yt-dlp)
     tiktok_source.go      tikwm mirror: resolve + stream the MP4
@@ -259,7 +259,7 @@ No `edited_message`, no `chat_join_request`.
 | Instagram 4xx send rejection (too large, forbidden) | `instagram_repost.go` | public decline note; original kept; never queued |
 | Instagram transient send failure (transport, 429, 5xx) | `instagram_repost.go` | enqueue to the deferred queue; `/flush` replays it |
 | xpost any failure | `xpost.go` | decline note; original kept (never deleted) |
-| YT sanitizer repost fail | `youtube_sanitizer.go` | original left intact |
+| YT sanitizer copy fail (any part) | `youtube_sanitizer.go` | original left intact; partial long-caption posts rolled back |
 | summarize provider fail | `summarize.go` | enqueue to deferred queue; placeholder stays |
 | summarize timeout/budget | `summarize.go` | Russian error, lower N |
 | Game/stats flood | `cooldown.gateMsg` | silent drop (bounded notice) |

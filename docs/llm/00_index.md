@@ -2,7 +2,7 @@
 id: llm-index
 kind: index
 written: 2026-05-14
-updated: 2026-09-25
+updated: 2026-10-05
 ---
 
 # docs/llm - LLM-facing reference (v3)
@@ -25,7 +25,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, lifetime + monthly nominations, display, MSK day boundary
 - [45_summarize.md](45_summarize.md) - admin-only `/summarize`: OMP/Pi CLI + DeepSeek V4 Flash, RAM-only window, weighted digest with cost, deferred retry, privacy
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits + per-user cooldown notice, error handling, onboarding + admission gate, captcha, shutdown
-- [55_youtube_sanitizer.md](55_youtube_sanitizer.md) - YouTube `si=` strip: host scoping, repost-then-delete, exclusions, v1 gaps, privacy gate
+- [55_youtube_sanitizer.md](55_youtube_sanitizer.md) - YouTube `si=` strip: host scoping, entity-preserving copy-then-delete, preflight exclusions, long-caption split, privacy gate
 - [56_tiktok_repost.md](56_tiktok_repost.md) - TikTok video repost: tikwm mirror download with yt-dlp fallback, 50 MiB cap, audio check, photo-post decline, repost-then-delete, deferred queue on failure
 - [57_xpost.md](57_xpost.md) - X/Twitter post repost: FixTweet API, single-message album (text + photos + videos + canonical link), repost-then-delete, variant size selection, single-slot concurrency
 - [58_referral.md](58_referral.md) - referral catalog: /refs /refreg /refreport, chat-scoped buckets, registration UX, moderation
@@ -50,6 +50,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [devlog/11_upload_retry_rewind.md](devlog/11_upload_retry_rewind.md) - 2026-09-17: retried media uploads uploaded nothing (telego streams the body once; every media wrapper now rewinds before each attempt).
 - [devlog/12_instagram_repost.md](devlog/12_instagram_repost.md) - 2026-09-25: Instagram reel/post repost built on a shared repost pipeline (`repost_common.go`); yt-dlp only (no usable mirror), no audio gate, `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES`.
 - [devlog/13_instagram_repost_audit.md](devlog/13_instagram_repost_audit.md) - 2026-09-25: Instagram repost audited end to end (host normalisation, `/flush` drop policy, shared send-error classifier, testable slot branch), then a live permalink proved the pinned yt-dlp 2026.03.17 could not download at all - pin raised to 2026.07.04.
+- [devlog/14_youtube_copy_preserve.md](devlog/14_youtube_copy_preserve.md) - 2026-10-05: PR #3 audited and merged - sanitizer reworked from repost-with-header to an entity-preserving server-side copy; caption splitting, preflight table and offset tests added on top.
 
 ## Removed surfaces (code deleted; docs deleted with them)
 
