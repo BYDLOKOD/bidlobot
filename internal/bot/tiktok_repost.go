@@ -287,8 +287,12 @@ func processTikTok(
 			enqueueRepostOrFail(ctx, snd, log, queue, msg, storage.DeferredTikTok, tiktokURL)
 			return
 		}
+		rawCaption := msg.Caption
+		if rawCaption == "" {
+			rawCaption = msg.Text
+		}
 		sent, out, err = repostVideoTail(ctx, snd, log, owners, msg.From, chatID, msgID, post.VideoPath,
-			repostCaption(msg.From.Username, msg.From.FirstName, msg.Caption), "tiktok")
+			repostCaption(msg.From.Username, msg.From.FirstName, rawCaption), "tiktok")
 	}
 	switch out {
 	case repostPermanent:

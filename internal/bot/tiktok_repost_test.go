@@ -691,3 +691,23 @@ func TestRepostCaption(t *testing.T) {
 		t.Errorf("empty caption should not add newline; got %q", got)
 	}
 }
+
+func TestProcessTikTokVideoPreservesTextComment(t *testing.T) {
+	origFFprobe := ffprobeHasAudio
+	ffprobeHasAudio = func(string) bool { return true }
+	t.Cleanup(func() { ffprobeHasAudio = origFFprobe })
+	path := filepath.Join(t.TempDir(), "video.mp4")
+	if err := os.WriteFile(path, []byte("fake mp4"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	snd := &recYTSender{}
+	msg := ttTestMessage("мой <комментарий> https://vt.tiktok.com/ZSgFJQKwT/")
+	processTikTok(context.Background(), snd, slog.New(slog.DiscardHandler), nil, nil, nil,
+		msg, "https://vt.tiktok.com/ZSgFJQKwT/", path)
+	if len(snd.Videos) != 1 || len(snd.Deletes) != 1 {
+		t.Fatalf("videos=%d deletes=%d", len(snd.Videos), len(snd.Deletes))
+	}
+	if !strings.Contains(snd.Videos[0].Caption, "мой &lt;комментарий&gt; https://vt.tiktok.com/ZSgFJQKwT/") {
+		t.Fatalf("video repost deleted the user's text: %q", snd.Videos[0].Caption)
+	}
+}
