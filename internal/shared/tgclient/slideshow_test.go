@@ -138,3 +138,26 @@ func TestSendSlideshowRedactsTokenAndPreservesCause(t *testing.T) {
 		t.Fatalf("token redaction or error classification lost: %v", err)
 	}
 }
+
+func TestSendSlideshowAllowsAutomaticLinkDetection(t *testing.T) {
+	caller := &slideshowCaller{t: t}
+	c := newClientWithCaller(t, caller)
+	c.richCaller = caller
+	_, err := c.SendSlideshow(context.Background(), &SlideshowParams{
+		ChatID:      telego.ChatID{ID: -100},
+		Photos:      []telego.InputFile{{URL: "https://example.com/photo.jpg"}},
+		CaptionHTML: "<b>Alice</b>\nhttps://vt.tiktok.com/ZSgFJQKwT/ @example #photos",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rich struct {
+		SkipEntityDetection bool `json:"skip_entity_detection"`
+	}
+	if err := json.Unmarshal([]byte(caller.payloads[0]["rich_message"]), &rich); err != nil {
+		t.Fatal(err)
+	}
+	if rich.SkipEntityDetection {
+		t.Fatal("slideshow disables Telegram URL, mention and hashtag detection")
+	}
+}

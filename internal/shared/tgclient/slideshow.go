@@ -107,10 +107,9 @@ func (c *Client) SendSlideshow(ctx context.Context, p *SlideshowParams) (*telego
 		html.WriteString(`<audio src="tg://audio?id=soundtrack"></audio>`)
 	}
 	rich, err := json.Marshal(struct {
-		HTML                string      `json:"html"`
-		Media               []richMedia `json:"media"`
-		SkipEntityDetection bool        `json:"skip_entity_detection"`
-	}{html.String(), media, true})
+		HTML  string      `json:"html"`
+		Media []richMedia `json:"media"`
+	}{html.String(), media})
 	if err != nil {
 		return nil, err
 	}
