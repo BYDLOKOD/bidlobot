@@ -331,7 +331,7 @@ func tryTikTokExport(
 	owners ownerRecorder,
 	videos tiktokVideoIndex,
 	chatID int64,
-	msgID int,
+	msgID, threadID int,
 	userID int64,
 	url, username, firstName, caption string,
 ) error {
@@ -351,7 +351,8 @@ func tryTikTokExport(
 	var tailErr error
 	if len(post.Images) > 0 {
 		sent, out, tailErr = repostTikTokPhotos(ctx, snd, log, owners, &telego.Message{
-			MessageID: msgID, Chat: telego.Chat{ID: chatID}, From: owner, Caption: caption,
+			MessageID: msgID, MessageThreadID: threadID,
+			Chat: telego.Chat{ID: chatID}, From: owner, Caption: caption,
 		}, post, workDir)
 	} else {
 		defer os.Remove(post.VideoPath)

@@ -172,7 +172,7 @@ func TestTikTokPhotoPostFlush(t *testing.T) {
 			photoPostServer(t, false, count, "")
 			snd := &photoPostSender{}
 			owners := &recOwners{}
-			err := tryTikTokExport(context.Background(), snd, slog.New(slog.DiscardHandler), owners, nil, -100123, 42, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
+			err := tryTikTokExport(context.Background(), snd, slog.New(slog.DiscardHandler), owners, nil, -100123, 42, 0, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
 			if err != nil || len(snd.photos) != count || len(snd.Deletes) != 1 || len(snd.Videos) != 0 {
 				t.Fatalf("err=%v photos=%d deletes=%d videos=%d", err, len(snd.photos), len(snd.Deletes), len(snd.Videos))
 			}
@@ -196,7 +196,7 @@ func TestTikTokPhotoPostOverLimitNeverTruncates(t *testing.T) {
 func TestTikTokPhotoPostFlushRetainsTransientFailures(t *testing.T) {
 	photoPostServer(t, false, 2, "ok")
 	snd := &photoPostSender{sendErr: errors.New("connection reset")}
-	err := tryTikTokExport(context.Background(), snd, slog.New(slog.DiscardHandler), nil, nil, -100123, 42, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
+	err := tryTikTokExport(context.Background(), snd, slog.New(slog.DiscardHandler), nil, nil, -100123, 42, 0, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
 	if err == nil || len(snd.Deletes) != 0 {
 		t.Fatalf("failed flush must stay queued with source intact: err=%v deletes=%v", err, snd.Deletes)
 	}
@@ -220,7 +220,7 @@ func TestTikTokPhotoPostSoundtrackFailureKeepsOriginal(t *testing.T) {
 func TestTikTokPhotoPostFlushIncludesSoundtrack(t *testing.T) {
 	photoPostServer(t, false, 2, "ok")
 	snd := &photoPostSender{}
-	err := tryTikTokExport(context.Background(), snd, slog.New(slog.DiscardHandler), nil, nil, -100123, 42, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
+	err := tryTikTokExport(context.Background(), snd, slog.New(slog.DiscardHandler), nil, nil, -100123, 42, 0, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
 	if err != nil || string(snd.audio) != "original music bytes" || len(snd.photos) != 2 || len(snd.Deletes) != 1 {
 		t.Fatalf("flush lost soundtrack: err=%v audio=%q photos=%d deletes=%d", err, snd.audio, len(snd.photos), len(snd.Deletes))
 	}
@@ -234,5 +234,32 @@ func TestTikTokPhotoPostAudioOverAttachmentLimitKeepsOriginal(t *testing.T) {
 	processTikTok(context.Background(), snd, slog.New(slog.DiscardHandler), q, nil, nil, msg, msg.Text, "")
 	if len(snd.photos) != 0 || len(snd.audio) != 0 || len(snd.Deletes) != 0 || len(q.jobs) != 0 || len(snd.Messages) != 1 {
 		t.Fatalf("over-limit post must not lose media: photos=%d audio=%d deletes=%d queued=%d notices=%d", len(snd.photos), len(snd.audio), len(snd.Deletes), len(q.jobs), len(snd.Messages))
+	}
+}
+
+func TestTikTokPhotoPostFlushPreservesTopic(t *testing.T) {
+	photoPostServer(t, false, 2, "ok")
+	snd := &photoPostSender{sendErr: errors.New("connection reset")}
+	q := &fakeDeferredQueue{}
+	msg := ttTestMessage("https://www.tiktok.com/@u/photo/1")
+	msg.MessageThreadID = 17
+	log := slog.New(slog.DiscardHandler)
+	processTikTok(context.Background(), snd, log, q, nil, nil, msg, msg.Text, "")
+	if len(q.jobs) != 1 || len(snd.Deletes) != 0 {
+		t.Fatalf("failed send must queue without deleting source: jobs=%d deletes=%d", len(q.jobs), len(snd.Deletes))
+	}
+	var p storage.RepostPayload
+	if err := json.Unmarshal(q.jobs[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	retry := &photoPostSender{}
+	job := q.jobs[0]
+	err := tryTikTokExport(context.Background(), retry, log, nil, nil,
+		job.ChatID, job.MessageID, p.MessageThreadID, job.UserID, p.URL, p.Username, p.FirstName, p.Caption)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.thread != 17 || len(retry.Deletes) != 1 {
+		t.Fatalf("flush moved photo post out of original topic: thread=%d deletes=%d", retry.thread, len(retry.Deletes))
 	}
 }

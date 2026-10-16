@@ -334,10 +334,11 @@ func enqueueRepostOrFail(
 			caption = msg.Text
 		}
 		payload, _ := json.Marshal(storage.RepostPayload{
-			URL:       sourceURL,
-			Username:  msg.From.Username,
-			FirstName: msg.From.FirstName,
-			Caption:   caption,
+			URL:             sourceURL,
+			Username:        msg.From.Username,
+			FirstName:       msg.From.FirstName,
+			Caption:         caption,
+			MessageThreadID: msg.MessageThreadID,
 		})
 		job := storage.DeferredJob{
 			UserID:    msg.From.ID,

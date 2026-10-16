@@ -71,7 +71,7 @@ func (a *App) flushDeferredJobs(userID int64, reportChatID int64, jobs []storage
 				err = fmt.Errorf("decode payload: %w", jErr)
 			} else {
 				err = tryTikTokExport(ctx, snd, a.log, a.repReactor, a.tiktokVideos,
-					job.ChatID, job.MessageID, job.UserID, p.URL, p.Username, p.FirstName, p.Caption)
+					job.ChatID, job.MessageID, p.MessageThreadID, job.UserID, p.URL, p.Username, p.FirstName, p.Caption)
 			}
 		case storage.DeferredInstagram:
 			var p storage.RepostPayload
