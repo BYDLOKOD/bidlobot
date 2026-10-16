@@ -65,6 +65,7 @@ const (
 // Client is the fully wrapped Telegram bot client. Construct with [New].
 type Client struct {
 	bot         *telego.Bot
+	richCaller  telegoapi.Caller
 	limiter     *ratelimit.Limiter
 	retryPolicy retry.Policy
 	mediaPolicy retry.Policy
@@ -77,7 +78,10 @@ type Client struct {
 // defaults to slog.Default) - a wrapper that silently skipped a layer
 // would defeat the point of the wrapper.
 type Config struct {
-	Bot         *telego.Bot
+	Bot *telego.Bot
+	// RichCaller supplies the transport for Bot API methods absent from telego.
+	// nil uses the context-bounded standard HTTP caller.
+	RichCaller  telegoapi.Caller
 	Limiter     *ratelimit.Limiter
 	RetryPolicy retry.Policy
 	Migrator    Migrator
@@ -112,6 +116,7 @@ func New(cfg Config) (*Client, error) {
 	media.MaxTransportAttempts = mediaMaxTransportAttempts
 	return &Client{
 		bot:         cfg.Bot,
+		richCaller:  cfg.RichCaller,
 		limiter:     cfg.Limiter,
 		retryPolicy: policy,
 		mediaPolicy: media,

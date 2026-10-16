@@ -89,13 +89,14 @@ func TestDownloadFromMirrorWritesStreamedBytes(t *testing.T) {
 	})
 
 	dir := t.TempDir()
-	path, err := downloadFromMirror(context.Background(), srv0(), "www.tiktok.com/@u/video/1", dir)
+	post, err := downloadFromMirror(context.Background(), srv0(), "www.tiktok.com/@u/video/1", dir)
 	if err != nil {
 		t.Fatalf("downloadFromMirror: %v", err)
 	}
 	if requestedURL != "https://www.tiktok.com/@u/video/1" {
 		t.Errorf("tikwm url param = %q, want the scheme-completed video URL", requestedURL)
 	}
+	path := post.VideoPath
 	if filepath.Dir(path) != dir {
 		t.Errorf("path %q is not inside workDir %q", path, dir)
 	}
@@ -154,23 +155,19 @@ func TestDownloadFromMirrorTikwmError(t *testing.T) {
 	}
 }
 
-// TestDownloadFromMirrorPhotoPostIsSentinel: a post that carries an
-// image list but whose play URL yields no MP4 is a photo post, and the
-// error must say so - that is what stops the job from being queued
-// forever. Measured shape: tikwm answers a /photo/ query with images plus
-// a play URL on a music host that never serves a video.
-func TestDownloadFromMirrorPhotoPostIsSentinel(t *testing.T) {
+// Photo metadata wins even if Play would successfully return audio bytes.
+func TestDownloadFromMirrorPhotoPostIgnoresPlay(t *testing.T) {
 	withTikwmMediaServer(t, func(w http.ResponseWriter, r *http.Request, base string) {
 		if r.URL.Path == tikwmPathVideo {
-			_, _ = w.Write([]byte(ttMediaJSON(base+"/slideshow.mp4", 0, "https://cdn.example/1.jpeg")))
+			_, _ = w.Write([]byte(ttMediaJSON(base+"/music.mp3", 99, "https://cdn.example/1.jpeg")))
 			return
 		}
-		w.WriteHeader(http.StatusNotFound)
+		t.Error("photo post must not fetch Play")
+		_, _ = w.Write([]byte("audio bytes"))
 	})
-
-	_, err := downloadFromMirror(context.Background(), srv0(), "https://www.tiktok.com/@u/photo/1", t.TempDir())
-	if !errors.Is(err, errNoVideo) {
-		t.Fatalf("error = %v, want errNoVideo", err)
+	post, err := downloadFromMirror(context.Background(), srv0(), "https://www.tiktok.com/@u/photo/1", t.TempDir())
+	if err != nil || post.VideoPath != "" || len(post.Images) != 1 || post.Images[0] != "https://cdn.example/1.jpeg" {
+		t.Fatalf("post=%+v err=%v", post, err)
 	}
 }
 
@@ -209,14 +206,14 @@ func TestDownloadTikTokPrefersMirror(t *testing.T) {
 		return "", errors.New("yt-dlp must not be called when the mirror answers")
 	})
 
-	path, err := downloadTikTok(context.Background(), "vt.tiktok.com/ZSq5d4Rxh/", t.TempDir())
+	post, err := downloadTikTok(context.Background(), "vt.tiktok.com/ZSq5d4Rxh/", t.TempDir())
 	if err != nil {
 		t.Fatalf("downloadTikTok: %v", err)
 	}
 	if dlp.Load() != 0 {
 		t.Errorf("yt-dlp ran %d times, want 0", dlp.Load())
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(post.VideoPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +239,7 @@ func TestDownloadTikTokFallsBackToYtdlp(t *testing.T) {
 		return path, nil
 	})
 
-	path, err := downloadTikTok(context.Background(), "vt.tiktok.com/ZSq5d4Rxh/", t.TempDir())
+	post, err := downloadTikTok(context.Background(), "vt.tiktok.com/ZSq5d4Rxh/", t.TempDir())
 	if err != nil {
 		t.Fatalf("downloadTikTok: %v", err)
 	}
@@ -252,7 +249,7 @@ func TestDownloadTikTokFallsBackToYtdlp(t *testing.T) {
 	if seenURL != "vt.tiktok.com/ZSq5d4Rxh/" {
 		t.Errorf("yt-dlp got %q, want the raw link (the yt-dlp path completes the scheme)", seenURL)
 	}
-	got, err := os.ReadFile(path)
+	got, err := os.ReadFile(post.VideoPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,9 +277,8 @@ func TestDownloadTikTokReportsBothPaths(t *testing.T) {
 	}
 }
 
-// TestProcessTikTokPhotoPostDeclines: a photo post posted in a chat gets
-// a decline note and no queue entry - the job could never succeed.
-func TestProcessTikTokPhotoPostDeclines(t *testing.T) {
+// An unsupported sender must retain the source and decline, not send audio.
+func TestTikTokPhotoPostUnsupportedSenderKeepsOriginal(t *testing.T) {
 	withTikwmMediaServer(t, func(w http.ResponseWriter, _ *http.Request, _ string) {
 		_, _ = w.Write([]byte(`{"code":0,"msg":"success","data":{"play":"","images":["https://cdn.example/1.jpeg"]}}`))
 	})

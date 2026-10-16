@@ -663,10 +663,15 @@ func sendCommentLocalAlbum(ctx context.Context, snd youtubeMediaSender, client *
 var downloadTikTokVideo = defaultDownloadTikTokVideo
 
 func defaultDownloadTikTokVideo(ctx context.Context, tiktokURL, workDir string) (string, error) {
-	videoPath, err := downloadTikTok(ctx, tiktokURL, workDir)
+	post, err := downloadTikTok(ctx, tiktokURL, workDir)
 	if err != nil {
 		return "", err
 	}
+	// This consumer specifically needs a video to accompany a comment quote.
+	if len(post.Images) > 0 {
+		return "", errNoVideo
+	}
+	videoPath := post.VideoPath
 	if err := validateTikTokVideo(videoPath); err != nil {
 		return "", err
 	}

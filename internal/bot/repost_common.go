@@ -329,11 +329,15 @@ func enqueueRepostOrFail(
 	sourceURL string,
 ) {
 	if queue != nil {
+		caption := msg.Caption
+		if jobType == storage.DeferredTikTok && caption == "" {
+			caption = msg.Text
+		}
 		payload, _ := json.Marshal(storage.RepostPayload{
 			URL:       sourceURL,
 			Username:  msg.From.Username,
 			FirstName: msg.From.FirstName,
-			Caption:   msg.Caption,
+			Caption:   caption,
 		})
 		job := storage.DeferredJob{
 			UserID:    msg.From.ID,
