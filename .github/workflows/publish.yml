@@ -1,0 +1,213 @@
+# Publishes the production image and rolls the cluster (deploy path:
+# docs/llm/70_deployment.md). A linear chain where every stage gates
+# the next:
+#
+#   test -> image -> smoke + sign -> update-manifest
+#
+# ci.yml vets/tests the same push, but it is an independent workflow -
+# it can be red while publish.yml ships. The in-chain test job closes
+# that gap; smoke + sign keep an unbootable or unsigned image off the
+# gitops branch; update-manifest pins the image by digest, so even a
+# tag-overwrite in GHCR can no longer reach the cluster.
+name: publish
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE: ghcr.io/bydlokod/bidlobot
+
+jobs:
+  # Gates the build with the same checks ci.yml runs on a master push;
+  # minus the coverage artifact (publish cares about the binary, not
+  # the report).
+  test:
+    name: vet + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test ./...
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      TAG: ${{ steps.tag.outputs.TAG }}
+      DIGEST: ${{ steps.digest.outputs.DIGEST }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Compute image tag
+        id: tag
+        run: |
+          tag="master-${GITHUB_SHA:0:7}"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing $IMAGE:$tag"
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        id: build
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ env.TAG }}
+            COMMIT=${{ github.sha }}
+          tags: ${{ env.IMAGE }}:${{ env.TAG }}
+
+      # The digest is the deploy pin: sign signs it and the gitops
+      # manifest records it, so the mutable tag alone can never roll
+      # the cluster. build-push-action emits the pushed index digest;
+      # the imagetools inspect is a fallback if that output is ever
+      # empty.
+      - name: Capture pushed image digest
+        id: digest
+        env:
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          digest="$BUILD_DIGEST"
+          if [ -z "$digest" ]; then
+            digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{json .Manifest.Digest}}' | tr -d '"')"
+          fi
+          case "$digest" in
+            sha256:*) ;;
+            *) echo "no digest resolved for ${IMAGE}:${TAG}" >&2; exit 1 ;;
+          esac
+          echo "DIGEST=$digest" >> "$GITHUB_OUTPUT"
+          echo "image digest: $digest"
+
+  # Boots the pushed image (pulled by digest) before anything points
+  # the cluster at it. The bot fails fast at the Telegram auth gate -
+  # GetMe runs before the health listener exists (cmd/bidlobot/main.go)
+  # - so with a fake token the strongest boot check is that documented
+  # path itself: config valid, data dir + bbolt open as the runtime
+  # user, a real TLS round-trip to api.telegram.org, then the
+  # "get bot info" error and exit 1. Nothing before that gate may
+  # fail. (/livez stays unprobed here: it cannot answer until Telegram
+  # auth succeeds; kubelet proves it live in the cluster.)
+  smoke:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Config + boot check on the pushed image
+        env:
+          DIGEST: ${{ needs.image.outputs.DIGEST }}
+        run: |
+          ref="${IMAGE}@${DIGEST}"
+          docker pull "$ref"
+
+          # --check-config contract, same as ci.yml's docker job.
+          docker run --rm \
+            -e TG_BOT_TOKEN= \
+            -e BOT_OWNER_ID=1 \
+            "$ref" --check-config && { echo "empty token must fail --check-config" >&2; exit 1; } || true
+          docker run --rm \
+            -e TG_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi \
+            -e BOT_OWNER_ID=1 \
+            "$ref" --check-config
+
+          cid="$(docker run -d \
+            -e TG_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi \
+            -e BOT_OWNER_ID=1 \
+            "$ref")"
+          trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          code="$(docker wait "$cid")"
+          docker logs "$cid" || true
+          echo "container exited with $code"
+          if ! docker logs "$cid" 2>&1 | grep -q 'get bot info'; then
+            echo "boot never reached the Telegram auth gate" >&2
+            exit 1
+          fi
+          if [ "$code" != "1" ]; then
+            echo "expected exit 1 at the auth gate, got $code" >&2
+            exit 1
+          fi
+
+  # Keyless (OIDC) signature over the digest the deploy will pin. The
+  # signature lands as a *.sig tag next to the image in GHCR, which is
+  # why the job keeps packages: write plus a docker login.
+  sign:
+    needs: image
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      # Job-level permissions replace the workflow set; id-token (OIDC)
+      # is granted to this job only.
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign image
+        env:
+          DIGEST: ${{ needs.image.outputs.DIGEST }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+  # Deploys are tag bumps: rewrite newTag + digest on the gitops branch
+  # and let Flux roll the cluster. GITHUB_TOKEN pushes never trigger
+  # workflows, so this cannot loop back into publish.
+  update-manifest:
+    needs: [image, smoke, sign]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: gitops
+
+      - name: Bump newTag + digest in deploy/kustomization.yaml
+        env:
+          TAG: ${{ needs.image.outputs.TAG }}
+          DIGEST: ${{ needs.image.outputs.DIGEST }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          sed -i "s|newTag: .*|newTag: $TAG|" deploy/kustomization.yaml
+          sed -i "s|digest: .*|digest: $DIGEST|" deploy/kustomization.yaml
+          if git diff --quiet -- deploy/kustomization.yaml; then
+            echo "newTag already $TAG; nothing to push"
+            exit 0
+          fi
+          git add deploy/kustomization.yaml
+          git commit -m "chore(deploy): bump image tag to $TAG"
+          git push

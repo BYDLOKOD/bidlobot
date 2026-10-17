@@ -8,22 +8,68 @@ touches:
   - deploy/env.example
   - scripts/backup.sh
   - .github/workflows/ci.yml
-  - .omp/skills/bidlobot-deploy/scripts/deploy.sh
-  - .omp/skills/bidlobot-deploy/scripts/status.sh
+  - .github/workflows/publish.yml
+  - .omp/skills/bidlobot-deploy/SKILL.md
   - cmd/bidlobot/
 written: 2026-05-14
-updated: 2026-09-25
+updated: 2026-10-17
 ---
 
 # Deployment
 
-Production runs as a docker-compose stack with a **single service**:
-`bot` (the Go binary). Single bot replica (Telegram allows exactly one
+Production runs on the homelab k8s cluster, deployed from this repo's
+`gitops` branch via Flux (see [Kubernetes deploy
+(production)](#kubernetes-deploy-production)). The docker-compose stack
+below is the local / standalone-host flow: a **single service** `bot`
+(the Go binary). Single bot replica (Telegram allows exactly one
 getUpdates poller per token). Named volume for bbolt, internal
 healthcheck (no host ports published), non-root container with tini as
 PID 1. Revised 2026-08-16 (xpost rework: the `xshot` Puppeteer sidecar
 was retired; the bot resolves X posts via the FixTweet API and
 downloads twimg media directly).
+
+## Kubernetes deploy (production)
+
+Since 2026-10-11 the bot runs in the `bidlobot` namespace of the
+homelab k3s cluster (context `arsolitt@homelab`). Since 2026-10-17 the
+payload is reconciled by Flux from the orphan `gitops` branch of this
+repository, which holds only `deploy/`:
+
+- `deployment.yaml` - single replica, `Recreate` strategy (one
+  `getUpdates` poller per token + exclusive bbolt flock), `envFrom`
+  `bidlobot-secrets`, kubelet probes on the static `/livez` (never
+  `/health` - see [Health and version](#health-and-version)).
+- `pvc.yaml` - `bidlobot-data`, StorageClass `local-retain`, 2Gi.
+- `externalsecret.yaml` - pure reference, no values: ExternalSecret
+  `bidlobot-secrets` pulls `TG_BOT_TOKEN` / `BOT_OWNER_ID` /
+  `DEEPSEEK_API_KEY` from the Bitwarden Secrets Manager (project
+  `homelab`) via the `bitwarden` ClusterSecretStore on the cluster and
+  materializes the Secret the Deployment `envFrom`s; `deletionPolicy:
+  Retain`.
+- `kustomization.yaml` - the Deployment image is the placeholder
+  `ghcr.io/bydlokod/bidlobot:master`; the `images:` transformer
+  rewrites it, and CI rewrites its `newTag` + `digest` lines - the
+  digest pins what runs.
+
+Deploy path: push to `master` -> `publish.yml` runs a linear chain:
+`test` (vet + `go test`) gates `image` (linux/amd64, GHCR; emits the
+pushed `TAG` + `DIGEST`), then `smoke` (pull by digest and boot the
+image with a fake token: `--check-config` exit 0, then the documented
+fail-fast Telegram auth gate - GetMe precedes the health listener, so
+`/livez` cannot serve under a fake token; kubelet proves liveness
+in-cluster) and `sign` (cosign keyless OIDC over the digest) both gate
+`update-manifest`, which rewrites `newTag` + `digest` on the `gitops`
+branch (GITHUB_TOKEN pushes never trigger workflows, so no CI loop)
+-> Flux reconciles the digest-pinned image (GitRepository `bidlobot`,
+`ref: {branch: gitops}`, interval 5m - public repo, no PAT, GitHub
+unauthenticated budget 60 req/h per IP; owner Kustomization `path:
+deploy`, interval 1m, `prune: false`, `wait: true` - both live in the
+homelab gitops repo, `clusters/homelab/{sources,apps}/bidlobot.yaml`)
+-> Recreate rolls the single poller. Because the manifest pins the
+digest, overwriting a tag in GHCR cannot reach the cluster, and a red
+test can no longer ship an image. Bootstrap (bbolt seed restore) and
+backup (scale-to-0 helper-pod recipe) runbooks live in
+`deploy/README.md` on the `gitops` branch.
 
 ## Prerequisites
 
@@ -184,11 +230,10 @@ docker compose up -d --build
 docker compose logs -f bot
 ```
 
-Deploy helper: `.omp/skills/bidlobot-deploy/scripts/deploy.sh`
-(git push -> SSH with `DEEPSEEK_API_KEY` from `pass show
-token/deepseek` -> `docker compose up -d --build` -> health wait) and
-`status.sh` (env + container status). NOTE: `status.sh` still greps
-`GLM_` in the host env - stale, cosmetic only.
+Deploy helper: the VM-era scripts (`deploy.sh`, `status.sh`) were
+removed together with the VM deploy they served;
+`.omp/skills/bidlobot-deploy/SKILL.md` now documents the gitops-branch
+flow and the kubectl/flux status and rollback commands.
 
 Verifiable upgrade facts:
 

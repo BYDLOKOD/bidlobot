@@ -1,79 +1,98 @@
 ---
 name: bidlobot-deploy
-description: "Deploy bidlobot to production (VM100 Docker), check status, view logs, rollback. Use when user asks to deploy/push/update/restart/release/status the bidlobot Telegram bot."
+description: "Deploy bidlobot to the homelab k8s cluster (gitops branch + Flux), check status, view logs, rollback. Use when user asks to deploy/push/update/restart/release/status the bidlobot Telegram bot."
 ---
 
-# Bidlobot Deploy
+# BidloBot Deploy
 
-Deploy, status-check, and diagnose the bidlobot Telegram bot running as a Docker Compose stack on the home server.
-
-**Script directory:** `.omp/skills/bidlobot-deploy/scripts/` (relative to repo root)
+Production runs in the `bidlobot` namespace of the homelab k3s cluster
+(context `arsolitt@homelab`), reconciled by Flux from the orphan `gitops`
+branch of this repository. The VM100 docker-compose deploy and its scripts
+(`deploy.sh`, `status.sh`) were removed 2026-10-17 with the host they served.
 
 ## HARD GATE
 
-Before any deploy:
-1. `go test ./...` (or at minimum `go test ./internal/domain/captcha/ ./internal/bot/ -run "Captcha"`) must be GREEN.
-2. `gofmt -l` on all changed files must be EMPTY.
-3. Commit is pushed to `origin/master` - the deploy script does `git reset --hard origin/master` (handles force-push history rewrites that would break `--ff-only`).
-4. **Ask the user for explicit OK before restarting the production container.** The bot processes live community updates; a mid-day restart drops in-flight messages until the long-poll reconnects (~2 s). State the restart duration.
-5. **Never commit code you did not write.** The dev working tree may have uncommitted third-party changes - stage ONLY your files. Check: `git status --porcelain` before `git add`.
+1. `go test ./...` must be GREEN; `gofmt -l` on changed files must be EMPTY.
+2. **Pushing to `master` IS a production deploy**: CI runs the
+   publish chain (test -> image -> smoke + sign -> update-manifest),
+   bumps `newTag` + `digest` on the `gitops` branch, and Flux rolls
+   the pod within ~6 min (build time + 5m source interval + 1m
+   reconcile). Ask the user for explicit OK before pushing - the
+   Recreate rollout drops in-flight messages for ~2 s while the
+   long-poll reconnects.
+3. Never commit code you did not write: `git status --porcelain` before
+   `git add`, stage only your files.
 
-## Current state (2026-07-02)
+## Deploy path
 
-| Field | Value |
-|---|---|
-| Deploy host | `veschin@192.168.0.101` (VM100 guest on PVE `.106`) |
-| Repo path | `~/bidlobot/` |
-| Container | `bidlobot` (image `bidlobot:latest`) |
-| Features enabled | summarization (GLM), captcha (2026-07-02, live) |
-| Captcha timeout | `1m` |
-
-## Scripts
-
-| Script | Path | What |
-|---|---|---|
-| `deploy.sh` | `.omp/skills/bidlobot-deploy/scripts/deploy.sh` | Full deploy: push -> pull -> rebuild -> restart -> health-check |
-| `status.sh` | `.omp/skills/bidlobot-deploy/scripts/status.sh` | Read-only: container, git, env, errors, health endpoint |
-
-## Upgrade workflow (routine)
-
-```sh
-# 1. Verify locally
-go test ./internal/domain/captcha/ ./internal/bot/
-gofmt -l $(git diff --name-only HEAD)
-
-# 2. Stage and commit (only your files!)
-git add <your-files>
-git commit -m "<type>(<scope>): ..."
-git push origin master
-
-# 3. Deploy
-.omp/skills/bidlobot-deploy/scripts/deploy.sh --skip-push
-
-# 4. Verify
-.omp/skills/bidlobot-deploy/scripts/status.sh
+```
+push to master
+  -> publish.yml test job: go vet + go test gate the build
+  -> publish.yml image job: ghcr.io/bydlokod/bidlobot:<sha7> (linux/amd64)
+  -> publish.yml smoke job: boot the pushed digest (--check-config + fail-fast auth gate)
+  -> publish.yml sign job: cosign keyless OIDC over the digest
+  -> publish.yml update-manifest job: sed newTag + digest in deploy/kustomization.yaml on gitops
+  -> Flux GitRepository `bidlobot` (branch gitops, ns flux-system; reconcile on push once a webhook Receiver is wired, otherwise manual/gated by the source interval)
+  -> Recreate rollout of the single getUpdates poller
 ```
 
-## Rollback
+Wiring (GitRepository + owner Kustomization) lives in the homelab gitops
+repo, `clusters/homelab/{sources,apps}/bidlobot.yaml`. Manifests and the
+bootstrap/backup runbooks live in `deploy/` on the `gitops` branch.
 
-```sh
-ssh veschin@192.168.0.101 'cd ~/bidlobot && git reset --hard <known-good-sha> && docker compose up -d --build'
+## Manual pin (rollback or hotpin)
+
+On the `gitops` branch, set BOTH `newTag` and `digest` in
+`deploy/kustomization.yaml` to the target revision and push - with
+`digest:` present the digest wins, so a `newTag`-only edit changes
+nothing that runs. Nodes cache images (`IfNotPresent`), so pinning
+back to a previously pulled digest is instant. Tags are immutable
+(`master-<sha7>`, see `README.md`), never overwrite one;
+find an older digest with `docker buildx imagetools inspect
+ghcr.io/bydlokod/bidlobot:<tag>`.
+
+Code rollback: `git revert` on `master` and push - CI rebuilds, and
+the chain rewrites `newTag` + `digest` itself.
+
+## Status
+
+```fish
+set ctx arsolitt@homelab
+kubectl --context $ctx -n bidlobot get deploy,pods
+kubectl --context $ctx -n bidlobot get externalsecret bidlobot-secrets
+kubectl --context $ctx -n bidlobot logs deploy/bidlobot --since 10m
+flux --context $ctx get sources git -A
+flux --context $ctx get kustomizations -A
+kubectl --context $ctx -n bidlobot exec deploy/bidlobot -- \
+    wget -qO- http://127.0.0.1:8080/livez
 ```
 
-Bbolt DB is forward-compatible - new buckets are `CreateBucketIfNotExists`, rollback ignores unknown buckets.
+Pod health detail (`/health` poll-freshness reason strings, `/version`
+build info): same exec pattern with `/health` and `/version`. Kubelet
+probes use `/livez` only - see `docs/llm/70_deployment.md`.
+
+## Secrets
+
+Values live in the Bitwarden Secrets Manager project `homelab`
+(`bidlobot-tg-bot-token`, `bidlobot-bot-owner-id`,
+`bidlobot-deepseek-api-key`), pulled by the ExternalSecret
+`bidlobot-secrets` through the `bitwarden` ClusterSecretStore; nothing
+secret is committed anywhere. To rotate: change the value in Bitwarden,
+then force a sync and restart (envFrom is read at container start):
+
+```fish
+kubectl --context arsolitt@homelab -n bidlobot annotate externalsecret \
+    bidlobot-secrets force-sync=$(date +%s) --overwrite
+kubectl --context arsolitt@homelab -n bidlobot rollout status deploy/bidlobot \
+    --timeout=3m || kubectl --context arsolitt@homelab -n bidlobot rollout restart deploy/bidlobot
+```
 
 ## Failure modes
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Container flaps `unhealthy` | bbolt lock or Telegram API unreachable | `docker compose logs --since 1m bot`, check `getMe` errors |
-| Summarize fails with `No API key found for deepseek` | container started by a manual `docker compose up -d`: `DEEPSEEK_API_KEY` is a pass-through from the caller's env, not an env-file entry | recreate through `deploy.sh`, or `export DEEPSEEK_API_KEY="$(pass show token/deepseek)"` in the same shell before `docker compose up -d` |
-| `git pull --ff-only` fails on host | History rewritten | `git reset --hard origin/master` |
-| No `captcha enabled` in logs | CAPTCHA_ENABLED=false or missing in env | Check env file; restart |
-| CI fails on test you didn't write | Uncommitted user work | Stage only your files |
-
-## Session mistakes
-
-- **2026-07-02:** Deployed to production + restarted bot twice without user OK - violated HARD GATE point 4.
-- **2026-07-02:** Deployed with CAPTCHA_ENABLED=true before smoke-testing real Telegram callback/chat_member shapes. Fix: disabled in prod; smoke test in progress.
-- **2026-09-17:** Changed `PI_MODEL` by appending to `~/bidlobot/env` and recreating with a bare `docker compose up -d` over SSH. `DEEPSEEK_API_KEY` is not in that file - compose forwards it from the calling shell - so the recreated container lost the summarization credential. Restored by piping `pass show token/deepseek` into the remote shell and recreating again. Use `deploy.sh`, or export the key in the same SSH command.
+| ExternalSecret `Ready=False` (ProviderNotFound) | Bitwarden secret missing/renamed | create it in the project, check `kubectl describe es` events |
+| Pod `Pending` | PVC/node (single `local-retain` volume) | check events; volume is node-pinned |
+| Summarize fails `No API key found for deepseek` | `DEEPSEEK_API_KEY` missing from the Secret | Bitwarden value + rotation recipe above |
+| getUpdates 409 conflict | two pollers on one token | never scale past `replicas: 1`; stop any local run using the prod token |
+| Rollout stuck on new tag | image build failed, or smoke/sign failed before `update-manifest` | check the publish workflow run; pin `newTag` + `digest` back |

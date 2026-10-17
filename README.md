@@ -38,8 +38,8 @@ The full reference lives in `docs/llm/`:
 - `45_summarize.md` - the OMP/Pi summarization provider + budget model.
 - `60_architecture.md` - layered composition, middleware order, bbolt
   schema, invariants, failure matrix.
-- `70_deployment.md` - docker-compose stack (single bot service), env
-  vars, healthcheck, backup, rollback.
+- `70_deployment.md` - k8s/gitops production deploy, docker-compose
+  local stack, env vars, healthcheck, backup, rollback.
 - `handoff.md` - current state + manual smoke checklist.
 
 ## Quick start (local dev)
@@ -117,6 +117,31 @@ deploy/
 Dockerfile         multi-stage, debian runtime, yt-dlp + ffmpeg + omp
 docker-compose.yml single bot service, named volume, internal healthcheck
 ```
+
+## Image provenance
+
+Published images live at `ghcr.io/bydlokod/bidlobot` and are built by
+`.github/workflows/publish.yml` on every push to `master`, from the
+pushed commit itself. Tags are `master-<GITHUB_SHA:0:7>` - one
+immutable tag per commit, passed to the build as `VERSION`, with the
+full sha as `COMMIT`, so `/version` reports exactly what runs.
+
+
+Production deploys from the orphan `gitops` branch of this repo, which
+holds only `deploy/` (Deployment, PVC, ExternalSecret, kustomization).
+`publish.yml` is a linear chain - test -> image -> smoke + sign ->
+update-manifest - so a red test never builds an image (ci.yml is an
+independent workflow and cannot veto the deploy on its own), the
+image is booted and cosign-signed (keyless OIDC) before anything
+points the cluster at it, and the `update-manifest` job rewrites
+`newTag` AND `digest` in `deploy/kustomization.yaml` on that branch.
+Flux reconciles the digest-pinned image (GitRepository `bidlobot` +
+owner Kustomization in the homelab gitops repo) and rolls the pod;
+because the deploy is pinned by digest, overwriting a tag in GHCR
+can no longer reach the cluster. Secrets are references only: an
+ExternalSecret maps Bitwarden Secrets Manager entries to the
+`bidlobot-secrets` Secret via the `bitwarden` ClusterSecretStore - no
+values in this repo.
 
 ## License
 
