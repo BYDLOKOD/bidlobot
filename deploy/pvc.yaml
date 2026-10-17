@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bidlobot-data
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-retain
+  resources:
+    requests:
+      storage: 2Gi

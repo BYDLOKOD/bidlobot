@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bidlobot
+resources:
+  - deployment.yaml
+  - pvc.yaml
+  - externalsecret.yaml
+images:
+  # CI (publish.yml update-manifest) rewrites newTag+digest; the digest pins what runs.
+  - name: ghcr.io/bydlokod/bidlobot
+    newTag: master-8027e8f
+    digest: sha256:47c2bcb08026f1f2fef3819db57f47241a324dd5afefcc0f1bf39f65d7a8d5ed

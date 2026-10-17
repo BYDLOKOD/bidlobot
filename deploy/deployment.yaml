@@ -1,0 +1,115 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bidlobot
+  labels:
+    app: bidlobot
+spec:
+  replicas: 1
+  # Telegram allows exactly one getUpdates poller per token and bbolt holds an
+  # exclusive flock, so the old pod must release the volume before the new one
+  # starts - rolling with the default strategy could run two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bidlobot
+  template:
+    metadata:
+      labels:
+        app: bidlobot
+    spec:
+      # matches the compose service's stop_grace_period of 30s
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bidlobot
+          image: ghcr.io/bydlokod/bidlobot:master
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: bidlobot-secrets
+          env:
+            - name: PI_MODEL
+              value: deepseek/deepseek-flash
+            # Opt-in feature (config default is false): without it the bot
+            # never challenges new members - a join is recorded silently.
+            # It was live on the old VM deploy but was not carried over
+            # during onboarding; enabled 2026-10-11 after the audit.
+            - name: CAPTCHA_ENABLED
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 8080
+          # Probes target /livez: a static 200 while the HTTP server lives,
+          # i.e. process liveness. /health is dependency-aware and must not
+          # drive kubelet: it answers 503 when no successful Telegram poll
+          # happened for 5 minutes (Telegram outage or a wedged poll loop),
+          # and restarting the pod cannot fix either. History: before the
+          # fork build master-ed97cc3-f0963759, /health was freshness-gated
+          # on *user updates* and probing it killed a healthy idle bot every
+          # ~6.5 min (63 restarts in 8h, 2026-10-11); /version was the
+          # interim target until /livez shipped. /health stays for compose's
+          # HEALTHCHECK and manual diagnosis (poll-heartbeat reason strings).
+          # exec, not httpGet: matches the image's own HEALTHCHECK style
+          # (wget against the loopback) so the two cannot drift apart.
+          startupProbe:
+            exec:
+              command:
+                - wget
+                - --quiet
+                - --tries=1
+                - --spider
+                - http://127.0.0.1:8080/livez
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 18
+          livenessProbe:
+            exec:
+              command:
+                - wget
+                - --quiet
+                - --tries=1
+                - --spider
+                - http://127.0.0.1:8080/livez
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command:
+                - wget
+                - --quiet
+                - --tries=1
+                - --spider
+                - http://127.0.0.1:8080/livez
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          # compose caps the bot at 256M; 512Mi gives headroom for the bundled
+          # omp/bun child process and yt-dlp/ffmpeg during media downloads.
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            # No readOnlyRootFilesystem (unlike the other apps): the bundled
+            # toolchain (omp/bun, yt-dlp/ffmpeg) writes temp files, which is why
+            # upstream also runs the image with a writable rootfs.
+          volumeMounts:
+            - name: bidlobot-data
+              mountPath: /var/lib/bidlobot
+      volumes:
+        - name: bidlobot-data
+          persistentVolumeClaim:
+            claimName: bidlobot-data
