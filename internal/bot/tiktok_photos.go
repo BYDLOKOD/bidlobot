@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/mymmrac/telego"
 	"github.com/veschin/bidlobot/internal/shared/tgclient"
@@ -14,6 +15,27 @@ import (
 
 type slideshowSender interface {
 	SendSlideshow(context.Context, *tgclient.SlideshowParams) (*telego.Message, error)
+}
+
+// The slideshow downloads run sequentially: up to MaxSlideshowPhotos images
+// plus the soundtrack, each bounded by tiktokCommentHTTPClient's own 30s
+// timeout. One fixed budget (the old mirrorDownloadTimeout) made a large
+// slideshow impossible: 50 slow fetches could never finish in 120s, so every
+// /flush re-ran the same doomed batch until the deferred TTL. The batch
+// allowance therefore scales with the attachment count.
+const (
+	slideshowDownloadBase          = 30 * time.Second
+	slideshowDownloadPerAttachment = 30 * time.Second
+)
+
+// slideshowDownloadBudget returns the total deadline for one slideshow's
+// downloads. It matches the worst case the per-request client timeout already
+// allows, so a single stalled file can never starve the rest of the batch.
+func slideshowDownloadBudget(attachments int) time.Duration {
+	if attachments < 1 {
+		attachments = 1
+	}
+	return slideshowDownloadBase + time.Duration(attachments)*slideshowDownloadPerAttachment
 }
 
 // repostTikTokPhotos materializes every slide before one atomic rich-message
@@ -32,12 +54,17 @@ func repostTikTokPhotos(ctx context.Context, snd youtubeMediaSender, log *slog.L
 	if len(images) == 0 || attachments > tgclient.MaxSlideshowPhotos {
 		return nil, repostPermanent, fmt.Errorf("tiktok: photo post has %d media attachments, supported maximum is %d", attachments, tgclient.MaxSlideshowPhotos)
 	}
-	dlCtx, cancel := context.WithTimeout(ctx, mirrorDownloadTimeout)
+	dlCtx, cancel := context.WithTimeout(ctx, slideshowDownloadBudget(attachments))
 	defer cancel()
 	photos := make([]telego.InputFile, 0, len(images))
 	for i, imageURL := range images {
 		path := filepath.Join(workDir, fmt.Sprintf("slide-%02d.jpg", i))
 		if err := downloadCommentImage(dlCtx, tiktokCommentHTTPClient, imageURL, path); err != nil {
+			// A slide over Telegram's photo cap can never shrink on a retry:
+			// drop the job instead of keeping it in the queue for the whole TTL.
+			if errors.Is(err, errTikTokImageTooLarge) {
+				return nil, repostPermanent, fmt.Errorf("photo %d: %w", i+1, err)
+			}
 			return nil, repostTransient, fmt.Errorf("photo %d: %w", i+1, err)
 		}
 		f, err := os.Open(path)

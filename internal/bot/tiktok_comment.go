@@ -128,6 +128,11 @@ var tiktokCommentHTTPClient = &http.Client{Timeout: 30 * time.Second}
 // the scanned pages (deep-buried comment or a reply permalink).
 var errTikTokCommentNotFound = errors.New("tiktok: comment not found in scanned pages")
 
+// errTikTokImageTooLarge marks a downloaded image that cannot be sent as a
+// Telegram photo. It is permanent: the same URL will always exceed the cap, so
+// callers must drop the job instead of retrying it through /flush.
+var errTikTokImageTooLarge = errors.New("tiktok: image exceeds Telegram's photo upload limit")
+
 // --- tikwm pacer ---------------------------------------------------------
 
 var (
@@ -543,7 +548,7 @@ func downloadCommentImage(ctx context.Context, client *http.Client, imageURL, pa
 		return fmt.Errorf("closing image: %w", closeErr)
 	}
 	if written > tiktokCommentMediaCap {
-		return fmt.Errorf("image exceeds %d bytes", tiktokCommentMediaCap)
+		return fmt.Errorf("%w (%d bytes)", errTikTokImageTooLarge, tiktokCommentMediaCap)
 	}
 	return nil
 }

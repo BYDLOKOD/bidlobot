@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoapi"
@@ -78,6 +79,10 @@ func photoPostServer(t *testing.T, broken bool, count int, musicMode string) {
 				w.WriteHeader(http.StatusServiceUnavailable)
 				return
 			}
+			if musicMode == "oversized" {
+				_, _ = w.Write(make([]byte, tiktokCommentMediaCap+1))
+				return
+			}
 			_, _ = w.Write([]byte("second image bytes"))
 		case "/music.mp3":
 			if musicMode == "broken" {
@@ -126,6 +131,40 @@ func TestTikTokPhotoPostRepostsAllSlidesBeforeDelete(t *testing.T) {
 	}
 	if len(snd.Videos) != 0 || len(q.jobs) != 0 || len(snd.Deletes) != 1 || snd.Deletes[0].MessageID != msg.MessageID {
 		t.Fatalf("video=%d queue=%d deletes=%+v", len(snd.Videos), len(q.jobs), snd.Deletes)
+	}
+}
+
+func TestSlideshowDownloadBudgetScalesWithAttachments(t *testing.T) {
+	for _, tc := range []struct {
+		attachments int
+		want        time.Duration
+	}{
+		{0, 60 * time.Second},
+		{1, 60 * time.Second},
+		{2, 90 * time.Second},
+		{50, 1530 * time.Second},
+	} {
+		if got := slideshowDownloadBudget(tc.attachments); got != tc.want {
+			t.Fatalf("budget(%d) = %s, want %s", tc.attachments, got, tc.want)
+		}
+	}
+}
+
+func TestTikTokPhotoPostOversizedSlideIsPermanent(t *testing.T) {
+	photoPostServer(t, false, 2, "oversized")
+	snd := &photoPostSender{}
+	q := &fakeDeferredQueue{}
+	msg := ttTestMessage("https://www.tiktok.com/@u/photo/1")
+	processTikTok(context.Background(), snd, slog.New(slog.DiscardHandler), q, nil, nil, msg, msg.Text, "")
+	if len(q.jobs) != 0 || len(snd.Deletes) != 0 || len(snd.Messages) != 1 {
+		t.Fatalf("oversized slide must be permanent: queued=%d deletes=%d notices=%d", len(q.jobs), len(snd.Deletes), len(snd.Messages))
+	}
+
+	// The flush path must drop the job instead of keeping it until the TTL.
+	flush := &photoPostSender{}
+	err := tryTikTokExport(context.Background(), flush, slog.New(slog.DiscardHandler), nil, nil, -100123, 42, 0, 99, "https://www.tiktok.com/@u/photo/1", "alice", "Alice", "caption")
+	if err != nil || len(flush.Deletes) != 0 || len(flush.Messages) != 1 {
+		t.Fatalf("oversized slide kept in queue: err=%v deletes=%d notices=%d", err, len(flush.Deletes), len(flush.Messages))
 	}
 }
 
