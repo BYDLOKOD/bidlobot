@@ -24,7 +24,7 @@ Pushing to the fork's `master` is the whole deploy. The publish workflow
 on this branch and pushes `chore(deploy): bump image tag to <tag>`.
 Flux picks the commit up through the `bidlobot` GitRepository
 (`https://github.com/BYDLOKOD/bidlobot.git`, `ref: {branch: gitops}`,
-interval 5m) and the owner Kustomization (`path: deploy`, interval 1m,
+interval 1h, push-triggered via a webhook Receiver) and the owner Kustomization (`path: deploy`, interval 1m,
 `prune: false`, `wait: true`); both live in the homelab gitops repo at
 `clusters/homelab/{sources,apps}/bidlobot.yaml`. The kustomize
 `images:` transformer pins the actual tag — never edit the Deployment
