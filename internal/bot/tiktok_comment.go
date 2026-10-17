@@ -160,7 +160,8 @@ func tiktokCommentDecision(msg *telego.Message) (act bool, videoURL, commentID s
 		return false, "", ""
 	}
 	if msg.From == nil || msg.From.IsBot ||
-		shared.IsAnonymousAdmin(msg.From.ID) || msg.SenderChat != nil {
+		shared.IsAnonymousAdmin(msg.From.ID) || msg.SenderChat != nil ||
+		hasAttachedMedia(msg) {
 		return false, "", ""
 	}
 

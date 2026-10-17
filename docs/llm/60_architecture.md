@@ -129,8 +129,10 @@ slash commands and callbacks coexist.
 
 App-level middleware in `Run`: `recoverMiddleware` (outermost - a panic
 in any route below becomes a log record instead of a dead process),
-then `healthMiddleware` (update freshness), then `inFlightMiddleware`
-(per-update WaitGroup).
+then `inFlightMiddleware` (per-update WaitGroup). The /health freshness
+window is keyed on the long-poll loop instead (`App.pollUpdates`
+heartbeats on every completed `getUpdates` cycle, empty ones included);
+the update path no longer feeds health state.
 
 Side-effect axes:
 - Every chat-visible send flows through `tgclient.Client` (per-chat
@@ -235,7 +237,7 @@ No `edited_message`, no `chat_join_request`.
 | deferred GC | 10 min | 48h TTL jobs |
 | daily gracekick tick | `CLEANUP_DAILY_AT` UTC | idle (no seeding command) |
 | captcha sweep | min(timeout/3, 30s), >=5s | kicks unanswered challenges |
-| health server | - | /health + /version |
+| health server | - | /health + /livez + /version |
 
 ## Failure handling
 
@@ -265,7 +267,7 @@ No `edited_message`, no `chat_join_request`.
 | Game/stats flood | `cooldown.gateMsg` | silent drop (bounded notice) |
 | Per-chat rate burst | ratelimit queue | drop oldest + WARN |
 | Non-owner bot add | `membership.go` | LeaveChat + owner DM notice |
-| Health DB/updates/GetMe | `/health` 503 | reason in body |
+| Health DB/poll heartbeat/GetMe | `/health` 503 | reason in body; `/livez` stays 200 |
 | SIGINT/SIGTERM | `signal.NotifyContext` | cancel -> `App.Stop()` -> flush -> `db.Close()` |
 
 ## Deferred queue

@@ -108,7 +108,7 @@ Optional:
 
 - `LOG_LEVEL` -- debug|info|warn|error, default `info`.
 - `DB_PATH` -- bbolt directory. Container default `/var/lib/bidlobot`.
-- `HEALTH_PORT` -- /health + /version port, default `8080`; `0`
+- `HEALTH_PORT` -- /health + /livez + /version port, default `8080`; `0`
   disables the listener (breaks the compose healthcheck unless
   rewritten).
 - `PI_BINARY` / `PI_MODEL` -- the summarize provider CLI + model.
@@ -203,13 +203,23 @@ Verifiable upgrade facts:
 
 ```sh
 docker exec bidlobot wget -qO- http://127.0.0.1:8080/health
+docker exec bidlobot wget -qO- http://127.0.0.1:8080/livez
 docker exec bidlobot bidlobot --version
 ```
 
 `/health` returns `200 {"status":"ok"}` when: bbolt accepts a no-op
-view tx; the most recent update arrived within 5 min (or startup
-grace); a cached `getMe` (TTL 60s) succeeded. `/version` returns build
-info (commit hash via `-X main.version=... -X main.commit=...`).
+view tx; the last successful `getUpdates` poll cycle completed within
+5 min (or startup grace) - cycles with zero updates count, so a quiet
+chat stays green and only a wedged poll loop or an unreachable
+Telegram flips it to 503; a cached `getMe` (TTL 60s) succeeded.
+`/version` returns build info (commit hash via `-X main.version=...
+-X main.commit=...`).
+
+`/livez` is a static `200 {"status":"ok"}` with no checks by design:
+it only answers "the process is serving HTTP". Container platforms
+whose liveness probes restart the container on failure (kubelet) MUST
+point those probes at `/livez`; dependency-aware checks belong on
+`/health` - which is also what the compose `HEALTHCHECK` keeps using.
 
 ## Backup
 

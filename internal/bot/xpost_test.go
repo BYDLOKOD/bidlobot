@@ -72,6 +72,18 @@ func TestXPostDecision(t *testing.T) {
 			msg.SenderChat = &telego.Chat{ID: -100456}
 			return msg
 		}()},
+		{name: "attached video", msg: func() *telego.Message {
+			msg := regular("")
+			msg.Video = &telego.Video{}
+			msg.Caption = "https://x.com/alice/status/123456"
+			return msg
+		}()},
+		{name: "attached photo keeps link eligible", msg: func() *telego.Message {
+			msg := regular("")
+			msg.Photo = []telego.PhotoSize{{Width: 1, Height: 1}}
+			msg.Caption = "https://x.com/alice/status/123456"
+			return msg
+		}(), wantAct: true, wantURL: "https://x.com/alice/status/123456"},
 		{name: "other scheme", msg: regular("ftp://x.com/alice/status/123456")},
 		{name: "lookalike host", msg: regular("https://x.com.example/alice/status/123456")},
 		{name: "subdomain suffix", msg: regular("https://foo.x.com/alice/status/123456")},

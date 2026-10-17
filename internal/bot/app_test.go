@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"sync"
@@ -150,4 +151,162 @@ func TestApp_inFlightMiddlewareTracks(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("WaitGroup did not settle")
 	}
+}
+
+// waitClosed asserts the poll loop's update channel closes within a
+// short deadline and that it carries no trailing update.
+func waitClosed(t *testing.T, updates <-chan telego.Update) {
+	t.Helper()
+	select {
+	case u, ok := <-updates:
+		if ok {
+			t.Fatalf("received update %d after the loop should have stopped", u.UpdateID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("update channel was not closed")
+	}
+}
+
+// TestPollUpdates_ForwardsUpdatesAndAdvancesOffset locks the telego-
+// compatible offset bookkeeping: updates below the current offset are
+// dropped, forwarded updates advance the offset past the highest seen
+// ID, and the next fetch carries that offset so Telegram stops
+// redelivering them.
+func TestPollUpdates_ForwardsUpdatesAndAdvancesOffset(t *testing.T) {
+	app := &App{log: testLogger()}
+	offsets := make(chan int, 4) // params.Offset observed per fetch call
+	var calls atomic.Int32
+	fetch := func(ctx context.Context, params *telego.GetUpdatesParams) ([]telego.Update, error) {
+		offsets <- params.Offset
+		if calls.Add(1) == 1 {
+			// 3 is below the initial offset of 5 and must be dropped.
+			return []telego.Update{{UpdateID: 3}, {UpdateID: 5}, {UpdateID: 6}}, nil
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := app.pollUpdates(ctx, fetch, telego.GetUpdatesParams{Timeout: 30, Offset: 5}, time.Millisecond)
+
+	var got []int
+	for len(got) < 2 {
+		select {
+		case u := <-updates:
+			got = append(got, u.UpdateID)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for forwarded updates, got %v", got)
+		}
+	}
+	if got[0] != 5 || got[1] != 6 {
+		t.Fatalf("forwarded update IDs = %v, want [5 6]", got)
+	}
+
+	first, second := <-offsets, <-offsets
+	if first != 5 || second != 7 {
+		t.Fatalf("fetch offsets = [%d %d], want [5 7]", first, second)
+	}
+
+	cancel()
+	waitClosed(t, updates)
+}
+
+// TestPollUpdates_HeartbeatsOnEmptyResponse is the regression guard for
+// the production restart loop (2026-10): a quiet chat yields empty
+// long-poll responses, and those cycles must count as liveness. An
+// empty successful fetch records the /health heartbeat and forwards
+// nothing.
+func TestPollUpdates_HeartbeatsOnEmptyResponse(t *testing.T) {
+	hc := newHealthChecker(nil, nil, "", "")
+	app := &App{log: testLogger(), healthCheck: hc}
+
+	var calls atomic.Int32
+	fetch := func(ctx context.Context, params *telego.GetUpdatesParams) ([]telego.Update, error) {
+		calls.Add(1)
+		return []telego.Update{}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := app.pollUpdates(ctx, fetch, telego.GetUpdatesParams{Timeout: 30}, time.Millisecond)
+
+	deadline := time.After(2 * time.Second)
+	for hc.lastPoll.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatalf("no poll heartbeat recorded after %d empty responses", calls.Load())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	select {
+	case u := <-updates:
+		t.Fatalf("empty responses must not forward updates, got %d", u.UpdateID)
+	default:
+	}
+
+	cancel()
+	waitClosed(t, updates)
+}
+
+// TestPollUpdates_RetriesAfterError: a failed fetch must not kill the
+// loop. Production pauses retryTimeout (8s) between attempts; the test
+// passes 5ms to exercise the same path without the wait.
+func TestPollUpdates_RetriesAfterError(t *testing.T) {
+	app := &App{log: testLogger()}
+	var calls atomic.Int32
+	fetch := func(ctx context.Context, params *telego.GetUpdatesParams) ([]telego.Update, error) {
+		switch calls.Add(1) {
+		case 1:
+			return nil, errors.New("telegram unavailable")
+		case 2:
+			return []telego.Update{{UpdateID: 1}}, nil
+		default:
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := app.pollUpdates(ctx, fetch, telego.GetUpdatesParams{Timeout: 30}, 5*time.Millisecond)
+
+	select {
+	case u := <-updates:
+		if u.UpdateID != 1 {
+			t.Fatalf("forwarded update ID = %d, want 1", u.UpdateID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no update forwarded after a failed fetch; retry did not happen")
+	}
+}
+
+// TestPollUpdates_ClosesChannelOnCancel: the loop exits and closes the
+// channel when ctx is cancelled, which shutdown relies on.
+func TestPollUpdates_ClosesChannelOnCancel(t *testing.T) {
+	app := &App{log: testLogger()}
+	entered := make(chan struct{}, 1)
+	fetch := func(ctx context.Context, params *telego.GetUpdatesParams) ([]telego.Update, error) {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := app.pollUpdates(ctx, fetch, telego.GetUpdatesParams{Timeout: 30}, time.Millisecond)
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("poll loop never reached fetch")
+	}
+
+	cancel()
+	waitClosed(t, updates)
 }

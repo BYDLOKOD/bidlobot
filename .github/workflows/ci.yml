@@ -88,8 +88,8 @@ jobs:
       - name: smoke test image
         run: |
           docker run --rm bidlobot:ci --version
-          docker run --rm -e TG_BOT_TOKEN= bidlobot:ci --check-config && exit 1 || true
-          docker run --rm -e TG_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi bidlobot:ci --check-config
+          docker run --rm -e TG_BOT_TOKEN= -e BOT_OWNER_ID=1 bidlobot:ci --check-config && exit 1 || true
+          docker run --rm -e TG_BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi -e BOT_OWNER_ID=1 bidlobot:ci --check-config
 
   secret-scan:
     name: gitleaks

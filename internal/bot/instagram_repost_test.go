@@ -52,6 +52,18 @@ func TestInstagramDecision(t *testing.T) {
 		{name: "explore link", msg: igTestMessage("https://www.instagram.com/explore/tags/golang/"), want: false},
 		{name: "empty text", msg: igTestMessage(""), want: false},
 		{name: "nil message", msg: nil, want: false},
+		{name: "attached video with credit link in caption", msg: func() *telego.Message {
+			msg := igTestMessage("")
+			msg.Video = &telego.Video{}
+			msg.Caption = "https://www.instagram.com/reel/C8bXvT1J9yQ/"
+			return msg
+		}(), want: false},
+		{name: "attached photo keeps link eligible", msg: func() *telego.Message {
+			msg := igTestMessage("")
+			msg.Photo = []telego.PhotoSize{{Width: 1, Height: 1}}
+			msg.Caption = "https://www.instagram.com/reel/C8bXvT1J9yQ/"
+			return msg
+		}(), want: true},
 		{
 			name: "nil sender",
 			msg: &telego.Message{

@@ -111,6 +111,9 @@ func tiktokDecision(msg *telego.Message) (act bool, tiktokURL string) {
 	if !repostableSender(msg) {
 		return false, ""
 	}
+	if hasAttachedMedia(msg) {
+		return false, ""
+	}
 
 	// Check text entities first (url/text_link types pointing at TikTok hosts).
 	for _, e := range msg.Entities {

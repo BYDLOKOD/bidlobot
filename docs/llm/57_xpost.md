@@ -3,7 +3,7 @@ id: xpost
 kind: spec
 touches: internal/bot/xpost.go
 written: 2026-08-16
-updated: 2026-08-16
+updated: 2026-10-16
 ---
 
 # X/Twitter post repost (`xpost`)
@@ -28,7 +28,9 @@ Supergroup message whose text/caption/entities contain a status URL:
 host ∈ {x.com, twitter.com} (www./m./mobile. prefixes stripped), path
 matching `^/(?:[A-Za-z0-9_]+/status|i/web/status)/[0-9]+/?$`.
 Exclusions: bots, anonymous admins, `sender_chat` forwards, nil sender
-(the standard predicate family).
+(the standard predicate family), plus messages that already carry media
+natively (shared `hasAttachedMedia`, 2026-10-16): the link is source
+credit, not content to expand. Photos stay eligible.
 
 ## Pipeline (async, single slot)
 

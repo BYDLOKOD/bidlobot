@@ -135,6 +135,9 @@ func instagramDecision(msg *telego.Message) (act bool, postURL string) {
 	if !repostableSender(msg) {
 		return false, ""
 	}
+	if hasAttachedMedia(msg) {
+		return false, ""
+	}
 
 	for _, entities := range [][]telego.MessageEntity{msg.Entities, msg.CaptionEntities} {
 		for _, e := range entities {

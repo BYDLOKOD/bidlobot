@@ -9,8 +9,7 @@ touches:
   - internal/storage/deferred_repo.go
   - Dockerfile
 written: 2026-08-16
-updated: 2026-09-25
----
+updated: 2026-10-16
 
 # TikTok video repost
 
@@ -34,7 +33,15 @@ Scan `msg.Text`+`msg.Entities` and `msg.Caption`+`msg.CaptionEntities`
 www./m./vm./vt. prefixes stripped and port dropped; scheme-less URLs
 are accepted (`ensureScheme`). Exclusions: `from == nil`, bot sender,
 anonymous admin, `sender_chat` (linked channel) - the same predicate
-family as stats counting.
+family as stats counting - plus messages that already carry media
+natively (`Video`/`Animation`/`VideoNote`/`Document`, shared
+`hasAttachedMedia`): a forwarded channel post that embeds the clip and
+credits the source with a caption link is passed through untouched, not
+re-downloaded and replaced (measured 2026-10-16: a channel rip with a
+hidden `text_link` under the caption emoji was deleted and re-uploaded).
+The comment-quote gate (`tiktokCommentDecision`) applies the same
+exclusion. Photos stay eligible - a photo beside a permalink asks for
+the linked video.
 
 ## Pipeline
 
@@ -132,7 +139,8 @@ images keeps today's behaviour (fall back to yt-dlp, queue on failure).
 
 ## Exclusions & gaps (v1)
 
-- Skipped: bots, anonymous admins, `sender_chat` forwards, nil sender.
+- Skipped: bots, anonymous admins, `sender_chat` forwards, nil sender,
+  messages that already carry media (`hasAttachedMedia`).
 - `edited_message` not processed (handler only sees new messages).
 - Media groups: only the caption-bearing item is handled.
 - Reply/forward context lost on the bot repost.

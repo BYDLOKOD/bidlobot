@@ -111,6 +111,28 @@ func TestTikTokDecision(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "attached video with credit link in caption",
+			msg: &telego.Message{
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Video:     &telego.Video{},
+				Caption:   "https://www.tiktok.com/@user/video/123",
+			},
+			want: false,
+		},
+		{
+			name: "attached photo keeps link eligible",
+			msg: &telego.Message{
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Photo:     []telego.PhotoSize{{Width: 1, Height: 1}},
+				Caption:   "https://www.tiktok.com/@user/video/123",
+			},
+			want: true,
+		},
+		{
 			name: "url entity with TikTok host",
 			msg: &telego.Message{
 				MessageID: 1,

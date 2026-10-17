@@ -78,6 +78,17 @@ func TestTikTokCommentDecision(t *testing.T) {
 			want: false,
 		},
 		{
+			name: "attached video with comment link",
+			msg: &telego.Message{
+				MessageID: 1,
+				Chat:      telego.Chat{ID: -100123, Type: telego.ChatTypeSupergroup},
+				From:      &telego.User{ID: 200},
+				Video:     &telego.Video{},
+				Caption:   "https://www.tiktok.com/@user/video/123456789?comment_id=9876543210",
+			},
+			want: false,
+		},
+		{
 			name: "nil message",
 			msg:  nil,
 			want: false,

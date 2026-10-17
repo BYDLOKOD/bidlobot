@@ -18,23 +18,19 @@ import (
 
 // HealthDefaults centralize the policy choices for the /health endpoint.
 const (
-	// HealthFreshnessWindow is the maximum age of the last incoming update
-	// before /health flips to 503. Five minutes is short enough to detect
-	// a wedged long-poll loop within a typical alerting interval.
-	//
-	// The window is about the LAST UPDATE, not about bot liveness, so a
-	// chat that is merely quiet for longer than this reports 503
-	// ("no updates received since startup" / "last update ... ago") while
-	// the bot is connected and polling - observed 2026-09-12, ~16 minutes
-	// after a restart, with the poll socket ESTABLISHED to
-	// api.telegram.org and the loop cycling on empty responses. A weekend
-	// quiet period is NOT absorbed; lengthen the window or probe liveness
-	// separately if that matters more than fast detection.
+	// HealthFreshnessWindow is the maximum age of the last successful
+	// getUpdates poll cycle before /health flips to 503. The heartbeat is
+	// recorded on every completed cycle - including empty long-poll
+	// responses - so five minutes of silence means the poll loop is
+	// wedged or Telegram is unreachable, never merely "the chat is
+	// quiet". Five minutes spans several 30s long-poll cycles, so a
+	// single wedged cycle is absorbed and a sustained outage trips within
+	// a typical alerting interval.
 	HealthFreshnessWindow = 5 * time.Minute
 
-	// HealthStartupGrace gives the bot time to receive its first update
-	// after a restart. Without this grace a fresh bot would always look
-	// degraded.
+	// HealthStartupGrace gives the bot time to complete its first poll
+	// cycle after a restart (Telegram cold starts can be slow). Without
+	// this grace a fresh bot would always look degraded.
 	HealthStartupGrace = HealthFreshnessWindow
 
 	// healthEnvPort env var name; the value parses as a TCP port. "0"
@@ -62,14 +58,16 @@ type VersionInfo struct {
 // running bot. Fields are filled by the App at construction; nothing
 // here knows about Telegram or bbolt directly.
 //
-// getMeOK is best-effort and cached: a 60s window prevents the handler
-// from amplifying transient Telegram 5xx into a restart loop while
-// still surfacing a sustained outage within ~1.5 healthcheck intervals.
+// lastPoll is the freshness clock: the long-poll loop heartbeats it via
+// MarkPoll after every successful getUpdates cycle. getMeOK is
+// best-effort and cached: a 60s window prevents the handler from
+// amplifying transient Telegram 5xx into a restart loop while still
+// surfacing a sustained outage within ~1.5 healthcheck intervals.
 type healthChecker struct {
-	startedAt  time.Time
-	lastUpdate atomic.Int64 // unix seconds
-	dbOpen     func() bool
-	getMeOK    func(ctx context.Context) bool
+	startedAt time.Time
+	lastPoll  atomic.Int64 // unix seconds of the last completed poll cycle
+	dbOpen    func() bool
+	getMeOK   func(ctx context.Context) bool
 
 	// getMe result cache.
 	getMeMu       sync.Mutex
@@ -123,6 +121,7 @@ func healthPortFromEnv() (int, bool, error) {
 func newHealthServer(port int, log *slog.Logger, hc *healthChecker) (*HealthServer, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler(hc))
+	mux.HandleFunc("/livez", livezHandler())
 	mux.HandleFunc("/version", versionHandler(hc))
 
 	addr := fmt.Sprintf(":%d", port)
@@ -194,17 +193,18 @@ func healthHandler(hc *healthChecker) http.HandlerFunc {
 			return
 		}
 
-		// Update freshness check, with startup grace.
-		last := hc.lastUpdate.Load()
+		// Poll freshness check, with startup grace. A completed poll
+		// cycle is liveness here, so a quiet chat does not flip /health.
+		last := hc.lastPoll.Load()
 		if last == 0 {
 			if now.Sub(hc.startedAt) > HealthStartupGrace {
-				degraded("no updates received since startup")
+				degraded("no successful Telegram poll since startup")
 				return
 			}
 		} else {
 			lastT := time.Unix(last, 0)
 			if now.Sub(lastT) > HealthFreshnessWindow {
-				degraded(fmt.Sprintf("last update %s ago (>%s)",
+				degraded(fmt.Sprintf("last successful poll %s ago (>%s)",
 					now.Sub(lastT).Truncate(time.Second), HealthFreshnessWindow))
 				return
 			}
@@ -225,6 +225,20 @@ func healthHandler(hc *healthChecker) http.HandlerFunc {
 	}
 }
 
+// livezHandler answers /livez with a static 200 {"status":"ok"} and no
+// checks at all. It is the probe for container platforms whose liveness
+// probe restarts the process on failure: serving HTTP is the liveness
+// proof, so a Telegram outage, a closed DB, or a quiet chat can never
+// restart the container through this endpoint. Dependency health stays
+// on /health.
+func livezHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(HealthStatus{Status: "ok"})
+	}
+}
+
 func versionHandler(hc *healthChecker) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -234,8 +248,8 @@ func versionHandler(hc *healthChecker) http.HandlerFunc {
 }
 
 // newHealthChecker constructs the checker with build info populated from
-// runtime/debug.ReadBuildInfo. Caller must update lastUpdate as
-// updates arrive.
+// runtime/debug.ReadBuildInfo. The caller must heartbeat it via MarkPoll
+// as poll cycles complete.
 func newHealthChecker(dbOpen func() bool, getMeOK func(ctx context.Context) bool, version, commit string) *healthChecker {
 	hc := &healthChecker{
 		startedAt: time.Now(),
@@ -246,10 +260,12 @@ func newHealthChecker(dbOpen func() bool, getMeOK func(ctx context.Context) bool
 	return hc
 }
 
-// MarkUpdate records the timestamp of the latest received update. Called
-// from the bot's incoming-update path.
-func (hc *healthChecker) MarkUpdate(t time.Time) {
-	hc.lastUpdate.Store(t.Unix())
+// MarkPoll records the timestamp of a completed getUpdates poll cycle.
+// Called by the bot's long-poll loop after every successful fetch, which
+// includes empty long-poll responses - that is exactly the heartbeat
+// /health's freshness window is keyed on.
+func (hc *healthChecker) MarkPoll(t time.Time) {
+	hc.lastPoll.Store(t.Unix())
 }
 
 // checkGetMeCached returns the cached getMe verdict if still fresh, or

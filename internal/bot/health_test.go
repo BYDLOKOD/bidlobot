@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -20,13 +21,13 @@ func decodeStatus(t *testing.T, rr *httptest.ResponseRecorder) HealthStatus {
 	return s
 }
 
-func TestHealth_OKAtStartupBeforeFirstUpdate(t *testing.T) {
+func TestHealth_OKAtStartupBeforeFirstPoll(t *testing.T) {
 	hc := newHealthChecker(
 		func() bool { return true },
 		func(ctx context.Context) bool { return true },
 		"v1.0.0", "deadbeef",
 	)
-	// startedAt = now, no updates yet -> within startup grace -> OK.
+	// startedAt = now, no poll completed yet -> within startup grace -> OK.
 	rr := httptest.NewRecorder()
 	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
 
@@ -38,7 +39,7 @@ func TestHealth_OKAtStartupBeforeFirstUpdate(t *testing.T) {
 	}
 }
 
-func TestHealth_DegradedAfterStartupGraceWithNoUpdates(t *testing.T) {
+func TestHealth_DegradedAfterStartupGraceWithNoPoll(t *testing.T) {
 	hc := newHealthChecker(
 		func() bool { return true },
 		func(ctx context.Context) bool { return true },
@@ -56,6 +57,9 @@ func TestHealth_DegradedAfterStartupGraceWithNoUpdates(t *testing.T) {
 	if got.Status != "degraded" {
 		t.Errorf("expected degraded, got %s", got.Status)
 	}
+	if got.Reason != "no successful Telegram poll since startup" {
+		t.Errorf("reason: %q", got.Reason)
+	}
 }
 
 func TestHealth_DegradedWhenDBClosed(t *testing.T) {
@@ -64,7 +68,7 @@ func TestHealth_DegradedWhenDBClosed(t *testing.T) {
 		func(ctx context.Context) bool { return true },
 		"", "",
 	)
-	hc.MarkUpdate(time.Now())
+	hc.MarkPoll(time.Now())
 
 	rr := httptest.NewRecorder()
 	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
@@ -83,7 +87,7 @@ func TestHealth_DegradedWhenGetMeFails(t *testing.T) {
 		func(ctx context.Context) bool { return false },
 		"", "",
 	)
-	hc.MarkUpdate(time.Now())
+	hc.MarkPoll(time.Now())
 
 	rr := httptest.NewRecorder()
 	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
@@ -96,29 +100,82 @@ func TestHealth_DegradedWhenGetMeFails(t *testing.T) {
 	}
 }
 
-func TestHealth_DegradedAfterStaleLastUpdate(t *testing.T) {
+func TestHealth_DegradedAfterStaleLastPoll(t *testing.T) {
 	hc := newHealthChecker(
 		func() bool { return true },
 		func(ctx context.Context) bool { return true },
 		"", "",
 	)
-	hc.MarkUpdate(time.Now().Add(-2 * HealthFreshnessWindow))
+	hc.MarkPoll(time.Now().Add(-2 * HealthFreshnessWindow))
 
 	rr := httptest.NewRecorder()
 	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
 
 	if rr.Code != http.StatusServiceUnavailable {
-		t.Fatalf("expected 503 for stale update, got %d (body=%s)", rr.Code, rr.Body.String())
+		t.Fatalf("expected 503 for stale poll, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+	got := decodeStatus(t, rr)
+	if !strings.Contains(got.Reason, "last successful poll") || !strings.Contains(got.Reason, ">5m0s") {
+		t.Errorf("reason does not describe a stale poll: %q", got.Reason)
 	}
 }
 
-func TestHealth_OKWithRecentUpdateAndChecks(t *testing.T) {
+// TestHealth_RecoversOnPollHeartbeat is the regression guard for the
+// production restart loop (2026-10): freshness follows poll cycles, so a
+// stale /health flips back to 200 as soon as one cycle completes.
+func TestHealth_RecoversOnPollHeartbeat(t *testing.T) {
+	hc := newHealthChecker(
+		func() bool { return true },
+		func(ctx context.Context) bool { return true },
+		"", "",
+	)
+	hc.MarkPoll(time.Now().Add(-2 * HealthFreshnessWindow))
+
+	rr := httptest.NewRecorder()
+	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 before the heartbeat, got %d", rr.Code)
+	}
+
+	hc.MarkPoll(time.Now())
+
+	rr = httptest.NewRecorder()
+	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200 after the heartbeat, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+}
+
+// TestLivez_AlwaysOK locks the /livez contract: a static 200 regardless
+// of every dependency /health checks. kubelet-style liveness probes
+// point here, so a Telegram outage or a closed DB must never restart the
+// container through this endpoint.
+func TestLivez_AlwaysOK(t *testing.T) {
+	hc := newHealthChecker(
+		func() bool { return false },                    // dbOpen: DB closed
+		func(ctx context.Context) bool { return false }, // getMeOK: Telegram unreachable
+		"", "",
+	)
+	hc.startedAt = time.Now().Add(-2 * HealthStartupGrace) // no poll ever succeeded
+
+	rr := httptest.NewRecorder()
+	livezHandler()(rr, httptest.NewRequest("GET", "/livez", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (body=%s)", rr.Code, rr.Body.String())
+	}
+	if got := decodeStatus(t, rr); got.Status != "ok" {
+		t.Errorf("status: %+v", got)
+	}
+}
+
+func TestHealth_OKWithRecentPollAndChecks(t *testing.T) {
 	hc := newHealthChecker(
 		func() bool { return true },
 		func(ctx context.Context) bool { return true },
 		"v2.3.4", "abc",
 	)
-	hc.MarkUpdate(time.Now().Add(-30 * time.Second))
+	hc.MarkPoll(time.Now().Add(-30 * time.Second))
 
 	rr := httptest.NewRecorder()
 	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
@@ -163,7 +220,7 @@ func TestHealth_GetMeContextDeadline(t *testing.T) {
 		},
 		"", "",
 	)
-	hc.MarkUpdate(time.Now())
+	hc.MarkPoll(time.Now())
 
 	rr := httptest.NewRecorder()
 	healthHandler(hc)(rr, httptest.NewRequest("GET", "/health", nil))
@@ -215,7 +272,7 @@ func TestHealthServer_StartStop(t *testing.T) {
 		func(ctx context.Context) bool { return true },
 		"v0", "0",
 	)
-	hc.MarkUpdate(time.Now())
+	hc.MarkPoll(time.Now())
 
 	srv, err := newHealthServer(0, testLogger(), hc)
 	if err != nil {
@@ -240,6 +297,15 @@ func TestHealthServer_StartStop(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp2.StatusCode)
+	}
+
+	resp3, err := http.Get("http://" + srv.Addr() + "/livez")
+	if err != nil {
+		t.Fatalf("get livez: %v", err)
+	}
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200 from /livez, got %d", resp3.StatusCode)
 	}
 
 	srv.Stop()

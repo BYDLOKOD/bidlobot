@@ -12,7 +12,7 @@ touches:
   - cmd/bidlobot/config.go
   - cmd/bidlobot/main.go
 written: 2026-09-25
-updated: 2026-09-25
+updated: 2026-10-16
 ---
 
 # Instagram reel/post repost
@@ -51,7 +51,11 @@ retry ladder and lands in the queue (measured 2026-09-25 on yt-dlp
 2026.08.19).
 
 Exclusions (shared `repostableSender`): bots, anonymous admins,
-`sender_chat` (linked channel), messages without a sender.
+`sender_chat` (linked channel), messages without a sender - plus
+messages that already carry media natively (shared `hasAttachedMedia`,
+added 2026-10-16 after the same class of false fire hit the TikTok
+path): the link is source credit, not content to expand. Photos stay
+eligible.
 
 ## Pipeline
 

@@ -78,6 +78,18 @@ func repostableSender(msg *telego.Message) bool {
 		!shared.IsAnonymousAdmin(msg.From.ID) && msg.SenderChat == nil
 }
 
+// hasAttachedMedia reports whether the message already carries the media
+// itself: a video, an animation, a video note or a document. A forwarded
+// channel post that embeds the clip natively and credits the source with a
+// link in the caption must not be re-downloaded and re-sent - the link is
+// metadata, not content to expand. Photos are deliberately excluded: a
+// photo next to a permalink usually asks for the linked video, and a photo
+// post never yields one anyway (errNoVideo decline).
+func hasAttachedMedia(msg *telego.Message) bool {
+	return msg.Video != nil || msg.Animation != nil ||
+		msg.VideoNote != nil || msg.Document != nil
+}
+
 // --- Small helpers -------------------------------------------------------
 
 // ensureScheme prepends https:// to a URL if it has no scheme.
