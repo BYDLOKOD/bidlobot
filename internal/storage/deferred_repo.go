@@ -42,10 +42,11 @@ type DeferredJob struct {
 // permalink, so the sender identity and the original caption must survive
 // the queue.
 type RepostPayload struct {
-	URL       string `json:"url"`
-	Username  string `json:"username"`
-	FirstName string `json:"first_name"`
-	Caption   string `json:"caption"`
+	URL             string `json:"url"`
+	Username        string `json:"username"`
+	FirstName       string `json:"first_name"`
+	Caption         string `json:"caption"`
+	MessageThreadID int    `json:"message_thread_id,omitempty"`
 }
 
 // SummarizePayload is the type-specific data for a DeferredSummarize job.

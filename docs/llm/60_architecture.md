@@ -11,7 +11,7 @@ touches:
   - internal/testutil/
   - internal/text/
 written: 2026-05-14
-updated: 2026-10-05
+updated: 2026-10-17
 ---
 
 # Architecture
@@ -68,7 +68,9 @@ internal/
   shared/safe.go   Go(): panic-safe background goroutine launcher
   shared/ratelimit per-chat outgoing token bucket
   shared/retry     429 + 5xx + transport retry policy, per-attempt deadline
-  shared/tgclient  composed wrapper: migration -> retry -> rate-limit
+  shared/tgclient  composed wrapper: migration -> retry -> rate-limit;
+                   standard sends plus server-side copy and the
+                   rich-message slideshow sender (photos + audio)
   storage/         bbolt repos + key conventions + migration
   testutil/        MockAPI + recorder + update factories
   text/            user-facing Russian strings (single source)
@@ -252,7 +254,9 @@ No `edited_message`, no `chat_join_request`.
 | panic in any route | `App.recoverMiddleware` | log with stack; the process and the update loop survive |
 | bbolt I/O | service | propagate; reply "временная ошибка" |
 | TikTok download/audio fail | `tiktok_repost.go` | mirror first, yt-dlp fallback; both failed -> enqueue to deferred queue; original kept |
-| TikTok photo post | `tiktok_source.go` | decline note; never queued (no retry can succeed) |
+| TikTok photo post | `tiktok_photos.go` | one rich-message slideshow: photos + original audio, then delete; transient download/send failures -> deferred queue |
+| TikTok slideshow over the attachment/size caps | `tiktok_photos.go` | permanent: `images+audio > 50` or a slide >10 MiB -> decline note, never queued (`errTikTokImageTooLarge`, symmetric with `errTikTokAudioTooLarge`) |
+| TikTok slideshow download budget | `tiktok_photos.go` | `slideshowDownloadBudget(attachments)` = 30s + 30s per attachment, so 50 sequential fetches are not cut off by a fixed 120s |
 | TikTok 4xx send rejection (too large, forbidden) | `tiktok_repost.go` | public decline note; original kept; never queued (the answer is permanent) |
 | TikTok transient send failure (transport, 429, 5xx) | `tiktok_repost.go` | enqueue to the deferred queue; `/flush` replays it |
 | Instagram download fail (transport, 429, 5xx) | `instagram_repost.go` | yt-dlp retried 3x; still failing -> enqueue to deferred queue; original kept |
@@ -277,16 +281,23 @@ retry queue for failed **TikTok and Instagram exports** and
 **summarize** calls (commits 81f45c9, 47cdd99; Instagram added
 2026-09-25). Public `/flush` (30s cooldown) processes
 the caller's own jobs sequentially in a background goroutine: tiktok
--> `tryTikTokExport` (full download->validate->upload->delete cycle;
-error keeps the job), instagram -> `tryInstagramExport` (same cycle
-through the shared tail; a post that carries no video, or an upload
-Telegram refuses with a 4xx, is reported once and dropped - both
-reposters drop such a job instead of re-downloading it on every
-`/flush`), summarize -> `retrySummarize` (re-runs
+-> `tryTikTokExport` (full download->validate->upload->delete cycle for
+videos and photo slideshows; a transient error keeps the job, while a
+permanent outcome - over-limit slideshow, over-cap slide/soundtrack,
+4xx upload - is reported once and dropped), instagram ->
+`tryInstagramExport` (same cycle through the shared tail; a post that
+carries no video, or an upload Telegram refuses with a 4xx, is
+reported once and dropped - both reposters drop such a job instead of
+re-downloading it on every `/flush`), summarize -> `retrySummarize`
+(re-runs
 `Summarize`, edits the placeholder with 25s timeout). Success ->
 `Delete(key)`. Storage: `deferred_jobs`, key `dj:<zero-padded
 UnixNano>` (lexicographic FIFO), JSON `DeferredJob{user_id, type,
-chat_id, message_id, payload, created_at}`, TTL 48h, GC every 10 min.
+chat_id, message_id, message_thread_id, payload, created_at}`, TTL
+48h, GC every 10 min. `message_thread_id` is optional
+(`json:"message_thread_id,omitempty"`): a retried TikTok/photo repost
+returns to its original topic, while older rows without the field stay
+readable and land in the general topic.
 Always wired; nil queue (tests) -> failures fall back to decline
 replies.
 

@@ -7,17 +7,18 @@ touches:
   - internal/bot/youtube_caption.go
   - internal/bot/routes.go
 written: 2026-05-15
-updated: 2026-10-05
+updated: 2026-10-17
 ---
 
-# YouTube `si=` sanitizer
+# YouTube share-tracking sanitizer (`si`, `is`)
 
 See also: [PRD.md](PRD.md), [50_telegram.md](50_telegram.md), [60_architecture.md](60_architecture.md).
 
 NOT the dropped "YouTube Summary" (that was an LLM/GLM dependency, still
 dropped - see PRD.md). This is a content-cleanup behavior: strip the
-`si=` share-tracking parameter that leaks who-shared-from-where, while
-preserving the post byte-for-byte otherwise.
+share-tracking parameters that leak who-shared-from-where - `si` for
+regular watch links and `is` for Shorts - while preserving the post
+byte-for-byte otherwise.
 
 `internal/bot/youtube_sanitizer.go` is a passive supergroup middleware
 registered on `sgGroup` AFTER the passive observers (membership/stats/
@@ -34,8 +35,10 @@ under privacy ON ([50_telegram.md](50_telegram.md)).
 
 Scan `msg.Text`+`msg.Entities` and `msg.Caption`+`msg.CaptionEntities`.
 A link qualifies only if its host is in {youtube.com, www/m
-.youtube.com, youtu.be, youtube-nocookie.com} AND it carries a `si`
-query param (key matched after percent-decoding, so `s%69=` counts).
+.youtube.com, youtu.be, youtube-nocookie.com} AND it carries a `si` or
+`is` query param (keys matched after percent-decoding, so `s%69=`
+counts). `is` is the Shorts share parameter and is stripped on the same
+span-deletion path as `si`; a link carrying both loses both.
 Host-scoped strictly: Spotify and other `si=` links, look-alike hosts
 (`youtube.com.evil.com`, userinfo spoofs) are NOT touched.
 
@@ -97,5 +100,5 @@ passed through as a whole group.
 - Albums: v1 split the caption item out of the album; now the whole
   album is kept untouched (sanitizing one item cannot be done without
   either splitting the group or reposting it as a new album).
-- `edited_message`: a clean link edited later to add `si=` is not
-  re-sanitized (the handler only sees new messages).
+- `edited_message`: a clean link edited later to add `si=` or `is=` is
+  not re-sanitized (the handler only sees new messages).

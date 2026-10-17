@@ -1,6 +1,6 @@
 package bot
 
-// YouTube `si=` sanitizer: drops only `si` query pairs (plus the minimal
+// YouTube share sanitizer: drops only `si` and `is` query pairs (plus the minimal
 // separators), preserving every other byte. No net/url canonicalization;
 // spans stay in ORIGINAL coordinates and the text is rebuilt once.
 
@@ -20,11 +20,11 @@ type offsetSpan struct {
 	start, end int
 }
 
-// StripShareTracking removes every `si` query pair from a YouTube URL
+// StripShareTracking removes every `si` and `is` query pair from a YouTube URL
 // plus the minimal separator bytes. Returns (cleaned, true) on removal,
-// else (rawURL, false); malformed, non-YouTube and si-less URLs pass through.
+// else (rawURL, false); malformed, non-YouTube and untracked URLs pass through.
 func StripShareTracking(rawURL string) (string, bool) {
-	spans, ok := siDeletions(rawURL)
+	spans, ok := shareTrackingDeletions(rawURL)
 	if !ok {
 		return rawURL, false
 	}
@@ -36,11 +36,11 @@ func StripShareTracking(rawURL string) (string, bool) {
 	return cleaned, true
 }
 
-// siDeletions returns ascending, non-overlapping byte spans that remove
-// every `si` pair (key matched after url.QueryUnescape, so `%73i` counts)
+// shareTrackingDeletions returns ascending, non-overlapping byte spans that remove
+// every `si` or `is` pair (keys matched after url.QueryUnescape)
 // plus the joining separator of each run ('&', or '?' when every pair is
-// tracked); ok is false for non-YouTube, no-query or no-`si` input.
-func siDeletions(rawURL string) ([]offsetSpan, bool) {
+// tracked); ok is false for non-YouTube, no-query or untracked input.
+func shareTrackingDeletions(rawURL string) ([]offsetSpan, bool) {
 	if rawURL == "" {
 		return nil, false
 	}
@@ -89,7 +89,7 @@ func siDeletions(rawURL string) ([]offsetSpan, bool) {
 			dec = key
 		}
 		lastPairEnd = pairEnd
-		if dec == "si" {
+		if dec == "si" || dec == "is" {
 			if pendingRunStart < 0 {
 				pendingRunStart = pos
 			}
@@ -202,7 +202,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 	// Deletion spans in original byte coordinates.
 	var delBytes []offsetSpan
 	for _, r := range urlRanges {
-		if sub, ok := siDeletions(text[r.start:r.end]); ok {
+		if sub, ok := shareTrackingDeletions(text[r.start:r.end]); ok {
 			for _, sp := range sub {
 				delBytes = append(delBytes, offsetSpan{r.start + sp.start, r.start + sp.end})
 			}
@@ -220,7 +220,7 @@ func SanitizeMessageText(text string, entities []telego.MessageEntity) (string, 
 		if overlapsAny(cand, anchors) || overlapsAny(cand, urlRanges) {
 			continue
 		}
-		if sub, ok := siDeletions(text[start:core]); ok {
+		if sub, ok := shareTrackingDeletions(text[start:core]); ok {
 			for _, sp := range sub {
 				delBytes = append(delBytes, offsetSpan{start + sp.start, start + sp.end})
 			}

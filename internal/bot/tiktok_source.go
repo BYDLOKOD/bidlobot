@@ -37,6 +37,17 @@ const tikwmPathVideo = "/api/"
 // mirrorDownloadTimeout bounds one metadata call plus the CDN transfer.
 const mirrorDownloadTimeout = 120 * time.Second
 
+// tiktokPost distinguishes photo posts from videos before touching Play:
+// for photo posts Play may be an audio track, not an MP4.
+type tiktokPost struct {
+	ID             string
+	VideoPath      string
+	Images         []string
+	AudioURL       string
+	AudioTitle     string
+	AudioPerformer string
+}
+
 // tiktokMediaResponse is one tikwm media row. Images is the photo-post
 // signal: a video row carries no images key at all (measured on the
 // production egress 2026-09-12), while a /photo/ post carries one entry
@@ -45,10 +56,16 @@ type tiktokMediaResponse struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
 	Data struct {
-		ID     string   `json:"id"`
-		Play   string   `json:"play"`
-		Size   int64    `json:"size"`
-		Images []string `json:"images"`
+		ID        string   `json:"id"`
+		Play      string   `json:"play"`
+		Size      int64    `json:"size"`
+		Images    []string `json:"images"`
+		Music     string   `json:"music"`
+		MusicInfo struct {
+			Play   string `json:"play"`
+			Title  string `json:"title"`
+			Author string `json:"author"`
+		} `json:"music_info"`
 	} `json:"data"`
 }
 
@@ -88,75 +105,65 @@ func fetchTikTokMedia(ctx context.Context, client *http.Client, rawURL string) (
 	return parsed, nil
 }
 
-// downloadFromMirror resolves rawURL through tikwm and writes the video
-// into workDir, returning its path. The returned path is owned by the
-// caller (os.Remove).
-//
-// The streamed byte count decides the size, never the reported Size
-// field: a wrong or zero Size must not let a 200 MB file through.
-func downloadFromMirror(ctx context.Context, client *http.Client, rawURL, workDir string) (string, error) {
+// downloadFromMirror resolves a post. Images take precedence over Play,
+// even when the music URL is reachable and the mirror reports a size.
+// Video byte limits use the streamed size, not the metadata/header.
+func downloadFromMirror(ctx context.Context, client *http.Client, rawURL, workDir string) (tiktokPost, error) {
 	media, err := fetchTikTokMedia(ctx, client, rawURL)
 	if err != nil {
-		return "", err
+		return tiktokPost{}, err
+	}
+	post := tiktokPost{ID: media.Data.ID, Images: media.Data.Images}
+	if len(post.Images) > 0 {
+		post.AudioURL = media.Data.MusicInfo.Play
+		if post.AudioURL == "" {
+			post.AudioURL = media.Data.Music
+		}
+		if post.AudioURL == "" {
+			post.AudioURL = media.Data.Play
+		}
+		post.AudioTitle = media.Data.MusicInfo.Title
+		post.AudioPerformer = media.Data.MusicInfo.Author
+		return post, nil
 	}
 	if media.Data.Play == "" {
-		if len(media.Data.Images) > 0 {
-			return "", errNoVideo
-		}
-		return "", errors.New("tikwm: no play url")
+		return tiktokPost{}, errors.New("tikwm: no play url")
 	}
 	if media.Data.Size > maxVideoSize {
-		return "", fmt.Errorf("tikwm: reported %d bytes exceeds the %d byte cap", media.Data.Size, maxVideoSize)
+		return tiktokPost{}, fmt.Errorf("tikwm: reported %d bytes exceeds the %d byte cap", media.Data.Size, maxVideoSize)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, media.Data.Play, nil)
 	if err != nil {
-		return "", fmt.Errorf("building cdn request: %w", err)
+		return tiktokPost{}, fmt.Errorf("building cdn request: %w", err)
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36")
-
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", mediaFailure(media, fmt.Errorf("cdn request: %w", err))
+		return tiktokPost{}, fmt.Errorf("cdn request: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", mediaFailure(media, fmt.Errorf("cdn status %d", resp.StatusCode))
+		return tiktokPost{}, fmt.Errorf("cdn status %d", resp.StatusCode)
 	}
 
 	path := filepath.Join(workDir, "video.mp4")
 	f, err := os.Create(path)
 	if err != nil {
-		return "", fmt.Errorf("create %s: %w", path, err)
+		return tiktokPost{}, fmt.Errorf("create %s: %w", path, err)
 	}
-	// One byte past the cap: a transfer that reaches it is too large, and
-	// the check below catches it without trusting any header.
 	written, copyErr := io.Copy(f, io.LimitReader(resp.Body, maxVideoSize+1))
 	closeErr := f.Close()
-	if copyErr != nil {
+	if copyErr != nil || closeErr != nil || written > maxVideoSize {
 		os.Remove(path)
-		return "", mediaFailure(media, fmt.Errorf("reading cdn body: %w", copyErr))
+		if copyErr != nil {
+			return tiktokPost{}, fmt.Errorf("reading cdn body: %w", copyErr)
+		}
+		if closeErr != nil {
+			return tiktokPost{}, fmt.Errorf("closing %s: %w", path, closeErr)
+		}
+		return tiktokPost{}, fmt.Errorf("tiktok: video too large (%d bytes)", written)
 	}
-	if closeErr != nil {
-		os.Remove(path)
-		return "", fmt.Errorf("closing %s: %w", path, closeErr)
-	}
-	if written > maxVideoSize {
-		os.Remove(path)
-		return "", fmt.Errorf("tiktok: video too large (%d bytes)", written)
-	}
-	return path, nil
-}
-
-// mediaFailure tags a download failure on a post that carries an image
-// list. Such a post has no video stream to repost - measured on the
-// production egress 2026-09-12: tikwm answers a /photo/ query with a
-// non-empty images array and a play URL on a music host that never
-// serves an MP4, so a plain retry ladder would queue the job forever.
-// A post without images keeps the raw error and falls back to yt-dlp.
-func mediaFailure(media tiktokMediaResponse, err error) error {
-	if len(media.Data.Images) == 0 {
-		return err
-	}
-	return fmt.Errorf("%w: %v", errNoVideo, err)
+	post.VideoPath = path
+	return post, nil
 }

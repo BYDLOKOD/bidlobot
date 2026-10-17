@@ -154,3 +154,45 @@ func TestStripShareTrackingSpanEdges(t *testing.T) {
 		}
 	}
 }
+
+func TestStripShareTrackingIS(t *testing.T) {
+	for _, tc := range []struct {
+		in, want string
+	}{
+		{"https://youtube.com/shorts/Ivusfk5C8Dw?is=o1iUcOAMeaxGClox", "https://youtube.com/shorts/Ivusfk5C8Dw"},
+		{"https://youtu.be/X?is=a&si=b&t=12%2B3&list=P#part", "https://youtu.be/X?t=12%2B3&list=P#part"},
+		{"youtube.com/watch?v=X&%69s=a&is&si=b", "youtube.com/watch?v=X"},
+		{"https://youtube.com/watch?v=X&island=a&IS=b", "https://youtube.com/watch?v=X&island=a&IS=b"},
+		{"https://example.com/watch?is=a&si=b", "https://example.com/watch?is=a&si=b"},
+	} {
+		t.Run(tc.in, func(t *testing.T) {
+			got, changed := StripShareTracking(tc.in)
+			if got != tc.want || changed != (tc.in != tc.want) {
+				t.Fatalf("got %q, changed=%v; want %q", got, changed, tc.want)
+			}
+		})
+	}
+}
+
+func TestSanitizeMessageTextISPreservesEntities(t *testing.T) {
+	const link = "https://youtube.com/shorts/Ivusfk5C8Dw?is=o1iUcOAMeaxGClox"
+	const clean = "https://youtube.com/shorts/Ivusfk5C8Dw"
+	text := "🎉 " + link + " конец"
+	entities := []telego.MessageEntity{
+		{Type: "url", Offset: 3, Length: len(link)},
+		{Type: "bold", Offset: 3 + len(link) + 1, Length: 5},
+	}
+	got, es, changed, err := SanitizeMessageText(text, entities)
+	if err != nil || !changed || got != "🎉 "+clean+" конец" {
+		t.Fatalf("text=%q changed=%v err=%v", got, changed, err)
+	}
+	if len(es) != 2 || coveredText(got, es[0]) != clean || coveredText(got, es[1]) != "конец" {
+		t.Fatalf("entities no longer cover their content: %+v", es)
+	}
+	got, es, changed, err = SanitizeMessageText("жми", []telego.MessageEntity{
+		{Type: "text_link", Offset: 0, Length: 3, URL: link},
+	})
+	if err != nil || !changed || got != "жми" || len(es) != 1 || es[0].URL != clean {
+		t.Fatalf("hidden link: text=%q entities=%+v changed=%v err=%v", got, es, changed, err)
+	}
+}

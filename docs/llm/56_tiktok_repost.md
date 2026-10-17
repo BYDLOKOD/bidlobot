@@ -4,20 +4,26 @@ kind: spec
 touches:
   - internal/bot/tiktok_repost.go
   - internal/bot/tiktok_source.go
+  - internal/bot/tiktok_photos.go
+  - internal/bot/tiktok_audio.go
+  - internal/shared/tgclient/slideshow.go
   - internal/bot/deferred.go
   - internal/bot/routes.go
   - internal/storage/deferred_repo.go
   - Dockerfile
 written: 2026-08-16
-updated: 2026-10-16
+updated: 2026-10-17
 
-# TikTok video repost
+# TikTok repost (video and photo slideshows)
 
 Shipped 2026-06 (commits aec900e..81f45c9; wishlist item from 2026-05-26).
 Same repost-then-delete shape as the YouTube `si=` sanitizer
 ([55_youtube_sanitizer.md](55_youtube_sanitizer.md)): when a supergroup
-message carries a TikTok video link, the bot downloads the video,
-reposts it attributed to the original sender, then deletes the original.
+message carries a TikTok link, the bot materializes the payload,
+reposts it attributed to the original sender, then deletes the
+original. Two payloads exist: a video (`data.play` MP4) and a photo
+post (`data.images`), the latter sent as one rich-message slideshow
+with the original soundtrack.
 
 `internal/bot/tiktok_repost.go`, a passive supergroup middleware on
 `sgGroup` registered AFTER `youtubeSanitizer` and BEFORE `xpostReposter`
@@ -43,7 +49,7 @@ The comment-quote gate (`tiktokCommentDecision`) applies the same
 exclusion. Photos stay eligible - a photo beside a permalink asks for
 the linked video.
 
-## Pipeline
+## Video pipeline
 
 1. **Download**, mirror first ([Video source](#video-source)): the tikwm
    API resolves the link and returns a signed, watermark-free MP4 URL
@@ -76,6 +82,40 @@ which the Instagram reposter uses as well
 ([61_instagram_repost.md](61_instagram_repost.md)); only the detector, the
 downloader and the audio gate are TikTok-specific.
 
+## Photo-post pipeline
+
+`internal/bot/tiktok_photos.go` (`repostTikTokPhotos`) materializes
+every slide before one atomic rich-message send:
+
+1. **Attachment budget**: `images + soundtrack <= MaxSlideshowPhotos`
+   (50, `internal/shared/tgclient/slideshow.go`). Over the limit ->
+   permanent decline (`repostPermanent`); nothing is sent and the
+   original is kept.
+2. **Download**: each `images[i]` goes to `<workdir>/slide-NN.jpg`
+   through `downloadCommentImage` (10 MiB per-image cap, the Telegram
+   photo limit); the soundtrack goes to `<workdir>/soundtrack.mp3`
+   through `downloadTikTokAudio` (50 MiB cap, `maxVideoSize`) and is
+   never re-encoded. The batch deadline is
+   `slideshowDownloadBudget(attachments)` - 30s base plus 30s per
+   attachment, matching `tiktokCommentHTTPClient`'s per-request
+   timeout. A fixed 120s budget could never cover 50 sequential
+   fetches, so large slideshows used to fail forever through `/flush`;
+   the scaled budget removes that class.
+3. **Send**: one `SendSlideshow` rich message - all photos plus the
+   original audio as a separate player. The audio starts on its own,
+   with no autoplay sync to paging. The caption is the same attributed
+   HTML as the video path (`👤 <b>display</b> писал(а):` + user text),
+   and `message_thread_id` is preserved.
+4. **Delete**: the original is deleted only after `SendSlideshow`
+   confirms a message ID. A delete failure keeps the original
+   (visible duplicate, lesser evil).
+
+Error classes: a slide over the 10 MiB photo cap is **permanent**
+(`errTikTokImageTooLarge`) - the URL cannot shrink on a retry, so
+`/flush` drops the job after one decline note, exactly like an
+oversized soundtrack (`errTikTokAudioTooLarge`). Transport, 429 and
+5xx failures stay transient and go to the deferred queue.
+
 ## Video source
 
 `internal/bot/tiktok_source.go`. The deployment ISP filters TikTok web
@@ -97,11 +137,12 @@ and downloads together.
 **Photo posts**. A `/photo/` post carries a non-empty `data.images`
 array and no usable video stream. Measured 2026-09-12: tikwm answers
 such a query with `data.size: 0` and a `data.play` URL on a music host
-that never serves an MP4. The download therefore reports `errNoVideo`
-both when `play` is empty and when a post carrying images fails to
-deliver bytes; the pipeline then posts the randomized decline phrase
-instead of queueing a job no retry could complete. A post without
-images keeps today's behaviour (fall back to yt-dlp, queue on failure).
+that never serves an MP4 - for these posts `play` is the soundtrack,
+never treated as a video. `downloadTikTok` returns
+`tiktokPost{Images, AudioURL, AudioTitle, AudioPerformer}` and the
+reposter sends a slideshow ([Photo-post pipeline](#photo-post-pipeline))
+instead of a video. A post without images keeps the video path (fall
+back to yt-dlp, queue on failure).
 
 ## Failure handling
 
@@ -119,17 +160,25 @@ images keeps today's behaviour (fall back to yt-dlp, queue on failure).
   ([60_architecture.md](60_architecture.md) "Failure handling").
 - Download failure or missing audio -> the job is persisted to the
   **per-user deferred retry queue** (`deferred_jobs`, type `tiktok`,
-  payload `RepostPayload{URL, Username, FirstName, Caption}`; see
-  [60_architecture.md](60_architecture.md) "Deferred queue"). The
-  original message is never deleted on failure.
-- Photo post (`errNoVideo`) -> decline note, **never queued**: the
-  queue would keep a job that no retry can complete. In the flush path
-  (`tryTikTokExport`) the job is dropped after the note.
-- Too-large, stat/open errors, and 4xx send rejections -> public decline
-  note (`sendDecline`, randomized phrase from the failure catalog), no
-  enqueue. In the flush path (`tryTikTokExport`) such a job is dropped
-  after the note, so `/flush` does not re-download it for the rest of
-  the TTL.
+  payload `RepostPayload{URL, Username, FirstName, Caption,
+  MessageThreadID}`; see [60_architecture.md](60_architecture.md)
+  "Deferred queue"). The original message is never deleted on failure.
+  The thread id keeps a retried post in its original topic; older rows
+  without the field stay readable and fall back to the general topic.
+- Slideshow download failure (transport, 429, 5xx, batch deadline) ->
+  transient, same deferred queue. Retried slideshows keep the
+  attachments cap, so a 50-slide post can succeed on the next flush
+  instead of dying on a fixed budget.
+- Over-limit slideshow (`images + audio > 50`), an over-cap slide
+  (`errTikTokImageTooLarge`, >10 MiB) and an over-cap soundtrack
+  (`errTikTokAudioTooLarge`, >50 MiB) -> public decline note, **never
+  queued**: no retry can shrink the source. In the flush path
+  (`tryTikTokExport`) such a job is dropped after the note.
+- Too-large video, stat/open errors, and 4xx send rejections -> public
+  decline note (`sendDecline`, randomized phrase from the failure
+  catalog), no enqueue. In the flush path (`tryTikTokExport`) such a job
+  is dropped after the note, so `/flush` does not re-download it for the
+  rest of the TTL.
 - Runs **fire-and-forget** through `shared.Go` (`shared.Go(a.log,
   "tiktok", ...)`), which wraps the goroutine in a `recover` so a panic
   cannot take the process down; the per-update ctx is cancelled when the

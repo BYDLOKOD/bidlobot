@@ -1,6 +1,6 @@
 package bot
 
-// YouTube `si=` sanitizer: clean si= out of text/caption/entities locally,
+// YouTube share sanitizer: clean si=/is= out of text/caption/entities locally,
 // post one cleaned copy (media copied server-side by copyMessage), then
 // delete the original. Never destroys content: any failure keeps the
 // original and posts no notice. Only YouTube hosts are touched; URL/entity
@@ -24,7 +24,7 @@ import (
 	"github.com/veschin/bidlobot/internal/shared"
 )
 
-// Exact YouTube host allowlist; anything else keeps its si untouched.
+// Exact YouTube host allowlist; anything else keeps its query untouched.
 var youtubeHosts = map[string]struct{}{
 	"youtube.com":          {},
 	"youtu.be":             {},
