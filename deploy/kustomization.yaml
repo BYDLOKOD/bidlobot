@@ -8,5 +8,5 @@ resources:
 images:
   # CI (publish.yml update-manifest) rewrites newTag+digest; the digest pins what runs.
   - name: ghcr.io/bydlokod/bidlobot
-    newTag: master-19e85c6
-    digest: sha256:17b713b85ea2149f256c05754e008b17266168d19cd344eabc5e12f0452b4437
+    newTag: master-83b789b
+    digest: sha256:76a79b75cf23a816bad3482f832213020435d5e2b7dfa63958de8d2eed776c42
