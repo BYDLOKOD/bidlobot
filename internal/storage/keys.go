@@ -147,6 +147,20 @@ func ReferralKey(absChatID int64, referralID uint64) []byte {
 // ReferralPrefix scans every referral row in one chat.
 func ReferralPrefix(absChatID int64) []byte { return keyf("rf:%020d:", absChatID) }
 
+// --- Birthday greetings ---
+
+// BirthdayGreetedKey records that (chat, day, user) was already greeted.
+// The key carries the Moscow day so the daily job can check one member
+// with a single lookup.
+func BirthdayGreetedKey(absChatID, userID int64, day string) []byte {
+	return keyf("bg:%020d:%s:%020d", absChatID, day, userID)
+}
+
+// BirthdayGreetedChatPrefix scans every greeting marker of one chat.
+func BirthdayGreetedChatPrefix(absChatID int64) []byte {
+	return keyf("bg:%020d:", absChatID)
+}
+
 // TikTokVideoKey is one recorded bot repost of a TikTok video in a chat,
 // keyed by (chat, numeric video id). The value is the message id of the
 // repost; the comment-quote pipeline uses it to reply to the video when

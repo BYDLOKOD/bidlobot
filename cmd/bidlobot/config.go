@@ -64,6 +64,10 @@ type Config struct {
 	CaptchaEnabled    bool
 	CaptchaTimeoutRaw string
 	CaptchaTimeout    time.Duration
+
+	// Birthday greetings (opt-in). The daily job reads the Telegram
+	// profile birth date via getChat and posts one greeting per chat.
+	BirthdayEnabled bool
 }
 
 // loadConfig reads Config from environment without performing validation.
@@ -100,6 +104,8 @@ func loadConfig() Config {
 		CaptchaEnabled:    envBool("CAPTCHA_ENABLED", false),
 		CaptchaTimeoutRaw: captchaTimeoutRaw,
 		CaptchaTimeout:    captchaTimeout,
+
+		BirthdayEnabled: envBool("BIRTHDAY_ENABLED", false),
 	}
 }
 

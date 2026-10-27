@@ -74,3 +74,15 @@ Scope: owner-prioritized tidy-ups; none blocks release.
 - Deferred queue for xpost failures (mirror TikTok's)
 - Purge stale GLM_* from local .env and status.sh
 - Rotate credentials (deferred from the 2026-05-16 scrub)
+
+## E12: Birthday greetings - active
+Scope: 2026-10-27 - daily public greeting for members whose Telegram profile
+birth date matches the Moscow date.
+- Read `ChatFullInfo.birthdate` via `getChat`; no bot-side profile and no
+  stored birth date.
+- Daily job at 10:00 Europe/Moscow with a startup catch-up and 48h greeting
+  markers.
+- Tests for date matching, 29 February, duplicates, missing/hidden date, left
+  members, and the import-name privacy guard.
+- Docs: 66_birthdays.md, index, architecture, telegram, deployment.
+- Deploy and enable with `BIRTHDAY_ENABLED=1` (owner gate).

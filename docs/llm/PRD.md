@@ -35,6 +35,9 @@ In:
 - Mini-games - dice, battle, code-quiz, native poll, 8ball, guess, hangman, duel,
   IT-trivia; callable inline or via slash commands.
 - Reputation - durable per-chat praise/roast economy (`/praise` `/roast` `/rep` `/reptop`).
+- Birthday greetings - one public greeting per chat when a member's Telegram profile
+  birth date matches the Moscow date; opt-in via `BIRTHDAY_ENABLED`, no bot-side
+  profile and no stored birth date.
 - Referral catalog - chat-scoped registry of referral links (`/refs` `/refreg` `/refreport`).
 - YouTube `si=` sanitizer - strips the share-tracking param (delete + attributed repost).
 - TikTok video repost - downloads a TikTok video, reposts it attributed, deletes the original.
@@ -62,6 +65,8 @@ Out (non-goals):
   live-observed/live-fed only.
 - Bio/profile registration FSM - archived (branch `archive/profiles-bio`, tag
   `v0-bio-archive`).
+- Bot-side birthday profile or manual date entry - the date comes only from the
+  Telegram profile.
 - Permanently dropped (no reintroduction without an explicit ask): YouTube Summary (LLM
   summarization of external videos), Inline Query DSL parser, salary field, zen-lang
   config, i18n switching, bot-managed admin list.
@@ -79,6 +84,9 @@ Out (non-goals):
 - TikTok contract: download -> attributed repost -> delete original.
 - YouTube contract: delete + attributed repost without `si=`.
 - Summarize contract: admin-only, always-on provider.
+- Birthday contract: opt-in via `BIRTHDAY_ENABLED`; one public greeting per chat
+  when a member's Telegram profile day and month match the Moscow date; no birth
+  date stored.
 - Admission contract: only `BOT_OWNER_ID` may add the bot; captcha is opt-in via
   `CAPTCHA_ENABLED`, wrong or missing answer is kicked.
 - Deferred queue contract: `/flush` retries the caller's own failed jobs within a 48h

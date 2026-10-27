@@ -10,7 +10,7 @@ touches:
   - internal/bot/routes.go
   - internal/shared/format.go
 written: 2026-05-14
-updated: 2026-09-12
+updated: 2026-10-27
 ---
 
 # Chat Statistics
@@ -106,16 +106,17 @@ Last seen: Today
   account is parsed by Telegram as a mention that *notifies* that user,
   so a leaderboard would ping everyone it lists every time anyone runs
   `/stats` - reading stats would mass-summon the chat. Inert text is
-  mandatory here; the ONLY sanctioned member-notifying output is the
-  gracekick public tag (it builds its own `mention()` and never routes
-  through this path). Counting is always keyed by the stable `user_id`,
-  never by name, so distinct same-name members are separate rows (the
-  legacy chat-export.org instead merged by name string - this is
-  stricter). When there is **no handle** the display name alone is not
-  unique (several members can share one), so the resolver appends the
-  numeric id: `Name (id 12345)`. The id drops off once the user writes
-  live and a globally-unique handle is captured (`SourceMessage`
-  overwrites `SourceImport`).
+  mandatory here; the sanctioned member-notifying outputs are the
+  gracekick public tag and the birthday greeting (both build their own
+  mention and never route through this path; the birthday greeting
+  mentions only the birthday member). Counting is always keyed by the
+  stable `user_id`, never by name, so distinct same-name members are
+  separate rows (the legacy chat-export.org instead merged by name
+  string - this is stricter). When there is **no handle** the display
+  name alone is not unique (several members can share one), so the
+  resolver appends the numeric id: `Name (id 12345)`. The id drops off
+  once the user writes live and a globally-unique handle is captured
+  (`SourceMessage` overwrites `SourceImport`).
 - **Import-only members render as `User <id>`** (neutral). A
   Telegram-Desktop export's `from` is the *exporting account's
   address-book label* for that user, not their own profile name;

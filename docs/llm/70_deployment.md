@@ -12,7 +12,7 @@ touches:
   - .omp/skills/bidlobot-deploy/SKILL.md
   - cmd/bidlobot/
 written: 2026-05-14
-updated: 2026-10-17
+updated: 2026-10-27
 ---
 
 # Deployment
@@ -172,6 +172,11 @@ Optional:
   `pass` into the same shell first.
 - `CAPTCHA_ENABLED` (default false) / `CAPTCHA_TIMEOUT` (default `1m`,
   1m..30m) -- new-member math captcha + welcome animation.
+- `BIRTHDAY_ENABLED` (default false) -- daily profile-birth-date
+  greeting at 10:00 Europe/Moscow. The job reads
+  `ChatFullInfo.birthdate` through `getChat` and stores no birth date.
+  Enabling it makes the bot post one public greeting per chat on a
+  member's birthday ([66_birthdays.md](66_birthdays.md)).
 - `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES` -- egress for the Instagram
   repost download ([61_instagram_repost.md](61_instagram_repost.md)).
   Instagram is blocked outright on some ISPs (Russia blocks it at the

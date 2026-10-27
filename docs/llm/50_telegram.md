@@ -10,10 +10,11 @@ touches:
   - internal/bot/middleware.go
   - internal/bot/membership.go
   - internal/bot/captcha.go
+  - internal/domain/birthday/
   - internal/bot/routes.go
   - internal/storage/migrate.go
 written: 2026-05-14
-updated: 2026-09-17
+updated: 2026-10-27
 ---
 
 # Telegram API Reference
@@ -32,6 +33,18 @@ See also: [PRD.md](PRD.md), [30_stats.md](30_stats.md), [60_architecture.md](60_
 | `channel` | Ignored |
 
 Groups auto-migrate to supergroup at ~200 members, public username, or persistent history. Migration changes chat_id - handle `migrate_to_chat_id` error.
+
+## Birthdate
+
+`User` carries no birth date. `ChatFullInfo.birthdate` (day, month,
+optional year) is returned for private chats by `getChat`. The field is
+optional: a missing value means the user hid it or never set it. The
+birthday job reads it daily and stores no date of birth. A 29 February
+birthday is greeted on 28 February in a non-leap year.
+
+The birthday greeting is the second sanctioned notifying output after
+the gracekick tag: it mentions the birthday member only, never a
+bystander. See [66_birthdays.md](66_birthdays.md).
 
 ## Anonymous admins
 

@@ -2,7 +2,7 @@
 id: llm-index
 kind: index
 written: 2026-05-14
-updated: 2026-10-17
+updated: 2026-10-27
 ---
 
 # docs/llm - LLM-facing reference (v3)
@@ -33,6 +33,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [60_architecture.md](60_architecture.md) - layered composition, middleware order, bbolt schema, invariants, failure matrix, deferred queue
 - [61_instagram_repost.md](61_instagram_repost.md) - Instagram reel/post repost: yt-dlp only (no mirror), no audio gate, photo/carousel decline, shared repost pipeline, `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES`
 - [65_admission.md](65_admission.md) - owner-only installation gate (BOT_OWNER_ID, LeaveChat) + opt-in new-member captcha with welcome animation
+- [66_birthdays.md](66_birthdays.md) - daily profile birth-date greeting: getChat source, 10:00 MSK schedule, 48h marker, privacy and coverage limits
 - [70_deployment.md](70_deployment.md) - docker-compose stack (single bot service), env vars, image contents (yt-dlp/ffmpeg/omp), healthcheck, backup, rollback
 
 ## Devlog
@@ -52,6 +53,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [devlog/13_instagram_repost_audit.md](devlog/13_instagram_repost_audit.md) - 2026-09-25: Instagram repost audited end to end (host normalisation, `/flush` drop policy, shared send-error classifier, testable slot branch), then a live permalink proved the pinned yt-dlp 2026.03.17 could not download at all - pin raised to 2026.07.04.
 - [devlog/14_youtube_copy_preserve.md](devlog/14_youtube_copy_preserve.md) - 2026-10-05: PR #3 audited and merged - sanitizer reworked from repost-with-header to an entity-preserving server-side copy; caption splitting, preflight table and offset tests added on top.
 - [devlog/15_pr4_media_review_fixes.md](devlog/15_pr4_media_review_fixes.md) - 2026-10-17: PR #4 rebased onto master; review fixes - docs 55/56/60 synced with `is` stripping and the photo slideshow, count-derived download budget, oversized slide made permanent.
+- [devlog/16_birthday_greetings.md](devlog/16_birthday_greetings.md) - 2026-10-27: daily birthday greeting from the Telegram profile; marker bucket, service tests, privacy guard, docs.
 
 ## Removed surfaces (code deleted; docs deleted with them)
 

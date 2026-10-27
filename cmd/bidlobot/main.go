@@ -18,6 +18,7 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/bot"
+	"github.com/veschin/bidlobot/internal/domain/birthday"
 	"github.com/veschin/bidlobot/internal/domain/captcha"
 	"github.com/veschin/bidlobot/internal/domain/cleanup"
 	"github.com/veschin/bidlobot/internal/domain/gracekick"
@@ -174,6 +175,16 @@ func main() {
 	app.SetBotOwnerID(cfg.BotOwnerID)
 	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	app.SetDeferredQueue(storage.NewDeferredRepo(db))
+	if cfg.BirthdayEnabled {
+		app.AttachBirthdays(birthday.NewService(
+			memberSvc.Store(),
+			tgClient,
+			storage.NewBirthdayRepo(db),
+			log,
+			birthday.Config{Pause: birthday.DefaultPause},
+		))
+		log.Info("birthday greetings enabled")
+	}
 	// Instagram repost egress: optional proxy and cookie jar for the
 	// yt-dlp download (INSTAGRAM_PROXY / INSTAGRAM_COOKIES). Unset - the
 	// default - keeps the download direct and anonymous.

@@ -1,85 +1,81 @@
-# Handoff - 2026-10-05 (YouTube sanitizer copy rework merged from PR #3)
+# Handoff - 2026-10-27 (birthday greetings)
 
 ## 1. State (what is true right now)
 
-- **Committed and pushed.** `master` = the merge of PR #3
-  (`fix(youtube): preserve post content when removing share tracking`
-  by gudkovWay, two commits) plus two commits added on top:
-  `test(youtube): lock caption split, entity offsets, preflight and
-  rollback` and `docs(youtube): rewrite the sanitizer spec for the
-  copy flow`. GitHub marks PR #3 merged (fast-forward, no merge
-  commit).
-- **What changed.**
-  - `internal/bot/youtube_sanitizer.go`: repost-with-header flow
-    replaced by copy-then-delete; preflight rejects album items, paid
-    media, inline keyboards, spoilers, automatic forwards, exotic
-    reply contexts and unsupported kinds; sender exclusions unchanged.
-  - `internal/bot/youtube_entities.go` (new): byte-span `si` deletion
-    (no `net/url` re-encoding), UTF-16 entity remapping, `text_link`
-    URL rewrite, fail-closed validation.
-  - `internal/bot/youtube_caption.go` (new): >1024-unit captions
-    split into <=4096-unit text parts after a caption-less
-    `copyMessages`; partial failure rolls back only the bot's messages.
-  - `internal/shared/tgclient/client.go`: `CopyMessage` /
-    `CopyMessages` wrappers (rate budget + migration rewrite).
-  - Tests: three new files lock caption splitting, entity offsets
-    (astral included), preflight, rollback and query-span edges.
-  - Docs: `55_youtube_sanitizer.md` rewritten, `00_index.md`,
-    `60_architecture.md`, devlog 14, this handoff.
-- **Verified.** `go build`, `go vet`, `gofmt`, `go test ./...` and the
-  full suite under `-race` green on the merged master;
-  `docs/llm/validate.sh` exits 0. The risky math (astral offsets,
-  hidden-link rewrite, caption splitting) was additionally probed
-  with throwaway tests before the permanent ones were written.
-- **NOT deployed.** Production still runs the previous build; deploy
-  via `.omp/skills/bidlobot-deploy/scripts/deploy.sh --skip-push`
-  after the usual owner OK.
+- **Birthday greetings implemented, not deployed.** `BIRTHDAY_ENABLED`
+  defaults to `false`.
+- Source: `ChatFullInfo.birthdate` read through `getChat`. The bot
+  stores no birth date; it reads the day and month during the daily
+  check and discards them.
+- Schedule: daily at 10:00 Europe/Moscow (UTC+3), with one startup
+  catch-up between 10:00 and 20:00 Moscow if the bot was down at the
+  slot.
+- Delivery: one public message per chat; several birthdays are listed
+  together, more than 10 mentions are split. The mention is
+  `<a href="tg://user?id=...">Name</a>` with the name HTML-escaped.
+  The birthday member is the only ping - the sanctioned exception to
+  the no-third-party-ping rule.
+- 29 February is greeted on 28 February in a non-leap year.
+- `birthday_greeted` stores `bg:<absChat>:<YYYY-MM-DD>:<userID>` with
+  an 8-byte timestamp, 48h TTL. The marker is written before the send
+  and cleared on failure; a crash loses one greeting, never duplicates
+  it. `MigrateChatID` rekeys the bucket.
+- Import-only `FirstName` is refused: it is the exporting account's
+  private address-book label. The fallback mention text is
+  "именинник".
+- Tests: `internal/domain/birthday/service_test.go` and
+  `internal/storage/birthday_repo_test.go`.
+- **Verified.** `go build ./...` clean; `go vet ./...` clean;
+  `gofmt -l internal/ cmd/` empty; `go test ./...` reports 22 packages
+  ok and 3 with no tests; `bash docs/llm/validate.sh` reports 0 errors
+  (3 warnings for the uncommitted birthday paths, 30 pre-existing
+  stale specs).
 
 ## 2. Negatives (what does NOT exist / is not proven)
 
-- No attribution on the copy (owner-approved): the bot's copy names no
-  author; a manually forwarded channel post loses its forward header.
-- Albums with a tracked link pass through untouched (owner-approved).
-- `edited_message` is not re-sanitized (as before).
-- The sanitizer still sends synchronously inside the update handler;
-  acceptable because a server-side copy is one cheap API call.
-- Long-caption splitting (>1024 units) has no live proof yet: Telegram
-  Premium captions are the only trigger and none hit the test chats.
-- 28 stale specs by `validate.sh`: all pre-existing, none in files
-  whose content drifted (the 50_telegram entry covers the two new
-  tgclient wrappers, which change nothing the spec describes).
+- No live proof that `getChat` returns `birthdate` for a member of a
+  common group who never started the bot. The first test-chat run must
+  confirm it.
+- Telegram may withhold the date under privacy settings; such a member
+  is skipped.
+- Coverage is observed members only. Bot API has no member
+  enumeration; a member who never wrote, reacted, or changed status
+  after installation cannot be greeted.
+- No opt-out command. Hiding the date in the Telegram profile is the
+  only per-user control.
+- Not deployed; production still runs the previous build without the
+  feature.
 
 ## 3. Queue
 
-- Deploy the new master (owner gate), then watch one real `si=` link:
-  text post, media post and a channel forward each once.
-- PR #3 author was answered in the PR thread in the house style
-  (English, factual, closes with the spec pointer). Keep that style
-  for future external PRs.
+- Deploy the new master (owner gate).
+- Enable `BIRTHDAY_ENABLED=1` in one test chat first. Confirm one live
+  greeting and no duplicate after a restart.
+- If `getChat` returns no `birthdate` for a known birthday member, stop
+  and report: the source is unavailable in that setup.
+- Then enable the remaining chats.
 
 ## 4. Read order
 
-1. `docs/llm/55_youtube_sanitizer.md` - the copy flow, preflight,
-   splitting rules, gaps.
-2. `docs/llm/devlog/14_youtube_copy_preserve.md` - what the audit
-   verified and what was added on top.
-3. `internal/bot/youtube_entities.go` then `youtube_caption.go` - the
-   span editor and the splitter.
-4. `docs/llm/60_architecture.md` ("Failure handling") for where the
-   sanitizer sits in the failure matrix.
+1. `docs/llm/66_birthdays.md` - source, schedule, markers, privacy,
+   limits.
+2. `internal/domain/birthday/service.go` - daily service, matching,
+   message assembly.
+3. `internal/storage/birthday_repo.go` - marker bucket and prune.
+4. `docs/llm/60_architecture.md` - bucket, worker, and failure tables.
 
 ## 5. Smoke test (run before touching anything)
 
 ```sh
-go build ./... && go vet ./... && gofmt -l internal/ cmd/
-go test ./...                 # expect all ok
-bash docs/llm/validate.sh     # expect 0 errors
+go build ./... && go vet ./...
+gofmt -l internal/ cmd/
+go test ./...
+bash docs/llm/validate.sh
 ```
 
 ## 6. Agent errors
 
-- The `edit` tool wrote doc edits into the MAIN repository working
-  tree when given paths inside the /tmp git worktree; the mistake was
-  caught by `git diff` before commit and the files were moved to the
-  branch. Verify the location of every edit made through a linked
-  worktree path.
+- Jev plan review refused the plan three times and released it as an
+  OPEN item; no approval was recorded. The implementation proceeded
+  under the owner's explicit "приступай к реализации" after the
+  release. Do not treat the plan as approved.

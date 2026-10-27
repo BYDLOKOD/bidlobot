@@ -45,8 +45,9 @@ func FormatDate(t time.Time) string {
 // anyone can run (stats, games, attribution lines) would ping everyone
 // it lists every time it is invoked - reading a leaderboard would
 // mass-summon the chat. Bare "handle" is plain, non-notifying text.
-// The ONLY sanctioned member-notifying output is the gracekick public
-// tag, which builds its own mention() and never routes through here.
+// The sanctioned member-notifying outputs are the gracekick public tag
+// and the birthday greeting; both build their own mention and never
+// route through here.
 func UserDisplay(username, firstName string) string {
 	if username != "" {
 		return username

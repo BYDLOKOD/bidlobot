@@ -11,6 +11,7 @@ import (
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
 
+	"github.com/veschin/bidlobot/internal/domain/birthday"
 	"github.com/veschin/bidlobot/internal/domain/captcha"
 	"github.com/veschin/bidlobot/internal/domain/gracekick"
 	"github.com/veschin/bidlobot/internal/domain/membership"
@@ -88,6 +89,9 @@ type App struct {
 	// captchaSvc is the opt-in new-member captcha. nil (default) means
 	// the feature is off: no join messages, no buttons, no sweep.
 	captchaSvc *captcha.Service
+	// birthdays is the opt-in daily profile-birth-date greeting job.
+	// nil (default) means the feature is off.
+	birthdays *birthday.Service
 	// referrals is the opt-in referral catalog UX. nil (default) means
 	// /refs, /refreg, and /refreport are not wired.
 	referrals *ReferralHandler
@@ -321,6 +325,16 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 			a.runCaptchaSweep(ctx, interval)
 		}()
 	}
+	if a.birthdays != nil {
+		// Tracked in inFlight: the job sends messages and writes the
+		// greeting markers, so Stop must wait for it before the DB
+		// closes.
+		a.inFlight.Add(1)
+		go func() {
+			defer a.inFlight.Done()
+			a.birthdays.Run(ctx)
+		}()
+	}
 
 	if a.healthServer != nil {
 		a.healthServer.Start()
@@ -365,6 +379,15 @@ func (a *App) AttachDailyCleanup(svc *gracekick.Service, atMinUTC int) {
 // svc leaves the feature off.
 func (a *App) AttachCaptcha(svc *captcha.Service) {
 	a.captchaSvc = svc
+}
+
+// AttachBirthdays enables the daily profile-birth-date greeting job.
+// Call before Run; a nil service leaves the feature off.
+func (a *App) AttachBirthdays(svc *birthday.Service) {
+	if svc == nil {
+		return
+	}
+	a.birthdays = svc
 }
 
 // AttachReferrals wires the chat-scoped referral catalog UX. Call

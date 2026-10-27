@@ -39,4 +39,10 @@ const (
 		"- Сколько платят?\n" +
 		"- Почему решил зайти в чат?"
 	MsgCaptchaKicked = "%s кикнут: не решил капчу."
+
+	// Birthday greetings. %s is an HTML mention built from tg://user?id=
+	// (the name is escaped by the caller); messages carrying it are sent
+	// with ParseMode HTML.
+	MsgBirthdayOne  = "С днём рождения, %s!"
+	MsgBirthdayMany = "Сегодня день рождения у %s."
 )

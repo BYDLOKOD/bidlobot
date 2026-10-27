@@ -32,6 +32,7 @@ type MigrationReport struct {
 	DailyStatsRekeyed int
 	ReferralServices  int
 	Referrals         int
+	BirthdayGreeted   int
 }
 
 // MigrateChatID rewrites every record keyed by oldAbs to be keyed by
@@ -75,6 +76,9 @@ func MigrateChatID(_ context.Context, db *bolt.DB, oldAbs, newAbs int64) (*Migra
 		}
 		if err := migrateDailyStats(tx, oldAbs, newAbs); err != nil {
 			return fmt.Errorf("dailystats: %w", err)
+		}
+		if err := migrateBirthdayGreeted(tx, oldAbs, newAbs, report); err != nil {
+			return fmt.Errorf("birthdaygreeted: %w", err)
 		}
 		if err := migrateReferrals(tx, oldAbs, newAbs, report); err != nil {
 			return fmt.Errorf("referrals: %w", err)
@@ -454,6 +458,37 @@ func migrateDailyStats(tx *bolt.Tx, oldAbs, newAbs int64) error {
 		if err := bkt.Delete(k); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// migrateBirthdayGreeted rewrites bg:<oldAbs>:<day>:<userID> markers to
+// the new chat id. The value is a timestamp and is copied unchanged.
+func migrateBirthdayGreeted(tx *bolt.Tx, oldAbs, newAbs int64, report *MigrationReport) error {
+	b := tx.Bucket(bktBirthdayGreeted)
+	if b == nil {
+		return nil
+	}
+	prefix := BirthdayGreetedChatPrefix(oldAbs)
+	type row struct{ key, val []byte }
+	var rows []row
+	c := b.Cursor()
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
+		rows = append(rows, row{
+			key: append([]byte(nil), k...),
+			val: append([]byte(nil), v...),
+		})
+	}
+	for _, r := range rows {
+		suffix := bytes.TrimPrefix(r.key, prefix)
+		newKey := append(append([]byte(nil), BirthdayGreetedChatPrefix(newAbs)...), suffix...)
+		if err := b.Put(newKey, r.val); err != nil {
+			return err
+		}
+		if err := b.Delete(r.key); err != nil {
+			return err
+		}
+		report.BirthdayGreeted++
 	}
 	return nil
 }
