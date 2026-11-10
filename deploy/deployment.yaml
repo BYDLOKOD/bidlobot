@@ -43,6 +43,8 @@ spec:
             # during onboarding; enabled 2026-10-11 after the audit.
             - name: CAPTCHA_ENABLED
               value: "true"
+            - name: BIRTHDAY_ENABLED
+              value: "true"
           ports:
             - name: http
               containerPort: 8080
