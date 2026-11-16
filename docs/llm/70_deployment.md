@@ -96,11 +96,11 @@ backup (scale-to-0 helper-pod recipe) runbooks live in
   `bidlobot-backup`, `bidlobot-probe` into `/out`.
 - `debian:bookworm-slim` runtime. Installs `bash ca-certificates curl
   ffmpeg tini tzdata unzip wget` (ffmpeg/ffprobe for the TikTok
-  audio check), **yt-dlp pinned release** (2026.07.04, sha256-checked
+  audio check), **yt-dlp pinned release** (2026.10.26, sha256-checked
   at build; a newer release can be pinned via `YT_DLP_VERSION` arg -
-  the pin sits on the last release before the TikTok extractor
-  regression of 2026-08-10, yt-dlp issue #17403, and the first with a
-  working Instagram path), and **Bun 1.3.14 +
+  the pin restores the TikTok extractor after the 2026-08-10
+  regression, yt-dlp issue #17403, and keeps a working Instagram
+  path), and **Bun 1.3.14 +
   `@oh-my-pi/pi-coding-agent` 16.3.6** (the `omp` CLI on PATH,
   version-checked at build). yt-dlp is the **fallback** TikTok source;
   the primary path is the tikwm mirror
