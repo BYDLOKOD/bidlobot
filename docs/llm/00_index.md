@@ -2,7 +2,7 @@
 id: llm-index
 kind: index
 written: 2026-05-14
-updated: 2026-10-27
+updated: 2026-11-17
 ---
 
 # docs/llm - LLM-facing reference (v3)
@@ -54,6 +54,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 - [devlog/14_youtube_copy_preserve.md](devlog/14_youtube_copy_preserve.md) - 2026-10-05: PR #3 audited and merged - sanitizer reworked from repost-with-header to an entity-preserving server-side copy; caption splitting, preflight table and offset tests added on top.
 - [devlog/15_pr4_media_review_fixes.md](devlog/15_pr4_media_review_fixes.md) - 2026-10-17: PR #4 rebased onto master; review fixes - docs 55/56/60 synced with `is` stripping and the photo slideshow, count-derived download budget, oversized slide made permanent.
 - [devlog/16_birthday_greetings.md](devlog/16_birthday_greetings.md) - 2026-10-27: daily birthday greeting from the Telegram profile; marker bucket, service tests, privacy guard, docs.
+- [devlog/17_rep_reaction_quote.md](devlog/17_rep_reaction_quote.md) - 2026-11-17: the reaction rep report quotes the reacted message and makes the quote its `t.me/c/` permalink; quotes for bot reposts, length-budget splitting, mention defusing.
 
 ## Removed surfaces (code deleted; docs deleted with them)
 

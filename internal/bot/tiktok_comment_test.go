@@ -343,18 +343,28 @@ func (s *recCommentSender) DeleteMessage(_ context.Context, p *telego.DeleteMess
 type recOwners struct {
 	mu    sync.Mutex
 	calls []string // "chatID:msgID:userID"
+	full  []ownerRecord
 }
 
-func (r *recOwners) RecordOwner(chatID int64, msgID int, u *telego.User) {
+func (r *recOwners) RecordOwner(rec ownerRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, fmt.Sprintf("%d:%d:%d", chatID, msgID, u.ID))
+	r.calls = append(r.calls, fmt.Sprintf("%d:%d:%d", rec.ChatID, rec.MsgID, rec.Owner.ID))
+	r.full = append(r.full, rec)
 }
 
 func (r *recOwners) recorded() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.calls...)
+}
+
+// records returns the whole ownerRecord list, for the assertions that
+// care about the quote and the topic and not only about the ids.
+func (r *recOwners) records() []ownerRecord {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]ownerRecord(nil), r.full...)
 }
 
 func ttCommentMsg() *telego.Message {
@@ -387,6 +397,7 @@ func TestProcessTikTokCommentTextOnly(t *testing.T) {
 		t.Fatalf("link preview must be disabled, params = %+v", snd.Messages[0])
 	}
 	if calls := owners.recorded(); len(calls) != 1 || calls[0] != "-1001234567890:501:7" {
+		t.Fatalf("owner calls = %v", calls)
 	}
 	if len(snd.Deletes) != 1 || snd.Deletes[0].MessageID != 42 {
 		t.Fatalf("deletes = %+v", snd.Deletes)

@@ -54,7 +54,9 @@ func (s *photoPostSender) SendSlideshow(_ context.Context, p *tgclient.Slideshow
 	if s.sendErr != nil {
 		return nil, s.sendErr
 	}
-	return &telego.Message{MessageID: 900}, nil
+	// Telegram echoes the topic the message landed in; a real send of a
+	// slideshow into topic 17 answers with message_thread_id 17.
+	return &telego.Message{MessageID: 900, MessageThreadID: p.MessageThreadID}, nil
 }
 
 func photoPostServer(t *testing.T, broken bool, count int, musicMode string) {
@@ -131,6 +133,31 @@ func TestTikTokPhotoPostRepostsAllSlidesBeforeDelete(t *testing.T) {
 	}
 	if len(snd.Videos) != 0 || len(q.jobs) != 0 || len(snd.Deletes) != 1 || snd.Deletes[0].MessageID != msg.MessageID {
 		t.Fatalf("video=%d queue=%d deletes=%+v", len(snd.Videos), len(q.jobs), snd.Deletes)
+	}
+}
+
+func TestTikTokPhotoPostOwnerRecordQuotesTheCaption(t *testing.T) {
+	// A rich message carries its content in rich_message.blocks, which
+	// telego v1.8 cannot decode: the returned Message has no Text and no
+	// Caption. The owner record must therefore quote the human's caption,
+	// not the sent message.
+	photoPostServer(t, false, 2, "")
+	snd := &photoPostSender{}
+	owners := &recOwners{}
+	msg := ttTestMessage("https://www.tiktok.com/@u/photo/1")
+	msg.Caption = "мой <текст>"
+	msg.MessageThreadID = 17
+	processTikTok(context.Background(), snd, slog.New(slog.DiscardHandler), &fakeDeferredQueue{}, nil, owners, msg, msg.Text, "")
+
+	records := owners.records()
+	if len(records) != 1 {
+		t.Fatalf("owner records = %+v, want one repost", records)
+	}
+	if records[0].Text != "мой <текст>" {
+		t.Fatalf("owner quote = %q, want the raw caption", records[0].Text)
+	}
+	if records[0].ThreadID != 17 {
+		t.Fatalf("owner topic = %d, want the topic Telegram echoed (17)", records[0].ThreadID)
 	}
 }
 

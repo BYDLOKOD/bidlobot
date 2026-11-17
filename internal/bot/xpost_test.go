@@ -392,6 +392,9 @@ func TestProcessXPostVideoRepostDeletesOriginal(t *testing.T) {
 	snd := &recYTSender{}
 	owners := &recOwners{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
+	// The link was posted into a forum topic, but the repost is sent
+	// without message_thread_id, so it lands in the General topic.
+	msg.MessageThreadID = 17
 	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, owners, msg, msg.Text)
 
 	if len(snd.Videos) != 1 || len(snd.MediaGroups) != 0 || len(snd.Messages) != 0 {
@@ -417,6 +420,14 @@ func TestProcessXPostVideoRepostDeletesOriginal(t *testing.T) {
 	if calls := owners.recorded(); len(calls) != 1 || calls[0] != fmt.Sprintf("%d:1002:%d", msg.Chat.ID, msg.From.ID) {
 		t.Fatalf("owner calls = %v", calls)
 	}
+	// Regression: the recorded topic is the one the sent message landed
+	// in (General, 0), never the source message's topic.
+	if records := owners.records(); len(records) != 1 || records[0].ThreadID != 0 {
+		t.Fatalf("owner topic = %+v, want 0 (the repost carries no thread)", records)
+	}
+	if records := owners.records(); len(records) != 1 || records[0].Text != "Hello world" {
+		t.Fatalf("owner quote = %+v, want the tweet text", records)
+	}
 	if len(snd.Deletes) != 1 || snd.Deletes[0].MessageID != msg.MessageID {
 		t.Fatalf("deletes = %+v", snd.Deletes)
 	}
@@ -436,8 +447,9 @@ func TestProcessXPostAlbumPhotosAndVideo(t *testing.T) {
 	defer api.Close()
 
 	snd := &recYTSender{}
+	owners := &recOwners{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, nil, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, owners, msg, msg.Text)
 
 	if len(snd.MediaGroups) != 1 || len(snd.Videos) != 0 || len(snd.Messages) != 0 {
 		t.Fatalf("calls: groups=%d videos=%d messages=%d", len(snd.MediaGroups), len(snd.Videos), len(snd.Messages))
@@ -463,6 +475,17 @@ func TestProcessXPostAlbumPhotosAndVideo(t *testing.T) {
 	}
 	if len(snd.Deletes) != 1 {
 		t.Fatalf("deletes = %+v", snd.Deletes)
+	}
+	// The album branch records every message the send returned. The fake
+	// answers with a single Message (id 1005), so one record is expected
+	// here; the []Message -> []sentMessage mapping itself is covered by
+	// TestSentMessagesOf.
+	records := owners.records()
+	if len(records) != 1 || records[0].MsgID != 1005 {
+		t.Fatalf("owner records = %+v, want the album message", records)
+	}
+	if records[0].Text != "Album tweet" || records[0].ThreadID != 0 {
+		t.Fatalf("owner quote/topic = %q/%d", records[0].Text, records[0].ThreadID)
 	}
 }
 

@@ -110,7 +110,17 @@ func repostTikTokPhotos(ctx context.Context, snd youtubeMediaSender, log *slog.L
 		return nil, repostTransient, fmt.Errorf("tiktok: slideshow has no confirmed message ID")
 	}
 	if owners != nil {
-		owners.RecordOwner(msg.Chat.ID, sent.MessageID, msg.From)
+		owners.RecordOwner(ownerRecord{
+			ChatID:   msg.Chat.ID,
+			MsgID:    sent.MessageID,
+			ThreadID: sent.MessageThreadID,
+			Owner:    msg.From,
+			// rawCaption, not the sent message: the slideshow goes out as
+			// a rich message, whose content travels in rich_message.blocks.
+			// telego v1.8 has no field for those blocks, so the decoded
+			// Message carries neither Text nor Caption.
+			Text: rawCaption,
+		})
 	}
 	if err := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageID: msg.MessageID}); err != nil {
 		log.Info("tiktok: slideshow sent but delete failed; original kept", "chat_id", msg.Chat.ID, "message_id", msg.MessageID, "error", err)
