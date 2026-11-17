@@ -104,12 +104,14 @@ A forum topic inserts its id: `/c/<internal-id>/<topic-id>/<message-id>`
 (topic 1 is the General topic and omits the segment), so the recorded
 topic must be the one the message was actually sent into - for a bot-sent
 message that is what the send call returned, never the topic of the
-message that triggered the repost. These links resolve for chat members
-only - a non-member gets "not found" - which is the intended behaviour,
-since the report is posted back into the same chat. `MessageLink` returns
-`""` for anything that is not a supergroup id (basic groups, private
-chats, channels are rejected defensively); the index is supergroup-only,
-so such a block never reaches the composer.
+message that triggered the repost. The id in that link is chat-internal,
+so the link is addressable only inside the chat - which is the intended
+scope, the report being posted back into it. `MessageLink` returns
+`""` for anything whose id falls below the `-100` floor: basic groups,
+private chats and user ids. Channels share the `-100` form, so the
+function does not reject them - they are simply never indexed, the index
+being supergroup-only, and a channel message therefore never reaches the
+composer.
 
 ### Limits
 

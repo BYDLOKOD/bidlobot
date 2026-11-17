@@ -447,8 +447,9 @@ func TestProcessXPostAlbumPhotosAndVideo(t *testing.T) {
 	defer api.Close()
 
 	snd := &recYTSender{}
+	owners := &recOwners{}
 	msg := ytTestMessage("https://x.com/alice/status/123456")
-	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, nil, msg, msg.Text)
+	processXPost(context.Background(), snd, discardLogger(), client, api.URL, nil, owners, msg, msg.Text)
 
 	if len(snd.MediaGroups) != 1 || len(snd.Videos) != 0 || len(snd.Messages) != 0 {
 		t.Fatalf("calls: groups=%d videos=%d messages=%d", len(snd.MediaGroups), len(snd.Videos), len(snd.Messages))
@@ -474,6 +475,17 @@ func TestProcessXPostAlbumPhotosAndVideo(t *testing.T) {
 	}
 	if len(snd.Deletes) != 1 {
 		t.Fatalf("deletes = %+v", snd.Deletes)
+	}
+	// The album branch records every message the send returned. The fake
+	// answers with a single Message (id 1005), so one record is expected
+	// here; the []Message -> []sentMessage mapping itself is covered by
+	// TestSentMessagesOf.
+	records := owners.records()
+	if len(records) != 1 || records[0].MsgID != 1005 {
+		t.Fatalf("owner records = %+v, want the album message", records)
+	}
+	if records[0].Text != "Album tweet" || records[0].ThreadID != 0 {
+		t.Fatalf("owner quote/topic = %q/%d", records[0].Text, records[0].ThreadID)
 	}
 }
 

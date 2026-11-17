@@ -214,10 +214,10 @@ migration (documented, not silently handled).
    repost leaves the original intact.
 5. **No third-party pings.** No user-triggered command emits
    `@handle` / `tg://user?id=` / `text_mention` for a third party;
-   attribution headers render inert display names. Quoted message text
-   (the reputation reaction report) is escaped and has every `@`
-   defused with U+2060 for the same reason and the birthday greeting is
-   a scheduled exception that mentions the birthday member only, never a
+   attribution headers render inert display names, and quoted message
+   text (the reputation reaction report) is escaped with every `@`
+   defused by U+2060 for the same reason. The birthday greeting is a
+   scheduled exception that mentions the birthday member only, never a
    bystander.
 6. **Owner-gated installation.** Non-owner bot adds trigger immediate
    LeaveChat + owner DM notice (bounded to 2 per actor).

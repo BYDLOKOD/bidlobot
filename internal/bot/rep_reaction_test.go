@@ -219,8 +219,13 @@ func TestRepReactorRecordOwnerNilSafety(t *testing.T) {
 	defer cleanup()
 	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2})
 	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2, Owner: &telego.User{ID: 1, IsBot: true}})
+	// A send result with no usable id is not indexed either.
+	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 0, Owner: aliceUser})
 	if _, ok := r2.index.Lookup(msgKey{chatID: 1, msgID: 2}); ok {
 		t.Fatal("nil and bot users must not be indexed")
+	}
+	if _, ok := r2.index.Lookup(msgKey{chatID: 1, msgID: 0}); ok {
+		t.Fatal("a message id of 0 must not be indexed")
 	}
 }
 
@@ -586,7 +591,18 @@ func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
 			delta: 3, actorBalance: 1, targetBalance: 2,
 			quote: strings.Repeat("я", repQuoteMaxRunes),
 			link:  "https://t.me/c/1234567890/42",
+			// Production events carry the phrase drawn in Handle; the
+			// fixture must too, or the split would measure a different
+			// render than it emits and the budget assertion would be
+			// soft again.
+			tmpl: praiseTemplates[0],
 		})
+	}
+
+	// The chunk the batcher measures must be the chunk it sends: with the
+	// phrase fixed per event, composing twice has to yield the same text.
+	if a, b := composeRepMessage(events), composeRepMessage(events); a != b {
+		t.Fatal("composeRepMessage must be deterministic for events that carry their phrase")
 	}
 
 	msgs := composeRepMessages(events)
@@ -630,6 +646,31 @@ func utf16Units(s string) int {
 		n++
 	}
 	return n
+}
+
+func TestSentMessagesOf(t *testing.T) {
+	// The album return path: Telegram answers one Message per album item,
+	// and each carries the topic it landed in.
+	if got := sentMessageOf(nil); got != (sentMessage{}) {
+		t.Fatalf("sentMessageOf(nil) = %+v, want the zero value", got)
+	}
+	ms := []telego.Message{
+		{MessageID: 7},
+		{MessageID: 8, MessageThreadID: 17},
+	}
+	got := sentMessagesOf(ms)
+	want := []sentMessage{{ID: 7}, {ID: 8, ThreadID: 17}}
+	if len(got) != len(want) {
+		t.Fatalf("sentMessagesOf = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("sentMessagesOf[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+	if got := sentMessagesOf(nil); len(got) != 0 {
+		t.Fatalf("no messages must map to no records, got %+v", got)
+	}
 }
 
 func TestRepBatcherDisablesLinkPreview(t *testing.T) {

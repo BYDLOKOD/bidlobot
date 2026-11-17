@@ -14,24 +14,23 @@ const supergroupIDFloor int64 = 1_000_000_000_000
 //
 // The Bot API has no "message link" method and the bot never resolves a
 // chat username (the membership store keeps the title, not a handle), so
-// the link uses Telegram's own private-chat form:
+// the link uses the private-chat form Telegram clients themselves produce
+// for a "Copy Link" in such a chat:
 //
 //	https://t.me/c/<internal-id>/<message-id>
 //
 // where the internal id is the supergroup id WITHOUT the "-100" prefix
-// (chat -1001234567890 -> 1234567890). Telegram clients resolve that
-// form for every member of the chat and jump straight to the message;
-// a non-member gets "not found", which is the intended behaviour - the
-// bot only ever posts these links back into the chat they came from.
+// (chat -1001234567890 -> 1234567890). The id is chat-internal, so the
+// link is only addressable by someone who is in that chat - which is the
+// intended scope: the bot posts these links back into the same chat.
 //
-// threadID is the message thread (forum topic) the message belongs to.
-// Telegram addresses a topic message as /c/<id>/<topic-id>/<message-id>;
-// topic 1 is the General topic and its links omit the segment. Pass 0
-// when the message carries no thread id.
+// threadID is the message thread (forum topic) the message belongs to:
+// a topic message is addressed as /c/<id>/<topic-id>/<message-id>. Thread
+// 1 is the General topic and 0 means no topic; both use the two-segment
+// form. Pass the message's MessageThreadID.
 //
-// Returns "" when the chat is not a supergroup or the message id is not
-// usable: callers then render the entry without a link rather than a
-// broken one.
+// Returns "" for an id below the -100 floor or an unusable message id:
+// callers then render the entry without a link rather than a broken one.
 func MessageLink(chatID int64, threadID, messageID int) string {
 	if messageID <= 0 || chatID > -supergroupIDFloor {
 		return ""

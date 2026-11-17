@@ -458,7 +458,7 @@ func repTemplate(kind reputation.Kind) string {
 // whitespace run (newlines, tabs, the repost caption layout) into single
 // spaces, trims, and cuts the result at repQuoteMaxRunes runes with an
 // ellipsis. Rune-based on purpose - cutting bytes would split a Cyrillic
-// or emoji sequence and make Telegram reject the whole message.
+// or emoji sequence and emit invalid UTF-8.
 // Returns "" for an empty text.
 func repQuoteText(s string) string {
 	s = strings.Join(strings.Fields(s), " ")
@@ -532,10 +532,10 @@ func repMediaLabel(msg *telego.Message) string {
 }
 
 // escQuote escapes a quote for Telegram's HTML parse mode. Only the three
-// characters that can open a tag or an entity are replaced: Telegram's
-// parser does not understand the numeric entities html.EscapeString
-// emits for quotes (' -> &#39;), and chat text carries them constantly,
-// so they must survive as plain characters.
+// characters that can open a tag or an entity are replaced, which is what
+// the Bot API requires; "'" and '"' are ordinary text characters in a
+// text node, so they stay as they are instead of turning into entities
+// the chat would have to render back.
 func escQuote(s string) string {
 	return quoteEscaper.Replace(s)
 }

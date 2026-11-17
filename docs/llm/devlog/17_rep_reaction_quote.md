@@ -63,10 +63,10 @@ reacted message and that quote is the permalink of the message.
   link is `/c/<id>/<topic>/<msg>`, so `ownerRecord.ThreadID` must come
   from the send result. Several senders pass no `message_thread_id`, so
   their message lands in the General topic whatever the source topic was;
-  deriving it from the triggering message produced links that resolved to
-  nothing. `xpost` and `tiktok_comment` now return `sentMessage{ID,
-  ThreadID}` instead of bare ids, and a liked X post or TikTok comment is
-  recorded with topic 0.
+  deriving it from the triggering message pointed the link at a topic the
+  message is not in. `xpost` and `tiktok_comment` now return
+  `sentMessage{ID, ThreadID}` instead of bare ids, and a liked X post or
+  TikTok comment is recorded with topic 0.
 - **The slideshow quotes the caption the caller holds.** telego v1.8
   cannot decode `rich_message.blocks`, so the sent slideshow's `Message`
   carries neither `Text` nor `Caption`; the repost already has the raw
@@ -77,8 +77,8 @@ reacted message and that quote is the permalink of the message.
 - A reaction on a message sent before the bot started still yields
   nothing, as before.
 - A message deleted inside the 10s window keeps its quote in the report.
-- The `t.me/c/` link needs membership; anyone in the chat can open it,
-  nobody else can.
+- The `t.me/c/` link addresses a chat-internal id, so it is meaningful
+  only inside the chat it points into.
 
 ## Review round (PR #7)
 
