@@ -104,14 +104,15 @@ A forum topic inserts its id: `/c/<internal-id>/<topic-id>/<message-id>`
 (topic 1 is the General topic and omits the segment), so the recorded
 topic must be the one the message was actually sent into - for a bot-sent
 message that is what the send call returned, never the topic of the
-message that triggered the repost. The id in that link is chat-internal,
-so the link is addressable only inside the chat - which is the intended
-scope, the report being posted back into it. `MessageLink` returns
-`""` for anything whose id falls below the `-100` floor: basic groups,
-private chats and user ids. Channels share the `-100` form, so the
-function does not reject them - they are simply never indexed, the index
-being supergroup-only, and a channel message therefore never reaches the
-composer.
+message that triggered the repost. The id in the link is chat-internal,
+and the report is posted back into the same chat, so every expected
+reader is already a member; whether a non-member can open the link
+depends on the chat's visibility and is not assumed here. `MessageLink`
+returns `""` for a chat id without a usable `-100` internal part (legacy
+basic groups, private chats, user ids). Channels share the `-100` form,
+so the function does not reject them - they are simply never indexed,
+the index being supergroup-only, and a channel message therefore never
+reaches the composer.
 
 ### Limits
 

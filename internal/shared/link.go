@@ -6,8 +6,8 @@ import "strconv"
 // supergroup chat id is "-100" followed by the internal id, so
 // |chat_id| >= 10^12. Channels share that form, so they are not
 // distinguished here; the bot only ever reacts in a supergroup. Legacy
-// basic groups (-123456789), private chats and user ids fall below the
-// floor and are rejected.
+// basic groups (-123456789), private chats and user ids do not carry
+// that form and are rejected.
 const supergroupIDFloor int64 = 1_000_000_000_000
 
 // MessageLink renders a t.me permalink to one message of a supergroup.
@@ -20,16 +20,18 @@ const supergroupIDFloor int64 = 1_000_000_000_000
 //	https://t.me/c/<internal-id>/<message-id>
 //
 // where the internal id is the supergroup id WITHOUT the "-100" prefix
-// (chat -1001234567890 -> 1234567890). The id is chat-internal, so the
-// link is only addressable by someone who is in that chat - which is the
-// intended scope: the bot posts these links back into the same chat.
+// (chat -1001234567890 -> 1234567890). The id is chat-internal, and the
+// bot posts these links back into the same chat, so every expected
+// reader is already a member; whether a non-member can open the link
+// depends on the chat's visibility and is not assumed here.
 //
 // threadID is the message thread (forum topic) the message belongs to:
 // a topic message is addressed as /c/<id>/<topic-id>/<message-id>. Thread
 // 1 is the General topic and 0 means no topic; both use the two-segment
 // form. Pass the message's MessageThreadID.
 //
-// Returns "" for an id below the -100 floor or an unusable message id:
+// Returns "" for a chat id without a usable -100 internal part (legacy
+// basic groups, private chats, user ids) or an unusable message id:
 // callers then render the entry without a link rather than a broken one.
 func MessageLink(chatID int64, threadID, messageID int) string {
 	if messageID <= 0 || chatID > -supergroupIDFloor {
