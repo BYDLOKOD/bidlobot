@@ -742,7 +742,13 @@ func postTikTokVideo(
 	}
 
 	if owners != nil {
-		owners.RecordOwner(chatID, sent.GetMessageID(), sharer)
+		owners.RecordOwner(ownerRecord{
+			ChatID:   chatID,
+			MsgID:    sent.GetMessageID(),
+			ThreadID: sent.MessageThreadID,
+			Owner:    sharer,
+			Text:     repMessageText(sent),
+		})
 	}
 	if videos != nil {
 		if vid := tiktokVideoID(videoURL); vid != "" {
@@ -826,7 +832,15 @@ func processTikTokComment(
 	// Reactions on the bot's quote credit whoever posted the link.
 	if owners != nil {
 		for _, id := range sentIDs {
-			owners.RecordOwner(chatID, id, msg.From)
+			owners.RecordOwner(ownerRecord{
+				ChatID:   chatID,
+				MsgID:    id,
+				ThreadID: msg.MessageThreadID,
+				Owner:    msg.From,
+				// The comment's own words: the caption around them is
+				// the bot's markup and the video is the reply target.
+				Text: comment.Text,
+			})
 		}
 	}
 

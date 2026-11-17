@@ -10,7 +10,7 @@ embedded bbolt database, long-polling. Ships as a docker-compose stack
 |------------|---------|
 | Statistics | `/stats`, `/stats top`, `/stats today`, `/stats month(s)`, `/stats @user` - public in the group |
 | Mini-games | `/dice`, `/battle`, `/quiz`, `/poll`, `/8ball`, `/guess`, `/hangman`, `/duel`, `/trivia` - public, per-user cooldown |
-| Reputation | `/praise @user`, `/roast @user`, `/rep`, `/reptop` - durable per-chat balance |
+| Reputation | `/praise @user`, `/roast @user`, `/rep`, `/reptop` - durable per-chat balance; 👍/👎/🤡 reactions credit the message author and the report quotes + links the message |
 | Referral catalog | `/refs`, `/refreg`, `/refreport` (admin) - chat-scoped referral links |
 | YouTube sanitizer | strips `si=` share-tracking param (delete + attributed repost) |
 | TikTok repost | downloads TikTok video, reposts attributed, deletes original |

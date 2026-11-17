@@ -11,7 +11,7 @@ touches:
   - internal/testutil/
   - internal/text/
 written: 2026-05-14
-updated: 2026-10-27
+updated: 2026-11-17
 ---
 
 # Architecture
@@ -100,7 +100,8 @@ internal/
 |  PUBLIC (supergroupPredicate):                          |
 |   games routes (slash + callbacks)                      |
 |   passive observers, in order:                          |
-|     membership -> stats count -> summarize recorder     |
+|     rep author index -> membership -> stats count       |
+|     -> summarize recorder                               |
 |   content middlewares, in order:                        |
 |     youtubeSanitizer -> tiktokReposter -> xpostReposter |
 |   cooldown-gated commands: /stats /flush /help          |
@@ -108,7 +109,8 @@ internal/
 |   InlineService -> read-only catalog only               |
 |                                                         |
 |  fanouts:                                               |
-|   message_reaction -> battle observer + membership      |
+|   message_reaction -> battle observer + rep reactor     |
+|     + membership                                        |
 |   my_chat_member  -> admission gate + onboarding        |
 |   chat_member     -> membership + captcha               |
 |  callbacks (order matters):                             |
@@ -212,9 +214,11 @@ migration (documented, not silently handled).
    repost leaves the original intact.
 5. **No third-party pings.** No user-triggered command emits
    `@handle` / `tg://user?id=` / `text_mention` for a third party;
-   attribution headers render inert display names. The birthday
-   greeting is a scheduled exception that mentions the birthday member
-   only, never a bystander.
+   attribution headers render inert display names. Quoted message text
+   (the reputation reaction report) is escaped and has every `@`
+   defused with U+2060 for the same reason and the birthday greeting is
+   a scheduled exception that mentions the birthday member only, never a
+   bystander.
 6. **Owner-gated installation.** Non-owner bot adds trigger immediate
    LeaveChat + owner DM notice (bounded to 2 per actor).
 7. **Cooldown is self-evicting.** Per-(user,command) gate sweeps
@@ -234,8 +238,8 @@ migration (documented, not silently handled).
 
 `AllowedUpdates` (`app.go:116-125`): `message`, `callback_query`,
 `my_chat_member` (admission + onboarding), `chat_member` (membership +
-captcha), `message_reaction` (membership + battle), `inline_query`.
-No `edited_message`, no `chat_join_request`.
+captcha), `message_reaction` (membership + battle + reputation report),
+`inline_query`. No `edited_message`, no `chat_join_request`.
 
 ## Background goroutines (`App.Run`)
 
@@ -278,6 +282,9 @@ No `edited_message`, no `chat_join_request`.
 | summarize provider fail | `summarize.go` | enqueue to deferred queue; placeholder stays |
 | summarize timeout/budget | `summarize.go` | Russian error, lower N |
 | Game/stats flood | `cooldown.gateMsg` | silent drop (bounded notice) |
+| reaction on a message the bot never indexed | `rep_reaction.go` | dropped: no attribution and no rep (Bot API cannot read a message back by id) |
+| reaction on a basic group / no permalink | `shared.MessageLink` | rep block renders without a link, quote text only |
+| rep report over the length budget | `rep_reaction.go` | split on block boundaries into several messages, never truncated |
 | Per-chat rate burst | ratelimit queue | drop oldest + WARN |
 | Non-owner bot add | `membership.go` | LeaveChat + owner DM notice |
 | birthday `getChat` error or hidden date | `birthday/service.go` | skip the member; no message |

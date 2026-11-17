@@ -297,7 +297,16 @@ func repostVideoTail(
 	}
 
 	if owners != nil && owner != nil {
-		owners.RecordOwner(chatID, sent.GetMessageID(), owner)
+		owners.RecordOwner(ownerRecord{
+			ChatID:   chatID,
+			MsgID:    sent.GetMessageID(),
+			ThreadID: sent.MessageThreadID,
+			Owner:    owner,
+			// What Telegram actually stored: the parsed text of the
+			// repost (attribution header + the sender's caption), not
+			// the HTML it was built from.
+			Text: repMessageText(sent),
+		})
 	}
 
 	// Delete the original only after a successful repost.

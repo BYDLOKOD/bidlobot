@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
 
@@ -191,7 +192,7 @@ func TestRepReactorCreditsOwnerOfBotRepost(t *testing.T) {
 	defer cleanup()
 	// The bot reposts Alice's TikTok link as message 21; RecordOwner
 	// indexes the bot-sent message under Alice. Bob likes the REPOST.
-	r.RecordOwner(-1001234567890, 21, aliceUser)
+	r.RecordOwner(ownerRecord{ChatID: -1001234567890, MsgID: 21, Owner: aliceUser, Text: "ловите видос"})
 	if err := r.Handle(nil, reactionFor(bobUser, 21, emojiLike)); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
@@ -213,11 +214,11 @@ func TestRepReactorCreditsOwnerOfBotRepost(t *testing.T) {
 func TestRepReactorRecordOwnerNilSafety(t *testing.T) {
 	var r *repReactor
 	// Feature off (nil reactor) and nil user must be no-ops.
-	r.RecordOwner(1, 2, aliceUser)
+	r.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2, Owner: aliceUser})
 	r2, _, _, cleanup := newRepReactorForTest(t)
 	defer cleanup()
-	r2.RecordOwner(1, 2, nil)
-	r2.RecordOwner(1, 2, &telego.User{ID: 1, IsBot: true})
+	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2})
+	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2, Owner: &telego.User{ID: 1, IsBot: true}})
 	if _, ok := r2.index.Lookup(msgKey{chatID: 1, msgID: 2}); ok {
 		t.Fatal("nil and bot users must not be indexed")
 	}
@@ -441,6 +442,255 @@ func TestRepReactorHandleBatchesIntoFanout(t *testing.T) {
 	texts := waitForSends(t, sender, 1)
 	if !strings.Contains(texts[0], "alice") || !strings.Contains(texts[0], "bob") {
 		t.Fatalf("batcher must combine both reactions, got %q", texts[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// What was liked, and where to tap
+// ---------------------------------------------------------------------------
+
+func TestRepQuoteTextCollapsesWhitespace(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"empty", "", ""},
+		{"whitespace only", "   \n\t ", ""},
+		{"collapses runs", "  лови\n\n\n  этот\tвидео  ", "лови этот видео"},
+		{"keeps markup for the composer to escape", `<b>a & b</b>`, `<b>a & b</b>`},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := repQuoteText(c.in); got != c.want {
+				t.Fatalf("repQuoteText(%q) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestRepQuoteTextTruncatesOnRuneBoundary(t *testing.T) {
+	long := strings.Repeat("ё", repQuoteMaxRunes+30)
+	got := repQuoteText(long)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncation broke UTF-8: %q", got)
+	}
+	if n := utf8.RuneCountInString(got); n != repQuoteMaxRunes+1 {
+		t.Fatalf("quote has %d runes, want %d (+ ellipsis)", n, repQuoteMaxRunes+1)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Fatalf("truncated quote must end with an ellipsis: %q", got)
+	}
+
+	// A quote exactly at the limit is kept whole, without an ellipsis.
+	exact := strings.Repeat("я", repQuoteMaxRunes)
+	if got := repQuoteText(exact); got != exact {
+		t.Fatalf("quote at the limit must not be touched, got %d runes", utf8.RuneCountInString(got))
+	}
+}
+
+func TestRepQuoteForPrefersTextAndLabelsMedia(t *testing.T) {
+	cases := []struct {
+		name string
+		msg  *telego.Message
+		want string
+	}{
+		{"text", &telego.Message{Text: "привет"}, "привет"},
+		{"caption", &telego.Message{Caption: "подпись"}, "подпись"},
+		{"caption beats media label", &telego.Message{Video: &telego.Video{}, Caption: "смотри"}, "смотри"},
+		{"bare photo", &telego.Message{Photo: []telego.PhotoSize{{}}}, "фото"},
+		{"bare video", &telego.Message{Video: &telego.Video{}}, "видео"},
+		{"bare video note", &telego.Message{VideoNote: &telego.VideoNote{}}, "кружок"},
+		{"bare sticker", &telego.Message{Sticker: &telego.Sticker{}}, "стикер"},
+		{"nothing at all", &telego.Message{}, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := repQuoteFor(c.msg); got != c.want {
+				t.Fatalf("repQuoteFor = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestComposeRepEntryLinksTheQuote(t *testing.T) {
+	text := composeRepMessage([]repEvent{{
+		kind: reputation.KindPraise, actor: "carol", target: "alice",
+		delta: 6, actorBalance: 10, targetBalance: 16,
+		quote: "починил деплой",
+		link:  "https://t.me/c/1234567890/42",
+	}})
+
+	want := `<a href="https://t.me/c/1234567890/42">«починил деплой»</a>`
+	if !strings.Contains(text, want) {
+		t.Fatalf("quote must be the permalink's link text:\n%s", text)
+	}
+	if !strings.Contains(text, "держи +6 от carol.") {
+		t.Fatalf("action line lost:\n%s", text)
+	}
+	if !strings.Contains(text, "Баланс: carol: 10, alice: 16") {
+		t.Fatalf("balance line lost:\n%s", text)
+	}
+	if strings.Index(text, "«") > strings.Index(text, "Баланс") {
+		t.Fatalf("quote must sit above the balance report:\n%s", text)
+	}
+}
+
+func TestComposeRepEntryEscapesAndDefusesQuote(t *testing.T) {
+	text := composeRepMessage([]repEvent{{
+		kind: reputation.KindRoast, actor: "carol", target: "alice", delta: -1,
+		quote: `<b>@dave</b> & co`,
+	}})
+
+	if strings.Contains(text, "<b>") {
+		t.Fatalf("markup from the quoted message must be escaped:\n%s", text)
+	}
+	if !strings.Contains(text, "&lt;b&gt;") || !strings.Contains(text, "&amp; co") {
+		t.Fatalf("quote must be HTML-escaped:\n%s", text)
+	}
+	// U+2060 breaks Telegram's bare-@mention parse: quoting someone else's
+	// text must never ping the people it names.
+	if !strings.Contains(text, "@\u2060dave") {
+		t.Fatalf("mention in the quote must be defused:\n%s", text)
+	}
+}
+
+func TestComposeRepEntryFallsBackToNameLink(t *testing.T) {
+	// No quote (a pre-restart message, or a bot repost with no text): the
+	// target's name carries the permalink instead.
+	text := composeRepMessage([]repEvent{{
+		kind: reputation.KindRoast, actor: "carol", target: "bob", delta: -1,
+		link: "https://t.me/c/1234567890/7",
+	}})
+	if !strings.Contains(text, `<a href="https://t.me/c/1234567890/7">bob</a>`) {
+		t.Fatalf("target name must carry the link when there is no quote:\n%s", text)
+	}
+	if strings.Contains(text, "«") {
+		t.Fatalf("no quote line expected:\n%s", text)
+	}
+
+	// Nothing known at all: plain inert text, as before.
+	plain := composeRepMessage([]repEvent{{
+		kind: reputation.KindPraise, actor: "carol", target: "bob", delta: 3,
+	}})
+	if strings.Contains(plain, "<a href") {
+		t.Fatalf("no link expected without one:\n%s", plain)
+	}
+}
+
+func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
+	events := make([]repEvent, 0, 40)
+	for i := 0; i < 40; i++ {
+		events = append(events, repEvent{
+			kind: reputation.KindPraise, actor: "carol", target: "alice",
+			delta: 3, actorBalance: 1, targetBalance: 2,
+			quote: strings.Repeat("я", repQuoteMaxRunes),
+			link:  "https://t.me/c/1234567890/42",
+		})
+	}
+
+	msgs := composeRepMessages(events)
+	if len(msgs) < 2 {
+		t.Fatalf("a 40-event batch must split, got %d message(s)", len(msgs))
+	}
+	total := 0
+	for _, m := range msgs {
+		if len([]rune(m)) > repMessageMaxChars+repQuoteMaxRunes {
+			t.Fatalf("chunk of %d runes overflows the budget", len([]rune(m)))
+		}
+		total += strings.Count(m, "Баланс:")
+	}
+	if total != len(events) {
+		t.Fatalf("splitting dropped entries: %d of %d survived", total, len(events))
+	}
+
+	if got := composeRepMessages(events[:1]); len(got) != 1 {
+		t.Fatalf("a single event must stay one message, got %d", len(got))
+	}
+	if got := composeRepMessages(nil); got != nil {
+		t.Fatalf("no events must compose nothing, got %v", got)
+	}
+}
+
+func TestRepBatcherDisablesLinkPreview(t *testing.T) {
+	sender := &stubRepSender{}
+	b := newRepBatcher(sender, testLogger())
+	b.window = 20 * time.Millisecond
+
+	b.Add(-100, repEvent{
+		kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3,
+		quote: "починил деплой", link: "https://t.me/c/1234567890/42",
+	})
+	waitForSends(t, sender, 1)
+
+	sender.mu.Lock()
+	defer sender.mu.Unlock()
+	p := sender.Sent[0]
+	if p.LinkPreviewOptions == nil || !p.LinkPreviewOptions.IsDisabled {
+		t.Fatalf("the permalink must not expand into a web preview, got %+v", p.LinkPreviewOptions)
+	}
+	if p.ParseMode != telego.ModeHTML {
+		t.Fatalf("rep report must stay HTML, got %q", p.ParseMode)
+	}
+}
+
+func TestRepReactorReportsQuoteAndPermalink(t *testing.T) {
+	r, sender, _, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	r.batch.window = 30 * time.Millisecond
+
+	r.RecordMessage(&telego.Message{
+		MessageID: 42,
+		Chat:      telego.Chat{ID: -1001234567890},
+		From:      aliceUser,
+		Text:      "починил деплой на проде",
+	})
+	_ = r.Handle(nil, reactionFor(bobUser, 42, emojiLike))
+
+	texts := waitForSends(t, sender, 1)
+	if !strings.Contains(texts[0], "https://t.me/c/1234567890/42") {
+		t.Fatalf("entry must link the reacted message:\n%s", texts[0])
+	}
+	if !strings.Contains(texts[0], "починил деплой на проде") {
+		t.Fatalf("entry must quote the reacted message:\n%s", texts[0])
+	}
+}
+
+func TestRepReactorTopicPermalinkCarriesThread(t *testing.T) {
+	r, sender, _, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	r.batch.window = 30 * time.Millisecond
+
+	r.RecordMessage(&telego.Message{
+		MessageID:       42,
+		MessageThreadID: 17,
+		Chat:            telego.Chat{ID: -1001234567890},
+		From:            aliceUser,
+		Text:            "в топике",
+	})
+	_ = r.Handle(nil, reactionFor(bobUser, 42, emojiLike))
+
+	texts := waitForSends(t, sender, 1)
+	if !strings.Contains(texts[0], "https://t.me/c/1234567890/17/42") {
+		t.Fatalf("forum topic link must carry the topic id:\n%s", texts[0])
+	}
+}
+
+func TestRepReactorOwnerRepostCarriesQuote(t *testing.T) {
+	// A liked TikTok/X repost credits the human who posted the link and
+	// quotes what the bot posted for them.
+	r, sender, _, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	r.batch.window = 30 * time.Millisecond
+
+	r.RecordOwner(ownerRecord{
+		ChatID: -1001234567890, MsgID: 21, Owner: aliceUser,
+		Text: "👤 Иван писал(а): ловите видос",
+	})
+	_ = r.Handle(nil, reactionFor(bobUser, 21, emojiLike))
+
+	texts := waitForSends(t, sender, 1)
+	if !strings.Contains(texts[0], "ловите видос") {
+		t.Fatalf("repost quote lost:\n%s", texts[0])
+	}
+	if !strings.Contains(texts[0], "https://t.me/c/1234567890/21") {
+		t.Fatalf("repost permalink lost:\n%s", texts[0])
 	}
 }
 

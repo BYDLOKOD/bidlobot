@@ -345,10 +345,10 @@ type recOwners struct {
 	calls []string // "chatID:msgID:userID"
 }
 
-func (r *recOwners) RecordOwner(chatID int64, msgID int, u *telego.User) {
+func (r *recOwners) RecordOwner(rec ownerRecord) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.calls = append(r.calls, fmt.Sprintf("%d:%d:%d", chatID, msgID, u.ID))
+	r.calls = append(r.calls, fmt.Sprintf("%d:%d:%d", rec.ChatID, rec.MsgID, rec.Owner.ID))
 }
 
 func (r *recOwners) recorded() []string {

@@ -285,7 +285,15 @@ func processXPost(
 
 	if owners != nil {
 		for _, id := range sentIDs {
-			owners.RecordOwner(chatID, id, msg.From)
+			owners.RecordOwner(ownerRecord{
+				ChatID:   chatID,
+				MsgID:    id,
+				ThreadID: msg.MessageThreadID,
+				Owner:    msg.From,
+				// The tweet text is what a rep entry should quote: the
+				// caption around it is the bot's own markup.
+				Text: tweet.Text,
+			})
 		}
 	}
 

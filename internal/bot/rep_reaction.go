@@ -9,6 +9,14 @@ package bot
 // balances (no per-reaction spam, but the balance change is always
 // visible). Removing a reaction does NOT undo the rep (no reversal).
 //
+// Each entry also says WHAT was liked and leads to it: a short quote of the
+// reacted message, and that quote is the t.me permalink of the message (tap
+// it -> jump to the message). The quote comes from the same bounded
+// in-memory index as the author (the Bot API cannot read a message back by
+// id), so a restart loses the quotes of older messages exactly like it
+// loses their attribution. When no quote is known the target's own name
+// carries the link instead, so the entry still leads somewhere.
+//
 // Author attribution problem: MessageReactionUpdated carries only
 // chat_id + message_id + who reacted - never the message author. The bot
 // therefore keeps a bounded in-memory index of (chat, messageID) ->
@@ -45,6 +53,17 @@ const repBatchWindow = 10 * time.Second
 // messages cannot be attributed.
 const maxIndexedMessages = 5000
 
+// repQuoteMaxRunes bounds the quoted text of one reacted message. Long
+// enough to recognise a message, short enough that a batch of a dozen
+// reactions still fits in one chat message.
+const repQuoteMaxRunes = 120
+
+// repMessageMaxChars is the compose budget for one combined rep message.
+// Telegram rejects anything past 4096 chars, and one batch can hold a
+// whole burst of reactions, so the batcher splits instead of truncating.
+// The headroom covers the markup and the ellipsis of the last entry.
+const repMessageMaxChars = 3800
+
 // Tracked reaction emojis. :like: = 👍, :dislike: = 👎, :clown_face: = 🤡.
 const (
 	emojiLike    = "👍"
@@ -64,6 +83,12 @@ type msgAuthor struct {
 	username  string
 	firstName string
 	isBot     bool
+	// quote is the cleaned, render-ready quote of the message text (see
+	// repQuoteText): already whitespace-collapsed and length-bounded,
+	// still unescaped - the composer escapes it.
+	quote string
+	// threadID is the message's forum topic, for the permalink.
+	threadID int
 }
 
 // msgAuthorIndex is a bounded in-memory (chat, messageID) -> author map
@@ -112,7 +137,25 @@ func (x *msgAuthorIndex) Lookup(key msgKey) (msgAuthor, bool) {
 // it reposts, so reactions on the bot's message credit that human.
 // *repReactor implements it; a nil *repReactor is a valid no-op value.
 type ownerRecorder interface {
-	RecordOwner(chatID int64, msgID int, u *telego.User)
+	RecordOwner(rec ownerRecord)
+}
+
+// ownerRecord is one BOT-sent message that must be credited to a human.
+// The media reposters, comment quotes and X renders send messages the bot
+// never receives back as updates, so the stream-fed index cannot learn
+// them; the caller describes the message instead.
+//
+// Text is the plain text the bot posted for it: the Bot API returns
+// parsed text plus entities, so an HTML caption arrives here already
+// stripped of its markup. It becomes the rep quote. Empty Text is
+// allowed: the rep entry then links to the message without quoting it
+// (a bare reposted video has no caption at all).
+type ownerRecord struct {
+	ChatID   int64
+	MsgID    int
+	ThreadID int
+	Owner    *telego.User
+	Text     string
 }
 
 // RecordOwner feeds the author index for a message the bot itself sent
@@ -122,15 +165,17 @@ type ownerRecorder interface {
 // miss. isBot stays false on purpose: the recorded author is the human
 // owner, and the existing isBot guard then protects nothing here.
 // nil-receiver safe: feature off -> no-op.
-func (r *repReactor) RecordOwner(chatID int64, msgID int, u *telego.User) {
-	if r == nil || u == nil || u.IsBot {
+func (r *repReactor) RecordOwner(rec ownerRecord) {
+	if r == nil || rec.Owner == nil || rec.Owner.IsBot || rec.MsgID <= 0 {
 		return
 	}
-	r.index.Record(msgKey{chatID: chatID, msgID: msgID}, msgAuthor{
-		userID:    u.ID,
-		username:  u.Username,
-		firstName: u.FirstName,
+	r.index.Record(msgKey{chatID: rec.ChatID, msgID: rec.MsgID}, msgAuthor{
+		userID:    rec.Owner.ID,
+		username:  rec.Owner.Username,
+		firstName: rec.Owner.FirstName,
 		isBot:     false,
+		quote:     repQuoteText(rec.Text),
+		threadID:  rec.ThreadID,
 	})
 }
 
@@ -177,6 +222,8 @@ func (r *repReactor) RecordMessage(msg *telego.Message) {
 		username:  msg.From.Username,
 		firstName: msg.From.FirstName,
 		isBot:     msg.From.IsBot,
+		quote:     repQuoteFor(msg),
+		threadID:  msg.MessageThreadID,
 	})
 }
 
@@ -255,6 +302,8 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 		delta:         repDelta(kind, targetAdmin),
 		actorBalance:  res.ActorBalance,
 		targetBalance: res.TargetBalance,
+		quote:         author.quote,
+		link:          shared.MessageLink(reaction.Chat.ID, author.threadID, reaction.MessageID),
 	})
 	return nil
 }
@@ -348,12 +397,103 @@ type repEvent struct {
 	delta         int
 	actorBalance  int
 	targetBalance int
+	// quote is the raw (unescaped) text of the reacted message; the
+	// composer escapes and, when link is set, makes it the link text.
+	quote string
+	// link is the t.me permalink of the reacted message ("" when the
+	// chat is no supergroup or the message cannot be addressed).
+	link string
 }
 
-// repBatcher accumulates rep events per chat and flushes ONE combined
-// message repBatchWindow after the first event of a batch. The flush
-// runs on a timer goroutine so it never blocks the sequential update
-// loop. Errors are logged, never surfaced.
+// repQuoteText cleans one message text into a rep quote: collapses every
+// whitespace run (newlines, tabs, the repost caption layout) into single
+// spaces, trims, and cuts the result at repQuoteMaxRunes runes with an
+// ellipsis. Rune-based on purpose - cutting bytes would split a Cyrillic
+// or emoji sequence and make Telegram reject the whole message.
+// Returns "" for an empty text.
+func repQuoteText(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if s == "" {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) > repQuoteMaxRunes {
+		s = strings.TrimRight(string(r[:repQuoteMaxRunes]), " ") + "…"
+	}
+	return s
+}
+
+// repQuoteFor builds the quote of an incoming message: its text or
+// caption, or a short media label when it carries no text at all (a bare
+// photo or sticker still gets a rep entry that says what it was).
+func repQuoteFor(msg *telego.Message) string {
+	if q := repQuoteText(repMessageText(msg)); q != "" {
+		return q
+	}
+	return repMediaLabel(msg)
+}
+
+// repMessageText returns whichever of text/caption the message carries.
+func repMessageText(msg *telego.Message) string {
+	if msg == nil {
+		return ""
+	}
+	if msg.Text != "" {
+		return msg.Text
+	}
+	return msg.Caption
+}
+
+// repMediaLabel names a text-less message so its rep entry is not
+// anonymous. Deliberately short: it is a caption substitute, not a
+// description.
+func repMediaLabel(msg *telego.Message) string {
+	switch {
+	case msg == nil:
+		return ""
+	case msg.Photo != nil:
+		return "фото"
+	case msg.Video != nil:
+		return "видео"
+	case msg.Animation != nil:
+		return "гифка"
+	case msg.VideoNote != nil:
+		return "кружок"
+	case msg.Voice != nil:
+		return "голосовое"
+	case msg.Audio != nil:
+		return "аудио"
+	case msg.Sticker != nil:
+		return "стикер"
+	case msg.Poll != nil:
+		return "опрос"
+	case msg.Document != nil:
+		return "файл"
+	default:
+		return ""
+	}
+}
+
+// escQuote escapes a quote for Telegram's HTML parse mode. Only the three
+// characters that can open a tag or an entity are replaced: Telegram's
+// parser does not understand the numeric entities html.EscapeString
+// emits for quotes (' -> &#39;), and chat text carries them constantly,
+// so they must survive as plain characters.
+func escQuote(s string) string {
+	return quoteEscaper.Replace(s)
+}
+
+var quoteEscaper = strings.NewReplacer(
+	"&", "&amp;",
+	"<", "&lt;",
+	">", "&gt;",
+)
+
+// repBatcher accumulates rep events per chat and flushes them as one
+// combined message (or a few, when the batch outgrows the length budget)
+// repBatchWindow after the first event of a batch. The flush runs on a
+// timer goroutine so it never blocks the sequential update loop. Errors
+// are logged, never surfaced.
 type repBatcher struct {
 	mu     sync.Mutex
 	sender repSender
@@ -392,8 +532,10 @@ func (b *repBatcher) Add(chatID int64, ev repEvent) {
 	b.mu.Unlock()
 }
 
-// flush sends the combined message for a chat and clears the batch. Runs
-// on the timer goroutine.
+// flush sends the combined message(s) for a chat and clears the batch.
+// Runs on the timer goroutine. A batch longer than one message is split
+// on event boundaries; the first send error ends the batch (a failing
+// chat will fail the rest too).
 func (b *repBatcher) flush(chatID int64) {
 	b.mu.Lock()
 	batch, ok := b.pending[chatID]
@@ -405,16 +547,22 @@ func (b *repBatcher) flush(chatID int64) {
 	events := batch.events
 	b.mu.Unlock()
 
-	text := composeRepMessage(events)
-	if _, err := b.sender.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID:    telego.ChatID{ID: chatID},
-		Text:      text,
-		ParseMode: telego.ModeHTML,
-	}); err != nil {
-		b.log.Warn("rep batcher send failed", "chat_id", chatID, "error", err)
-		return
+	texts := composeRepMessages(events)
+	for _, text := range texts {
+		if _, err := b.sender.SendMessage(context.Background(), &telego.SendMessageParams{
+			ChatID:    telego.ChatID{ID: chatID},
+			Text:      text,
+			ParseMode: telego.ModeHTML,
+			// The quote is a link to the reacted message; a web page
+			// preview over it would bury the joke and inflate the
+			// message.
+			LinkPreviewOptions: &telego.LinkPreviewOptions{IsDisabled: true},
+		}); err != nil {
+			b.log.Warn("rep batcher send failed", "chat_id", chatID, "error", err)
+			return
+		}
 	}
-	b.log.Info("rep batcher flushed", "chat_id", chatID, "events", len(events))
+	b.log.Info("rep batcher flushed", "chat_id", chatID, "events", len(events), "messages", len(texts))
 }
 
 // composeRepMessage renders the combined rep report in the classic
@@ -426,20 +574,85 @@ func composeRepMessage(events []repEvent) string {
 		if i > 0 {
 			b.WriteString("\n\n")
 		}
-		tmpl := praiseTemplates[rand.IntN(len(praiseTemplates))]
-		if e.kind == reputation.KindRoast {
-			tmpl = roastTemplates[rand.IntN(len(roastTemplates))]
-		}
-		body := strings.Replace(tmpl, "%s", e.target, 1)
-		if e.kind == reputation.KindRoast {
-			fmt.Fprintf(&b, "%s\n\nлови %d, чучело, от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>",
-				body, e.delta, e.actor, e.actor, e.actorBalance, e.target, e.targetBalance)
-			continue
-		}
-		fmt.Fprintf(&b, "%s\n\nдержи %+d от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>",
-			body, e.delta, e.actor, e.actor, e.actorBalance, e.target, e.targetBalance)
+		writeRepEntry(&b, e)
 	}
 	return b.String()
+}
+
+// composeRepMessages splits the events of one batch into as many chat
+// messages as the length budget needs, on event boundaries: truncating
+// would silently drop reactions that already cost the actor balance.
+func composeRepMessages(events []repEvent) []string {
+	if len(events) == 0 {
+		return nil
+	}
+	var (
+		out []string
+		cur []repEvent
+	)
+	flush := func() {
+		if len(cur) == 0 {
+			return
+		}
+		out = append(out, composeRepMessage(cur))
+		cur = nil
+	}
+	for _, e := range events {
+		// Trial on a copy: compose decides the split, and the real
+		// chunk must not be overwritten by a rejected trial.
+		trial := make([]repEvent, len(cur)+1)
+		copy(trial, cur)
+		trial[len(cur)] = e
+		if len(cur) > 0 && len(composeRepMessage(trial)) > repMessageMaxChars {
+			flush()
+			cur = []repEvent{e}
+			continue
+		}
+		cur = trial
+	}
+	flush()
+	return out
+}
+
+// writeRepEntry appends one credited reaction: the classic /praise
+// /roast line, the quote of the reacted message (made the permalink's
+// link text), and the balance report. A quote on its own line keeps the
+// joke readable while the link stays tappable.
+func writeRepEntry(b *strings.Builder, e repEvent) {
+	tmpl := praiseTemplates[rand.IntN(len(praiseTemplates))]
+	if e.kind == reputation.KindRoast {
+		tmpl = roastTemplates[rand.IntN(len(roastTemplates))]
+	}
+	// The reacted message is reachable through exactly one link: its
+	// quote when there is one, else the target's own name.
+	head := e.target
+	if e.quote == "" && e.link != "" {
+		head = fmt.Sprintf(`<a href="%s">%s</a>`, e.link, e.target)
+	}
+	body := strings.Replace(tmpl, "%s", head, 1)
+
+	quote := ""
+	if e.quote != "" {
+		q := defuseMentions(escQuote(e.quote))
+		if e.link != "" {
+			quote = fmt.Sprintf("<a href=\"%s\">«%s»</a>", e.link, q)
+		} else {
+			quote = "«" + q + "»"
+		}
+	}
+
+	balance := fmt.Sprintf("<i>(Баланс: %s: %d, %s: %d)</i>",
+		e.actor, e.actorBalance, e.target, e.targetBalance)
+	if e.kind == reputation.KindRoast {
+		fmt.Fprintf(b, "%s\n\nлови %d, чучело, от %s.\n", body, e.delta, e.actor)
+	} else {
+		fmt.Fprintf(b, "%s\n\nдержи %+d от %s.\n", body, e.delta, e.actor)
+	}
+	if quote != "" {
+		b.WriteString(quote)
+		b.WriteString("\n")
+	}
+	b.WriteString(balance)
 }
 
 // repAuthorIndexMiddleware feeds the rep reactor's author index from the
