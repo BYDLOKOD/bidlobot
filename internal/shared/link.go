@@ -4,8 +4,10 @@ import "strconv"
 
 // supergroupIDFloor is the smallest supergroup id magnitude: every
 // supergroup chat id is "-100" followed by the internal id, so
-// |chat_id| >= 10^12. Legacy basic groups (-123456789) and channels
-// fall below the floor.
+// |chat_id| >= 10^12. Channels share that form, so they are not
+// distinguished here; the bot only ever reacts in a supergroup. Legacy
+// basic groups (-123456789), private chats and user ids fall below the
+// floor and are rejected.
 const supergroupIDFloor int64 = 1_000_000_000_000
 
 // MessageLink renders a t.me permalink to one message of a supergroup.

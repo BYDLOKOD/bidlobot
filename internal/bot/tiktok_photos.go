@@ -113,9 +113,13 @@ func repostTikTokPhotos(ctx context.Context, snd youtubeMediaSender, log *slog.L
 		owners.RecordOwner(ownerRecord{
 			ChatID:   msg.Chat.ID,
 			MsgID:    sent.MessageID,
-			ThreadID: msg.MessageThreadID,
+			ThreadID: sent.MessageThreadID,
 			Owner:    msg.From,
-			Text:     repMessageText(sent),
+			// rawCaption, not the sent message: the slideshow goes out as
+			// a rich message, whose content travels in rich_message.blocks.
+			// telego v1.8 has no field for those blocks, so the decoded
+			// Message carries neither Text nor Caption.
+			Text: rawCaption,
 		})
 	}
 	if err := snd.DeleteMessage(ctx, &telego.DeleteMessageParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageID: msg.MessageID}); err != nil {

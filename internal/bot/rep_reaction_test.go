@@ -498,6 +498,10 @@ func TestRepQuoteForPrefersTextAndLabelsMedia(t *testing.T) {
 		{"bare video", &telego.Message{Video: &telego.Video{}}, "видео"},
 		{"bare video note", &telego.Message{VideoNote: &telego.VideoNote{}}, "кружок"},
 		{"bare sticker", &telego.Message{Sticker: &telego.Sticker{}}, "стикер"},
+		{"bare dice", &telego.Message{Dice: &telego.Dice{}}, "кубик"},
+		{"bare location", &telego.Message{Location: &telego.Location{}}, "геолокация"},
+		{"bare contact", &telego.Message{Contact: &telego.Contact{}}, "контакт"},
+		{"bare game", &telego.Message{Game: &telego.Game{}}, "игра"},
 		{"nothing at all", &telego.Message{}, ""},
 	}
 	for _, c := range cases {
@@ -591,8 +595,14 @@ func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
 	}
 	total := 0
 	for _, m := range msgs {
-		if len([]rune(m)) > repMessageMaxChars+repQuoteMaxRunes {
-			t.Fatalf("chunk of %d runes overflows the budget", len([]rune(m)))
+		// The budget is measured in bytes (len of a Go string), while
+		// Telegram counts UTF-16 units: assert both, so a regression to
+		// rune counting cannot slip through on Cyrillic text.
+		if len(m) > repMessageMaxChars {
+			t.Fatalf("chunk of %d bytes equals or exceeds the %d-byte budget", len(m), repMessageMaxChars)
+		}
+		if u := utf16Units(m); u > 4096 {
+			t.Fatalf("chunk of %d UTF-16 units exceeds Telegram's 4096 limit", u)
 		}
 		total += strings.Count(m, "Баланс:")
 	}
@@ -606,6 +616,20 @@ func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
 	if got := composeRepMessages(nil); got != nil {
 		t.Fatalf("no events must compose nothing, got %v", got)
 	}
+}
+
+// utf16Units counts the UTF-16 code units of s, which is what Telegram
+// measures against its 4096 limit (an emoji outside the BMP costs two).
+func utf16Units(s string) int {
+	n := 0
+	for _, r := range s {
+		if r > 0xFFFF {
+			n += 2
+			continue
+		}
+		n++
+	}
+	return n
 }
 
 func TestRepBatcherDisablesLinkPreview(t *testing.T) {

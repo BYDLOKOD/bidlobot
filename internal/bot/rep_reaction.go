@@ -145,6 +145,12 @@ type ownerRecorder interface {
 // never receives back as updates, so the stream-fed index cannot learn
 // them; the caller describes the message instead.
 //
+// ThreadID must be the topic the message was actually sent into, which is
+// what the send call returned - not the topic of the message that
+// triggered the repost. Several senders pass no message_thread_id, so
+// their messages land in the General topic whatever the source topic was,
+// and a link built from the source topic would not resolve.
+//
 // Text is the plain text the bot posted for it: the Bot API returns
 // parsed text plus entities, so an HTML caption arrives here already
 // stripped of its markup. It becomes the rep quote. Empty Text is
@@ -156,6 +162,33 @@ type ownerRecord struct {
 	ThreadID int
 	Owner    *telego.User
 	Text     string
+}
+
+// sentMessage is what owner attribution needs from a message the bot just
+// sent: the id the chat sees and the forum topic Telegram actually put it
+// in (0 = no topic). Read from the send result on purpose - see
+// ownerRecord.ThreadID.
+type sentMessage struct {
+	ID       int
+	ThreadID int
+}
+
+// sentMessageOf describes one sent message. A nil message (a caller that
+// only knows the id) yields the zero value and records no topic.
+func sentMessageOf(m *telego.Message) sentMessage {
+	if m == nil {
+		return sentMessage{}
+	}
+	return sentMessage{ID: m.GetMessageID(), ThreadID: m.MessageThreadID}
+}
+
+// sentMessagesOf describes an album send result.
+func sentMessagesOf(ms []telego.Message) []sentMessage {
+	out := make([]sentMessage, 0, len(ms))
+	for i := range ms {
+		out = append(out, sentMessageOf(&ms[i]))
+	}
+	return out
 }
 
 // RecordOwner feeds the author index for a message the bot itself sent
@@ -211,7 +244,7 @@ type repSender interface {
 }
 
 // RecordMessage feeds the author index from the supergroup message
-// stream. Runs as a middleware before the passive observers so the
+// stream. Runs among the passive observers, before the reposters, so the
 // original human message is always indexed.
 func (r *repReactor) RecordMessage(msg *telego.Message) {
 	if msg == nil || msg.From == nil {
@@ -304,6 +337,7 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 		targetBalance: res.TargetBalance,
 		quote:         author.quote,
 		link:          shared.MessageLink(reaction.Chat.ID, author.threadID, reaction.MessageID),
+		tmpl:          repTemplate(kind),
 	})
 	return nil
 }
@@ -403,6 +437,21 @@ type repEvent struct {
 	// link is the t.me permalink of the reacted message ("" when the
 	// chat is no supergroup or the message cannot be addressed).
 	link string
+	// tmpl is the phrase chosen for this entry when the event was
+	// created (see repTemplate).
+	tmpl string
+}
+
+// repTemplate picks the phrase for one entry. The draw happens when the
+// event is created, not when it is rendered: composeRepMessages measures
+// a rendered chunk to decide where to split and flush renders it again,
+// so a fresh draw per render would make the measured length differ from
+// the sent one.
+func repTemplate(kind reputation.Kind) string {
+	if kind == reputation.KindRoast {
+		return roastTemplates[rand.IntN(len(roastTemplates))]
+	}
+	return praiseTemplates[rand.IntN(len(praiseTemplates))]
 }
 
 // repQuoteText cleans one message text into a rep quote: collapses every
@@ -465,8 +514,16 @@ func repMediaLabel(msg *telego.Message) string {
 		return "аудио"
 	case msg.Sticker != nil:
 		return "стикер"
+	case msg.Dice != nil:
+		return "кубик"
 	case msg.Poll != nil:
 		return "опрос"
+	case msg.Location != nil, msg.Venue != nil:
+		return "геолокация"
+	case msg.Contact != nil:
+		return "контакт"
+	case msg.Game != nil:
+		return "игра"
 	case msg.Document != nil:
 		return "файл"
 	default:
@@ -619,9 +676,9 @@ func composeRepMessages(events []repEvent) []string {
 // link text), and the balance report. A quote on its own line keeps the
 // joke readable while the link stays tappable.
 func writeRepEntry(b *strings.Builder, e repEvent) {
-	tmpl := praiseTemplates[rand.IntN(len(praiseTemplates))]
-	if e.kind == reputation.KindRoast {
-		tmpl = roastTemplates[rand.IntN(len(roastTemplates))]
+	tmpl := e.tmpl
+	if tmpl == "" {
+		tmpl = repTemplate(e.kind)
 	}
 	// The reacted message is reachable through exactly one link: its
 	// quote when there is one, else the target's own name.
@@ -656,9 +713,10 @@ func writeRepEntry(b *strings.Builder, e repEvent) {
 }
 
 // repAuthorIndexMiddleware feeds the rep reactor's author index from the
-// supergroup message stream. Runs early, before the passive observers,
-// so the original human message is always indexed even when a later
-// middleware reposts/deletes it.
+// supergroup message stream. Runs in the observer chain (membership,
+// stats, then this, then the summarize recorder) - before the content
+// middlewares, so the original human message is always indexed even when
+// a reposter deletes it.
 func repAuthorIndexMiddleware(r *repReactor) th.Handler {
 	return func(ctx *th.Context, update telego.Update) error {
 		if msg := update.Message; msg != nil && msg.From != nil {

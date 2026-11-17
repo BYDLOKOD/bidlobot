@@ -75,15 +75,21 @@ Reactions are the second rep path and need no command:
   paid for.
 - **What was liked.** Each block names the credited author, quotes the
   reacted message, and makes that quote the permalink - tapping it jumps
-  to the message. Without a quote (a text-less repost, a media message
-  with no caption) the author's name carries the link instead, so the
-  block always leads somewhere.
+  to the message. Only a record that carries no text at all falls back to
+  the author's name as the link text: a bot-sent message with no caption
+  (a bare reposted video) or a message kind `repMediaLabel` does not name.
+  An incoming photo or sticker is not such a case - it gets a label.
 - **Quote source and shape.** Message text or caption, whitespace runs
-  collapsed, cut at `repQuoteMaxRunes` (120) runes with an ellipsis. A
-  message with no text contributes a media label: "фото", "видео",
-  "гифка", "кружок", "голосовое", "аудио", "стикер", "опрос", "файл".
-  Bot reposts are quoted from what Telegram stored for the bot's message
-  (`Caption` after parsing), not from the HTML the bot built.
+  collapsed, cut at `repQuoteMaxRunes` (120) runes with an ellipsis. An
+  incoming message with no text contributes a media label: "фото",
+  "видео", "гифка", "кружок", "голосовое", "аудио", "стикер", "кубик",
+  "опрос", "геолокация", "контакт", "игра", "файл". Bot-sent messages
+  quote the text the caller supplies for that message - the tweet text
+  (`xpost`), the comment text (`tiktok_comment`), the sender's caption of
+  a repost, or the raw caption of a TikTok slideshow (`tiktok_photos`,
+  whose rich message decodes into a `Message` with neither `Text` nor
+  `Caption` in telego v1.8). `RecordOwner` does not invent a media label:
+  no text means no quote.
 - **Untrusted text.** A quote is somebody else's message: `<`, `>`, `&`
   are escaped, and every `@` gets a U+2060 WORD JOINER so quoting a
   message can never ping the people it names
@@ -95,11 +101,15 @@ Reactions are the second rep path and need no command:
 `https://t.me/c/<internal-id>/<message-id>`, where the internal id is
 the supergroup id with the `-100` prefix stripped (`shared.MessageLink`).
 A forum topic inserts its id: `/c/<internal-id>/<topic-id>/<message-id>`
-(topic 1 is the General topic and omits the segment). These links
-resolve for chat members only - a non-member gets "not found" - which is
-the intended behaviour, since the report is posted back into the same
-chat. A basic group has no `c/` link and such a block renders without
-one.
+(topic 1 is the General topic and omits the segment), so the recorded
+topic must be the one the message was actually sent into - for a bot-sent
+message that is what the send call returned, never the topic of the
+message that triggered the repost. These links resolve for chat members
+only - a non-member gets "not found" - which is the intended behaviour,
+since the report is posted back into the same chat. `MessageLink` returns
+`""` for anything that is not a supergroup id (basic groups, private
+chats, channels are rejected defensively); the index is supergroup-only,
+so such a block never reaches the composer.
 
 ### Limits
 

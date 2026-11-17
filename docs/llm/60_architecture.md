@@ -100,7 +100,7 @@ internal/
 |  PUBLIC (supergroupPredicate):                          |
 |   games routes (slash + callbacks)                      |
 |   passive observers, in order:                          |
-|     rep author index -> membership -> stats count       |
+|     membership -> stats count -> rep author index       |
 |     -> summarize recorder                               |
 |   content middlewares, in order:                        |
 |     youtubeSanitizer -> tiktokReposter -> xpostReposter |
@@ -283,7 +283,6 @@ captcha), `message_reaction` (membership + battle + reputation report),
 | summarize timeout/budget | `summarize.go` | Russian error, lower N |
 | Game/stats flood | `cooldown.gateMsg` | silent drop (bounded notice) |
 | reaction on a message the bot never indexed | `rep_reaction.go` | dropped: no attribution and no rep (Bot API cannot read a message back by id) |
-| reaction on a basic group / no permalink | `shared.MessageLink` | rep block renders without a link, quote text only |
 | rep report over the length budget | `rep_reaction.go` | split on block boundaries into several messages, never truncated |
 | Per-chat rate burst | ratelimit queue | drop oldest + WARN |
 | Non-owner bot add | `membership.go` | LeaveChat + owner DM notice |

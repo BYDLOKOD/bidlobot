@@ -59,6 +59,18 @@ reacted message and that quote is the permalink of the message.
   understand the numeric entities `html.EscapeString` emits for quotes,
   and chat messages carry apostrophes constantly; `'` and `"` are safe
   as plain characters in a text node.
+- **The recorded topic is the topic the message landed in.** A forum
+  link is `/c/<id>/<topic>/<msg>`, so `ownerRecord.ThreadID` must come
+  from the send result. Several senders pass no `message_thread_id`, so
+  their message lands in the General topic whatever the source topic was;
+  deriving it from the triggering message produced links that resolved to
+  nothing. `xpost` and `tiktok_comment` now return `sentMessage{ID,
+  ThreadID}` instead of bare ids, and a liked X post or TikTok comment is
+  recorded with topic 0.
+- **The slideshow quotes the caption the caller holds.** telego v1.8
+  cannot decode `rich_message.blocks`, so the sent slideshow's `Message`
+  carries neither `Text` nor `Caption`; the repost already has the raw
+  caption in scope.
 
 ## Limits
 
@@ -67,6 +79,33 @@ reacted message and that quote is the permalink of the message.
 - A message deleted inside the 10s window keeps its quote in the report.
 - The `t.me/c/` link needs membership; anyone in the chat can open it,
   nobody else can.
-- No live verification of the permalink form or of the forum-topic
-  segment was possible from the test suite: both need one check in a
-  real chat after deploy.
+
+## Review round (PR #7)
+
+`Arsolitt` reviewed the first commit: two functional findings, both
+fixed here - the topic of bot-sent X/TikTok-comment records was derived
+from the source message, and the TikTok slideshow never had a quote.
+Also taken from that review: `repMediaLabel` covers dice, location/venue,
+contact and game messages; the batch budget is asserted in bytes and in
+UTF-16 units, not runes; the phrase is now drawn once per event
+(`repEvent.tmpl`) so the chunk the batcher measures is the chunk it
+sends; the observer order in the architecture diagram and the two
+middleware comments match `routes.go`; `MessageLink`'s comment no longer
+claims channels fall below the `-100` floor; `recOwners` records the
+whole `ownerRecord`, so the fake can assert the quote and the topic; the
+empty `if` that hid the owner assertion in
+`TestProcessTikTokCommentTextOnly` now actually asserts.
+
+## Verification
+
+- `GOOS=linux go build ./...` - exit 0.
+- `GOOS=linux go vet ./...` (test files included) - exit 0.
+- `gofmt -l` on the changed files - empty.
+- `go test ./internal/bot/ ./internal/shared/` on the Windows dev box:
+  all pass except the pre-existing `TestCooldownGate`, which fails on
+  Windows at `HEAD` as well (`time.Now()` granularity against a 1ns
+  window) and is untouched by this change.
+- `bash docs/llm/validate.sh` - 0 errors, same stale count as `master`.
+- Not verified anywhere yet: the `t.me/c/` form itself and the
+  forum-topic segment. Both need one live check after deploy.
+
