@@ -2,6 +2,7 @@ package bot
 
 import (
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,7 +72,11 @@ func (c *cooldown) sweepLocked(now time.Time) {
 	}
 	c.lastSweep = now
 	for k, t := range c.last {
-		if now.Sub(t) > cooldownEvictAfter {
+		limit := cooldownEvictAfter
+		if strings.HasPrefix(k, "8ball-auto|") {
+			limit = eightBallQuiet
+		}
+		if now.Sub(t) > limit {
 			delete(c.last, k)
 			delete(c.notified, k)
 		}

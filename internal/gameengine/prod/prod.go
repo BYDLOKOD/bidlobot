@@ -212,7 +212,7 @@ func openIncident(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine
 	}
 	if active != nil {
 		return gameengine.Result{}, gameengine.Reject(fmt.Sprintf(
-			"В чате уже идёт инцидент «%s». Дождитесь итога или отмените лобби.", active.Scenario.Title))
+			"В чате уже открыт инцидент: %s.", active.Scenario.Title))
 	}
 	wallet, err := gameengine.Wallet(tx, a.ChatID, a.UserID)
 	if err != nil {
@@ -220,13 +220,11 @@ func openIncident(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine
 	}
 	if wallet.Score < sponsorMinScore {
 		return gameengine.Result{}, gameengine.Reject(fmt.Sprintf(
-			"Нужен титул «Дежурный»: %d очков. Сейчас у вас %d. Помогайте чату, чтобы поднять титул.",
-			sponsorMinScore, wallet.Score))
+			"Для запуска нужен титул Дежурный (%d очков). У вас %d.", sponsorMinScore, wallet.Score))
 	}
 	if wallet.Available < SponsorReservation {
 		return gameengine.Result{}, gameengine.Reject(fmt.Sprintf(
-			"Нужно свободных репутаций: %d. Сейчас доступно %d. Освободите резерв или заработайте репутацию.",
-			SponsorReservation, wallet.Available))
+			"Репутаций для запуска: %d. Доступно: %d.", SponsorReservation, wallet.Available))
 	}
 
 	if a.CardID != 0 {
@@ -344,7 +342,7 @@ func start(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.Result
 		inc.Participants = participants
 	}
 	if len(uniqueParticipants(inc.Participants)) < 3 {
-		return gameengine.Result{}, gameengine.Reject("Нужны три участника. Пригласите ещё одного и нажмите «Начать».")
+		return gameengine.Result{}, gameengine.Reject("Для старта нужно не меньше трёх участников.")
 	}
 	if err := gameengine.Adjust(tx, a.ChatID, inc.Sponsor, 0, -inc.sponsorCost()); err != nil {
 		return gameengine.Result{}, err
@@ -393,7 +391,7 @@ func cancel(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.Resul
 	if err := gameengine.Adjust(tx, a.ChatID, inc.Sponsor, inc.sponsorCost(), -inc.sponsorCost()); err != nil {
 		return gameengine.Result{}, err
 	}
-	reason := fmt.Sprintf("Дежурный отменил лобби. В кошелёк вернулось %d репы.", inc.sponsorCost())
+	reason := fmt.Sprintf("Дежурный отменил сбор. Репутаций возвращено: %d.", inc.sponsorCost())
 	if err := appendHistory(st, inc, historyEntry{
 		Turn:   0,
 		At:     a.Now,
@@ -413,7 +411,7 @@ func cancel(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.Resul
 	if err := scheduleDeadline(tx, a.ChatID, inc, "expire", inc.HistoryUntil); err != nil {
 		return gameengine.Result{}, err
 	}
-	return finalView(inc), nil
+	return finalView(inc, a.Now), nil
 }
 
 func vote(st *bolt.Bucket, a gameengine.Action) (gameengine.Result, error) {
@@ -488,15 +486,16 @@ func clue(st *bolt.Bucket, a gameengine.Action) (gameengine.Result, error) {
 		return gameengine.Result{}, err
 	}
 	if wallet.Score < reputation.ProdThreshold {
-		return gameengine.Result{}, gameengine.Reject("Подсказку может открыть Хранитель прода. Продолжить можно без неё.")
+		return gameengine.Result{}, gameengine.Reject("Подсказку может открыть участник с титулом Хранитель прода.")
 	}
 	inc.ClueTurn = inc.Turn
+	_, _, hint := inc.Scenario.Turns[inc.Turn-1].reading(inc.Applied)
 	if err := appendHistory(st, inc, historyEntry{
 		Turn:   inc.Turn,
 		At:     a.Now,
 		Actor:  a.UserID,
 		Kind:   kindClue,
-		Clue:   inc.Scenario.Turns[inc.Turn-1].Clue,
+		Clue:   hint,
 		Effect: "подсказка раскрыта",
 	}); err != nil {
 		return gameengine.Result{}, err
@@ -553,7 +552,7 @@ func tick(tx *bolt.Tx, a gameengine.Action) (gameengine.Result, error) {
 		if err := gameengine.Adjust(tx, a.ChatID, inc.Sponsor, inc.sponsorCost(), -inc.sponsorCost()); err != nil {
 			return gameengine.Result{}, err
 		}
-		reason := "Трое не набрались. Репа за запуск снова доступна."
+		reason := fmt.Sprintf("Время на сбор команды вышло. Репутаций возвращено: %d.", inc.sponsorCost())
 		if err := appendHistory(st, inc, historyEntry{
 			Turn:   0,
 			At:     a.Now,
@@ -572,7 +571,7 @@ func tick(tx *bolt.Tx, a gameengine.Action) (gameengine.Result, error) {
 		if err := scheduleDeadline(tx, a.ChatID, inc, "expire", inc.HistoryUntil); err != nil {
 			return gameengine.Result{}, err
 		}
-		return finalView(inc), nil
+		return finalView(inc, a.Now), nil
 
 	case strings.HasPrefix(kind, "t"):
 		turn, err := strconv.Atoi(strings.TrimPrefix(kind, "t"))
@@ -589,7 +588,7 @@ func tick(tx *bolt.Tx, a gameengine.Action) (gameengine.Result, error) {
 			return gameengine.Result{}, err
 		}
 		if inc.Phase == phaseFinal {
-			return finalView(inc), nil
+			return finalView(inc, a.Now), nil
 		}
 		return runningView(inc, a.Now), nil
 	}
@@ -609,7 +608,7 @@ func closeTurn(tx *bolt.Tx, st *bolt.Bucket, inc *incident, chatID int64, now ti
 	result := turnResult{Turn: inc.Turn}
 	if maxVotes == 0 {
 		result.NoVotes = true
-		result.Effect = "Голосов не было; ход прошёл без изменений."
+		result.Effect = "Голосов не было. Состояние не изменилось."
 	} else {
 		delta, effect := winner.effect(inc.Applied)
 		result.OptionID = winner.ID
@@ -692,12 +691,25 @@ func finishRound(inc *incident, now time.Time) {
 	inc.FinishedAt = now
 	inc.HistoryUntil = now.Add(HistoryRetention)
 	inc.Outcome = outcomeUnresolved
-	if inc.Score >= inc.Scenario.RestoreAt && len(inc.TurnResults) > 0 {
-		last := inc.TurnResults[len(inc.TurnResults)-1]
-		if !last.NoVotes && contains(inc.Scenario.FinalOK, last.OptionID) {
-			inc.Outcome = outcomeRestored
-		}
+	if inc.Score >= inc.Scenario.RestoreAt && recoveryConfirmed(inc) {
+		inc.Outcome = outcomeRestored
 	}
+}
+
+func recoveryConfirmed(inc *incident) bool {
+	if len(inc.TurnResults) == 0 {
+		return false
+	}
+	last := inc.TurnResults[len(inc.TurnResults)-1]
+	if last.Turn != len(inc.Scenario.Turns) || last.NoVotes || !contains(inc.Scenario.FinalOK, last.OptionID) {
+		return false
+	}
+	// A live version 1 snapshot still uses its original final-action rule.
+	if inc.Scenario.Version < 2 {
+		return true
+	}
+	opt, ok := optionByID(inc.Scenario.Turns[last.Turn-1], last.OptionID)
+	return ok && hasAll(inc.Applied, opt.Requires)
 }
 
 func finishCancelled(inc *incident, now time.Time, reason string) {

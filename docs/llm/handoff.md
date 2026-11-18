@@ -2,12 +2,18 @@
 
 ## Reputation and games
 
-- Release prices in the [TZ](../../TZ.md): spin 8, incident 18, seed 4,
-  plot 20, mill 30, oven 40. Wallets, title thresholds, player-set prices
-  and co-op payouts are unchanged.
-- The production rollout was not started. See the
-  [release prerequisites](70_deployment.md#kubernetes-deploy-production)
-  for the backup, test-group smoke and Mini App HTTPS setup.
+- Production showed the first reputation-and-games release. This redesign
+  has not been deployed.
+- `/8ball` is restored. Its rare spontaneous answers appear as standalone
+  messages in the same topic. `/reptop` shows four columns, without an
+  explanation per player. Existing prices and reputation scores are unchanged.
+- The redesign adds a playable pixel map, fixes the farm shop and keeps
+  the current farm economy. The incident cards expose choice-dependent
+  signals. Automat shows the prize first and puts the collection on a
+  separate screen.
+- See the [release prerequisites](70_deployment.md#kubernetes-deploy-production)
+  for test-group and Mini App HTTPS setup. Do not treat the locally signed
+  browser fixture as proof of a live Telegram launch.
 
 ## Birthday greetings: last recorded state
 

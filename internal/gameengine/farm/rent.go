@@ -202,8 +202,8 @@ func (s *store) acceptOffer(userID int64, arg string, now int64) (gameengine.Res
 		tile = "o" + strconv.Itoa(o.Slot)
 	}
 	return gameengine.Result{
-		Text: fmt.Sprintf("Аренда началась: %s %d у %d до %s. Стоимость: %d. Баланс: %d. Запуск: /farm %s u%d:%s.",
-			strings.ToLower(offerLabel(o.Kind)), o.Slot, o.OwnerID, deadlineText(end), o.Price, available, o.Kind, o.OwnerID, tile),
+		Text: fmt.Sprintf("Аренда началась. %s %d доступна до %s. Списано: %d. Доступно: %d.",
+			offerLabel(o.Kind), o.Slot, deadlineText(end), o.Price, available),
 		Buttons: []gameengine.Button{
 			{Label: "Запустить", Verb: o.Kind, Arg: fmt.Sprintf("u%d:%s", o.OwnerID, tile)},
 			{Label: "Двор", Verb: "yard", Arg: strconv.FormatInt(o.OwnerID, 10)},

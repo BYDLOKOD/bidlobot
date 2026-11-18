@@ -172,25 +172,58 @@ func TestCatalogueMatchesTZ(t *testing.T) {
 	}
 }
 
-func TestViewShowsCollectionStatusAndPrice(t *testing.T) {
+func TestViewLeadsWithLeverAndSeparatesCollection(t *testing.T) {
 	db := testDB(t)
 	res, err := apply(t, db, gameengine.Action{ChatID: 5, UserID: 7, Key: "view-1", Verb: "view", Now: time.Unix(1770000000, 0)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, part := range []string{"Автомат отмазок", "Коллекция: 0 из 12", "Экипировано: пока ничего", "Автоответ: выключен", "8 репутаций"} {
+	for _, part := range []string{"Автомат отмазок", "Без повторов", "8 репутаций"} {
 		if !strings.Contains(res.Text, part) {
 			t.Errorf("view text %q missing %q", res.Text, part)
 		}
 	}
-	var spin bool
-	for _, b := range res.Buttons {
-		if b.Verb == "spin" {
-			spin = true
+	if len(res.Buttons) != 2 || res.Buttons[0].Verb != "spin" || res.Buttons[1].Verb != "collection" {
+		t.Fatalf("main card should offer lever and collection: %+v", res.Buttons)
+	}
+	empty, err := apply(t, db, gameengine.Action{ChatID: 5, UserID: 7, Key: "empty", Verb: "collection"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(empty.Text, "Пока нет отмазок") || len(empty.Buttons) != 1 || empty.Buttons[0].Verb != "view" {
+		t.Fatalf("empty collection: %+v", empty)
+	}
+}
+
+func TestSpinResultAndCollectionDoNotEnableReplies(t *testing.T) {
+	deterministicPick(t)
+	db := testDB(t)
+	const chat, user = int64(15), int64(16)
+	now := time.Unix(1770000000, 0)
+	seed(t, db, chat, user, 20)
+	result, err := spinOnce(t, db, chat, user, "first", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(result.Text, catalogue[0].Phrase+"\n") || len(result.Buttons) != 3 ||
+		result.Buttons[0].Verb != "spin" || result.Buttons[1].Verb != "equip" || result.Buttons[1].Arg != "1" ||
+		result.Buttons[2].Verb != "collection" {
+		t.Fatalf("spin result: %+v", result)
+	}
+	balance := available(t, db, chat, user)
+	for _, verb := range []string{"view", "collection"} {
+		res, err := apply(t, db, gameengine.Action{ChatID: chat, UserID: user, Verb: verb})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(res.Text, catalogue[0].Phrase) != (verb == "collection") {
+			t.Fatalf("%s: %+v", verb, res)
 		}
 	}
-	if !spin {
-		t.Error("view has no spin button")
+	settings, err := lookup(t, db, chat, user)
+	if err != nil || settings.Enabled || settings.Equipped.ID != 0 || len(settings.Owned) != 1 ||
+		settings.Owned[0].ID != 1 || available(t, db, chat, user) != balance {
+		t.Fatalf("navigation altered state: %+v, %v", settings, err)
 	}
 }
 
@@ -313,14 +346,14 @@ func TestEquipEnableDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := apply(t, db, gameengine.Action{ChatID: chat, UserID: user, Key: "enable-empty", Verb: "enable", Now: now}); err == nil ||
-		!strings.Contains(err.Error(), "Сначала экипируйте") {
+		!strings.Contains(err.Error(), "Сначала выберите") {
 		t.Fatalf("enable without phrase err = %v", err)
 	}
 	res, err := apply(t, db, gameengine.Action{ChatID: chat, UserID: user, Key: "equip", Verb: "equip", Arg: "1", Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.Text, "Экипирована отмазка №1") || !strings.Contains(res.Text, "включите автоответ") {
+	if !strings.Contains(res.Text, "Для автоответа выбрана фраза:") || !strings.Contains(res.Text, "Автоответ: выключен") {
 		t.Fatalf("equip text = %q", res.Text)
 	}
 	s, err := lookup(t, db, chat, user)
@@ -330,8 +363,8 @@ func TestEquipEnableDisable(t *testing.T) {
 	if s.Equipped.ID != 1 || s.Enabled {
 		t.Fatalf("settings after equip: %+v", s)
 	}
-	if !strings.Contains(res.Text, "1. У меня локально работает.") {
-		t.Fatalf("view does not list owned phrase: %q", res.Text)
+	if !strings.Contains(res.Text, "У меня локально работает.") {
+		t.Fatalf("view does not show selected phrase: %q", res.Text)
 	}
 	res, err = apply(t, db, gameengine.Action{ChatID: chat, UserID: user, Key: "enable", Verb: "enable", Now: now})
 	if err != nil {

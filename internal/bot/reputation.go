@@ -62,19 +62,17 @@ func (h *ReputationHandler) HandleRep(_ *th.Context, msg telego.Message) error {
 	account, err := h.store.Wallet(context.Background(), msg.Chat.ID, msg.From.ID)
 	if err != nil {
 		h.log.Warn("reputation wallet failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
-		return h.reply(msg, "что-то сломалось... балансы не менялись.")
+		return h.reply(msg, "Не удалось загрузить кошелёк.")
 	}
 
 	title := reputation.TitleForScore(account.Score)
 	lines := []string{
 		fmt.Sprintf("<b>%s</b>", h.actorDisplay(msg.From)),
-		fmt.Sprintf("доступно: <b>%d</b>, в резерве: <b>%d</b>", account.Available, account.Reserved),
-		fmt.Sprintf("счёт: <b>%d</b> \u2014 %s", account.Score, title.Name),
+		fmt.Sprintf("Доступно: <b>%d</b>\nВ резерве: <b>%d</b>", account.Available, account.Reserved),
+		fmt.Sprintf("Очки: <b>%d</b>\nЗвание: %s", account.Score, title.Name),
 	}
 	if next, ok := reputation.NextTitle(account.Score); ok {
-		lines = append(lines, fmt.Sprintf("до \u00ab%s\u00bb: <b>%d</b>", next.Name, next.Threshold-account.Score))
-	} else {
-		lines = append(lines, "это высший титул")
+		lines = append(lines, fmt.Sprintf("Следующее звание: %s. Осталось очков: <b>%d</b>.", next.Name, next.Threshold-account.Score))
 	}
 	return h.reply(msg, strings.Join(lines, "\n"))
 }
@@ -86,12 +84,14 @@ func (h *ReputationHandler) HandleRepTop(_ *th.Context, msg telego.Message) erro
 	entries, err := h.store.Leaderboard(context.Background(), msg.Chat.ID, 0)
 	if err != nil {
 		h.log.Warn("reputation leaderboard failed", "error", err, "chat_id", msg.Chat.ID)
-		return h.reply(msg, "что-то сломалось... балансы не менялись.")
+		return h.reply(msg, "Не удалось загрузить рейтинг.")
 	}
 
-	lines := make([]string, 0, 10)
+	var table strings.Builder
+	fmt.Fprintf(&table, "<b>Рейтинг чата</b>\n<pre>%2s  %-13s %5s  %s", "№", "Участник", "Очки", "Звание")
+	rank := 0
 	for _, entry := range entries {
-		if len(lines) == 10 {
+		if rank == 10 {
 			break
 		}
 		member := h.observedMember(msg.Chat.ID, entry.UserID)
@@ -99,13 +99,23 @@ func (h *ReputationHandler) HandleRepTop(_ *th.Context, msg telego.Message) erro
 			continue
 		}
 		title := reputation.TitleForScore(entry.Score)
-		lines = append(lines, fmt.Sprintf("%d. %s \u2014 <b>%d</b>, %s · %s",
-			len(lines)+1, h.memberDisplay(member), entry.Score, title.Name, title.Activity))
+		name := shared.UserDisplay(member.Username, member.FirstName)
+		name = strings.Join(strings.Fields(name), " ")
+		if name == "" {
+			name = fmt.Sprint(member.UserID)
+		}
+		if runes := []rune(name); len(runes) > 13 {
+			name = string(runes[:12]) + "…"
+		}
+		rank++
+		line := fmt.Sprintf("\n%2d  %-13s %5d  %s", rank, name, entry.Score, title.Name)
+		table.WriteString(html.EscapeString(line))
 	}
-	if len(lines) == 0 {
-		return h.reply(msg, "пока никто не набрал счёт...")
+	if rank == 0 {
+		return h.reply(msg, "Ни у кого пока нет очков.")
 	}
-	return h.reply(msg, "<b>верх по счёту</b>\n"+strings.Join(lines, "\n"))
+	table.WriteString("</pre>")
+	return h.reply(msg, table.String())
 }
 
 // observedMember resolves a member from the persisted membership record.
@@ -280,9 +290,10 @@ func (h *ReputationHandler) memberDisplay(member *membership.Member) string {
 
 func (h *ReputationHandler) reply(msg telego.Message, body string) error {
 	_, err := h.bot.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID:    telego.ChatID{ID: msg.Chat.ID},
-		Text:      body,
-		ParseMode: telego.ModeHTML,
+		ChatID:          telego.ChatID{ID: msg.Chat.ID},
+		MessageThreadID: msg.MessageThreadID,
+		Text:            body,
+		ParseMode:       telego.ModeHTML,
 		ReplyParameters: &telego.ReplyParameters{
 			MessageID: msg.MessageID,
 		},

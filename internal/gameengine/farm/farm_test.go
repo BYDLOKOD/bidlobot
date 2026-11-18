@@ -112,6 +112,48 @@ func seedWallet(t *testing.T, db *bolt.DB, chat, user int64, available, score in
 	}
 }
 
+func TestBoardShopButtonUsesSharedGrammarAndDoesNotCharge(t *testing.T) {
+	db := testEngine(t)
+	now := time.Unix(1770000000, 0).UTC()
+	board := apply(t, db, 100, 1, "board", "board", "", now)
+	for _, button := range board.Buttons {
+		if button.Verb != "shop" {
+			continue
+		}
+		shop := apply(t, db, 100, 1, "callback", button.Verb, button.Arg, now)
+		if len(shop.Buttons) != 5 || !strings.Contains(shop.Text, "Магазин") {
+			t.Fatalf("shop receipt: %+v", shop)
+		}
+		for _, item := range shop.Buttons {
+			verb, _, err := Parse(item.Verb + " " + item.Arg)
+			if err != nil || verb != item.Verb {
+				t.Fatalf("invalid shop button: %+v: %v", item, err)
+			}
+		}
+		view := boardView(t, db, 100, 1, now)
+		if view.Wallet.Available != 10 || !view.Me.StarterSeed || view.Me.Plots != 1 || view.Me.Inventory[goodSeed] != 0 {
+			t.Fatalf("viewing shop changed the wallet or yard: %+v %+v", view.Wallet, view.Me)
+		}
+		return
+	}
+	t.Fatal("board has no shop button")
+}
+
+func TestBoardHidesExpiredListingsBeforeSettlement(t *testing.T) {
+	db := testEngine(t)
+	now := time.Unix(1770000000, 0).UTC()
+	apply(t, db, 100, 1, "seed", "seed", "1", now)
+	apply(t, db, 100, 1, "sell", "sell", "seed 1 3", now)
+	before := boardView(t, db, 100, 1, now.Add(kListingTTL-time.Second))
+	if len(before.Market.Listings) != 1 || before.Me.Reserved[goodSeed] != 1 {
+		t.Fatalf("listing disappeared before its deadline: %+v %+v", before.Market, before.Me)
+	}
+	after := boardView(t, db, 100, 1, now.Add(kListingTTL))
+	if len(after.Market.Listings) != 0 || after.Me.Reserved[goodSeed] != 0 || after.Me.Inventory[goodSeed] != 1 {
+		t.Fatalf("expired listing still shown or stock missing: %+v %+v", after.Market, after.Me)
+	}
+}
+
 func TestPlantSettlementAndReplay(t *testing.T) {
 	db := testEngine(t)
 	chat, user := int64(100), int64(1)

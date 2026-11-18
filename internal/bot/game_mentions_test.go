@@ -86,7 +86,7 @@ func TestExcuseRepliesToCurrentMentionOnce(t *testing.T) {
 		t.Fatalf("got %d sends, want one", len(api.posts))
 	}
 	p := api.posts[0]
-	if p.ReplyParameters == nil || p.ReplyParameters.MessageID != msg.MessageID || p.MessageThreadID != 7 || p.ParseMode != "" || strings.Contains(p.Text, "@lena") || !strings.HasPrefix(p.Text, "Отмазка (lena):") {
+	if p.ReplyParameters == nil || p.ReplyParameters.MessageID != msg.MessageID || p.MessageThreadID != 7 || p.ParseMode != "" || strings.Contains(p.Text, "@lena") || !strings.HasPrefix(p.Text, "Отмазка для lena:\n") {
 		t.Fatalf("wrong reply attribution or destination: %+v", p)
 	}
 }

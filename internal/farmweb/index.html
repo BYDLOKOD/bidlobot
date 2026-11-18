@@ -6,17 +6,33 @@
   <title>Общая ферма</title>
   <link rel="stylesheet" href="farm.css">
   <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+  <script src="terrain.js" defer></script>
   <script src="farm.js" defer></script>
 </head>
 <body>
   <main>
-    <header><div><h1>Общая ферма</h1><p id="wallet"></p></div><button id="refresh" type="button">Обновить</button></header>
-    <p id="notice" role="status" aria-live="polite">Открываем ферму...</p>
-    <section aria-labelledby="yard-title"><h2 id="yard-title">Дворы</h2><div id="yards"></div></section>
-    <section aria-labelledby="market-title"><h2 id="market-title">Рынок и аренда</h2><div id="market"></div></section>
-    <section aria-labelledby="action-title"><h2 id="action-title">Ваши действия</h2><div id="buttons"></div>
-      <div id="confirm"></div>
-    </section>
+    <header class="masthead">
+      <h1>Общая ферма</h1>
+      <button id="refresh" type="button">Обновить</button>
+      <p id="wallet"></p>
+    </header>
+    <nav id="navigation" aria-label="Разделы фермы" hidden>
+      <button type="button" data-page="map" aria-current="page">Карта</button>
+      <button type="button" data-page="shop">Магазин</button>
+      <button type="button" data-page="market">Рынок</button>
+      <button type="button" data-page="coop">Кооператив</button>
+    </nav>
+    <p id="notice" role="status" aria-live="polite">Загружаем ферму...</p>
+    <div id="content" hidden></div>
+    <dialog id="confirm" aria-labelledby="confirm-title">
+      <h2 id="confirm-title">Подтвердите действие</h2>
+      <p id="confirm-copy"></p>
+      <p id="confirm-error" role="alert" hidden></p>
+      <div class="controls">
+        <button id="yes" class="primary" type="button">Подтвердить</button>
+        <button id="no" type="button">Отмена</button>
+      </div>
+    </dialog>
   </main>
 </body>
 </html>

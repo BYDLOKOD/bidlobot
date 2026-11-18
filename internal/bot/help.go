@@ -54,6 +54,7 @@ var helpSections = []helpSection{
 		title: "Игры",
 		entries: []helpEntry{
 			{cmd: "/excuses", desc: "крутить автомат и выбрать отмазку"},
+			{cmd: "/8ball", desc: "задать вопрос шару"},
 			{cmd: "/prod", desc: "открыть инцидент или присоединиться к игре"},
 			{cmd: "/farm", desc: "грядки, производство, торговля и аренда"},
 		},

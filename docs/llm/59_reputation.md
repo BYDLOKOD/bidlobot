@@ -131,10 +131,9 @@ double a wallet.
 title, or states that the highest title is reached. `/reptop` reads only
 title scores, requires positive score, filters to members observed in
 the chat (a left/kicked record is not current), sorts score descending
-then user ID ascending, and caps at ten. Every name is inert: no `@`,
-no mention entity. The line shows the score, title and unlocked
-activity. Reads use observed membership; writes use live Telegram
-verification.
+then user ID ascending, and caps at ten. A preformatted text table shows
+place, name, score and title, without mentions or per-row explanations.
+Reads use observed membership; writes use live Telegram verification.
 
 ## Reaction report (`rep_reaction.go`)
 

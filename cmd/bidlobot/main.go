@@ -264,6 +264,7 @@ func main() {
 			log.Error("configure farm Mini App", "error", err)
 			os.Exit(1)
 		}
+		handler.SetDisplayResolver(displayResolver.UserDisplay)
 		farmListener, err = net.Listen("tcp", envOr("FARM_HTTP_ADDR", "127.0.0.1:8081"))
 		if err != nil {
 			log.Error("listen for farm Mini App", "error", err)

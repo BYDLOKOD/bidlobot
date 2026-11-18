@@ -636,7 +636,7 @@ func Parse(input string) (verb, arg string, err error) {
 	}
 
 	switch verb {
-	case "board", "help", "market", "coop", "collect", "plot", "join":
+	case "board", "help", "shop", "market", "coop", "collect", "plot", "join":
 		if !none() {
 			return bad("Лишние аргументы. Откройте /farm help.")
 		}

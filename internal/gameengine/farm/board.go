@@ -39,10 +39,12 @@ type View struct {
 }
 
 type ShopPrices struct {
-	Seed int `json:"seed"`
-	Plot int `json:"plot"`
-	Mill int `json:"mill"`
-	Oven int `json:"oven"`
+	Seed      int `json:"seed"`
+	Plot      int `json:"plot"`
+	Mill      int `json:"mill"`
+	MillGrain int `json:"mill_grain"`
+	Oven      int `json:"oven"`
+	OvenFlour int `json:"oven_flour"`
 }
 
 type WalletView struct {
@@ -58,6 +60,7 @@ type DeadlineView struct {
 
 type YardView struct {
 	OwnerID     int64          `json:"owner_id"`
+	OwnerName   string         `json:"owner_name,omitempty"`
 	YardX       int            `json:"yard_x"`
 	YardY       int            `json:"yard_y"`
 	Width       int            `json:"width"`
@@ -197,7 +200,7 @@ func Board(tx *bolt.Tx, chatID, userID int64, now time.Time) (any, error) {
 		Now:          unix,
 		Wallet:       WalletView{Available: account.Available, Reserved: account.Reserved, Score: account.Score},
 		MayRentOut:   account.Score >= reputation.MasterThreshold,
-		Prices:       ShopPrices{Seed: kSeedPrice, Plot: kPlotPrice, Mill: kMillCostRep, Oven: kOvenCostRep},
+		Prices:       ShopPrices{Seed: kSeedPrice, Plot: kPlotPrice, Mill: kMillCostRep, MillGrain: kMillCostGrain, Oven: kOvenCostRep, OvenFlour: kOvenCostFlour},
 		Instructions: helpText(),
 		Yards:        []YardView{},
 		Market:       MarketView{Listings: []ListingView{}, Recent: []RecentView{}},
@@ -298,7 +301,7 @@ func Board(tx *bolt.Tx, chatID, userID int64, now time.Time) (any, error) {
 		view.Yards = []YardView{}
 	}
 
-	view.Market = buildMarket(s)
+	view.Market = buildMarket(s, unix)
 	view.Coop.BudgetRemaining = s.effectiveCoopInt("coop_budget", unix)
 	view.Coop.GrainLeft = s.effectiveCoopInt("coop_grain_left", unix)
 	view.Coop.BreadLeft = s.effectiveCoopInt("coop_bread_left", unix)
@@ -510,10 +513,13 @@ func assetLabel(kind string) string {
 	return "мельница"
 }
 
-func buildMarket(s *store) MarketView {
+func buildMarket(s *store, now int64) MarketView {
 	market := MarketView{Listings: []ListingView{}, Recent: []RecentView{}}
 	if listings, err := s.sortedListings(); err == nil {
 		for _, l := range listings {
+			if l.ExpiresAt <= now {
+				continue
+			}
 			market.Listings = append(market.Listings, ListingView{
 				ID: l.ID, SellerID: l.SellerID, Good: l.Good, Qty: l.Qty, UnitPrice: l.UnitPrice,
 				CreatedAt: l.CreatedAt, ExpiresAt: l.ExpiresAt, Version: l.Version,
@@ -557,7 +563,7 @@ func i64(n int64) string { return fmt.Sprintf("%d", n) }
 func helpText() string {
 	return strings.Join([]string{
 		"Ферма. Грядка даёт 3 зерна за 4 часа. Мельница: 2 зерна -> 1 мука за 2 часа. Печь: 2 муки -> 2 хлеба за 2 часа.",
-		fmt.Sprintf("Магазин (цены в репе): семя %d (/farm seed), грядка %d (/farm plot), мельница %d и 2 зерна (/farm build mill), печь %d и 1 мука (/farm build oven).", kSeedPrice, kPlotPrice, kMillCostRep, kOvenCostRep),
+		fmt.Sprintf("Магазин: /farm shop. Семя стоит %d репы, грядка %d, мельница %d и %d ед. зерна, печь %d и %d ед. муки.", kSeedPrice, kPlotPrice, kMillCostRep, kMillCostGrain, kOvenCostRep, kOvenCostFlour),
 		"Работа: /farm plant [1-3], /farm mill [1-2], /farm oven [1-2], /farm collect.",
 		"Рынок: /farm sell grain 3 2, /farm buy <id> [количество], /farm cancel <id>. Цена и количество - целые положительные числа.",
 		"Аренда: /farm offer mill 1 12 5 (нужен титул «Мастер»), /farm accept <id>, /farm unoffer <id>. Работа в аренде: /farm mill u<владелец>:m<слот>.",

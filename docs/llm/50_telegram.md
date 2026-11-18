@@ -71,7 +71,7 @@ Set via `setMyCommands` at startup (`setup.go`):
 
 | Scope | Commands |
 |-------|---------|
-| `BotCommandScopeAllGroupChats` | stats, summarize, roast, praise, rep, reptop, excuses, prod, farm, refs, refreg, flush |
+| `BotCommandScopeAllGroupChats` | stats, summarize, roast, praise, rep, reptop, excuses, prod, farm, 8ball, refs, refreg, flush |
 | `BotCommandScopeAllChatAdministrators` | group commands + refreport |
 | `BotCommandScopeChat(owner)` | start, help, chats |
 

@@ -75,6 +75,8 @@ func (s *store) dispatch(a gameengine.Action, verb string, now int64, settled []
 		return gameengine.Result{Text: helpText(), Buttons: []gameengine.Button{
 			{Label: "Ферма", Verb: "board"},
 		}}, nil
+	case "shop":
+		return shopReceipt(), nil
 	case "seed":
 		return s.buySeeds(a.UserID, a.Arg, now)
 	case "plot":

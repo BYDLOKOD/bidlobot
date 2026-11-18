@@ -189,13 +189,14 @@ Optional:
   `ChatFullInfo.birthdate` through `getChat` and stores no birth date.
   Enabling it makes the bot post one public greeting per chat on a
   member's birthday ([66_birthdays.md](66_birthdays.md)).
-- `FARM_APP_NAME` -- BotFather short name of the farm Mini App. When unset,
-  `/farm` remains available in Telegram and no farm listener starts.
-- `FARM_HTTP_ADDR` -- default `127.0.0.1:8081`. Proxy the listener at the
-  root of a dedicated HTTPS origin and configure that origin in BotFather.
-  In a container, bind to a private network interface reachable by the
-  reverse proxy; do not publish the cleartext listener to the internet.
-  The server validates signed Telegram launch data and current membership.
+- `FARM_APP_NAME` -- BotFather short name of the farm Mini App. Bare
+  `/farm` reports the map unavailable when this is unset.
+- `FARM_HTTP_ADDR` -- default `127.0.0.1:8081`. For Kubernetes, bind to
+  `0.0.0.0:8081` inside the pod and route a private ClusterIP Service
+  through the HTTPS ingress. Register that origin, at its root, in
+  BotFather. Do not leave the cleartext listener publicly reachable.
+  Verify `/farm` opens the map in Telegram and that the app refuses a
+  nonmember before treating the farm as deployed.
 - `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES` -- egress for the Instagram
   repost download ([61_instagram_repost.md](61_instagram_repost.md)).
   Instagram is blocked outright on some ISPs (Russia blocks it at the

@@ -161,10 +161,10 @@ func (s *store) buy(userID int64, arg string, now int64) (gameengine.Result, err
 	}
 	remaining := ""
 	if l.Qty > 0 {
-		remaining = fmt.Sprintf(" Остаток объявления: %d.", l.Qty)
+		remaining = fmt.Sprintf(" Осталось в продаже: %d.", l.Qty)
 	}
 	return gameengine.Result{
-		Text: fmt.Sprintf("Куплено: %s ×%d по %d. Сумма: %d. Баланс: %d. Продавцу: +%d.%s",
+		Text: fmt.Sprintf("Товар: %s. Куплено: %d по %d. Списано: %d. Доступно: %d. Продавец получил %d.%s",
 			goodLabel(l.Good), qty, l.UnitPrice, total, available, total, remaining),
 		Buttons: []gameengine.Button{
 			{Label: "Рынок", Verb: "market"},

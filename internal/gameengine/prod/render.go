@@ -15,14 +15,14 @@ const maxParticipantNames = 10
 
 func helpView() gameengine.Result {
 	return gameengine.Result{Text: strings.Join([]string{
-		"«Прод не спит» — инцидент на три хода по 45 секунд.",
-		fmt.Sprintf("Дежурный может открыть инцидент за %d репы. На сбор команды есть 90 секунд.", SponsorReservation),
-		"Нужны три участника. Присоединение и голоса бесплатны.",
+		"Прод не спит",
+		fmt.Sprintf("Резерв на запуск: %d репутаций. На сбор команды есть 90 секунд.", SponsorReservation),
+		"Нужны минимум три участника. Дальше три хода по 45 секунд. Участие и голоса бесплатны.",
 	}, "\n"), Buttons: []gameengine.Button{openButton("Открыть инцидент")}}
 }
 
 func openButton(label string) gameengine.Button {
-	return gameengine.Button{Label: fmt.Sprintf("%s за %d репы", label, SponsorReservation), Verb: VerbOpen, Arg: strconv.Itoa(SponsorReservation)}
+	return gameengine.Button{Label: fmt.Sprintf("%s за %d репутаций", label, SponsorReservation), Verb: VerbOpen, Arg: strconv.Itoa(SponsorReservation)}
 }
 
 func incidentView(inc *incident, now time.Time) gameengine.Result {
@@ -32,14 +32,13 @@ func incidentView(inc *incident, now time.Time) gameengine.Result {
 	case phaseRunning:
 		return runningView(inc, now)
 	default:
-		return finalView(inc)
+		return finalView(inc, now)
 	}
 }
 
 func lobbyView(inc *incident, now time.Time) gameengine.Result {
 	var b strings.Builder
-	fmt.Fprintf(&b, "«%s»\n", inc.Scenario.Title)
-	fmt.Fprintf(&b, "%s\n", inc.Scenario.Premise)
+	fmt.Fprintf(&b, "%s\n\n%s\n\nСбор команды\n", inc.Scenario.Title, inc.Scenario.Premise)
 	fmt.Fprintf(&b, "Дежурный: Участник %d\n", inc.Sponsor)
 	if len(inc.Participants) == 0 {
 		b.WriteString("Участники: пока никого\n")
@@ -51,10 +50,9 @@ func lobbyView(inc *incident, now time.Time) gameengine.Result {
 	} else {
 		b.WriteString("Для старта нужно три участника.\n")
 	}
-	fmt.Fprintf(&b, "До закрытия лобби: %s.\n", remaining(now, inc.LobbyDeadline))
-	b.WriteString("Ходы и голоса попадут в разбор этого чата на 30 дней.\n")
-	fmt.Fprintf(&b, "Резерв дежурного: %d репы.\n", inc.sponsorCost())
-	b.WriteString("Присоединение и голоса бесплатны.")
+	fmt.Fprintf(&b, "До закрытия: %s\n", remaining(now, inc.LobbyDeadline))
+	fmt.Fprintf(&b, "Резерв репутации: %d. Сумма спишется при старте. Если инцидент не начнётся, резерв вернётся.\n", inc.sponsorCost())
+	b.WriteString("Участие бесплатное. Решения и голоса попадут в разбор чата на 30 дней.")
 
 	return gameengine.Result{
 		Text: b.String(),
@@ -68,46 +66,50 @@ func lobbyView(inc *incident, now time.Time) gameengine.Result {
 
 func runningView(inc *incident, now time.Time) gameengine.Result {
 	turn := inc.Scenario.Turns[inc.Turn-1]
+	signal, evidence, clue := turn.reading(inc.Applied)
 	var b strings.Builder
-	fmt.Fprintf(&b, "Смена %d из %d · «%s»\n", inc.Turn, len(inc.Scenario.Turns), inc.Scenario.Title)
-	b.WriteString(turn.Prompt)
-	b.WriteString("\n")
+	fmt.Fprintf(&b, "%s\nХод %d из %d. До конца: %s\n\n", inc.Scenario.Title, inc.Turn, len(inc.Scenario.Turns), remaining(now, inc.TurnDeadline))
+	fmt.Fprintf(&b, "Сигнал: %s\n", signal)
+	if evidence != "" {
+		fmt.Fprintf(&b, "Что видно: %s\n", evidence)
+	}
 	if inc.ClueTurn == inc.Turn {
-		fmt.Fprintf(&b, "Известно: %s\n", turn.Clue)
+		fmt.Fprintf(&b, "Подсказка: %s\n", clue)
 	}
-	fmt.Fprintf(&b, "До конца хода: %s.\n", remaining(now, inc.TurnDeadline))
+	if len(inc.TurnResults) != 0 {
+		last := inc.TurnResults[len(inc.TurnResults)-1]
+		if last.NoVotes {
+			b.WriteString("На прошлом ходу никто не проголосовал.\n")
+		} else {
+			fmt.Fprintf(&b, "После прошлого хода: %s\n", last.Effect)
+		}
+	}
+	fmt.Fprintf(&b, "\nОчки восстановления: %d. Нужно не меньше %d и подтверждение на последнем ходу.\n",
+		inc.Score, inc.Scenario.RestoreAt)
+	b.WriteByte('\n')
 	counts := make(map[string]int, len(turn.Options))
-	for _, opt := range turn.Options {
-		counts[opt.ID] = 0
-	}
 	for _, optID := range inc.Votes {
 		counts[optID]++
 	}
-	fmt.Fprintf(&b, "Голосов: %d.\n", len(inc.Votes))
-	for i, opt := range turn.Options {
-		label := opt.Label
-		if opt.Conservative {
-			label += " (осторожный вариант)"
-		}
-		fmt.Fprintf(&b, "%d. %s — %d\n", i+1, label, counts[opt.ID])
-	}
-	b.WriteString("Голос можно менять до конца хода. При равенстве сработает осторожный вариант, иначе порядок в карточке.")
-
 	buttons := make([]gameengine.Button, 0, len(turn.Options)+1)
-	for _, opt := range turn.Options {
-		label := opt.Label
+	for i, opt := range turn.Options {
+		delta, _ := opt.effect(inc.Applied)
+		label := fmt.Sprintf("%s (%s)", opt.Label, scoreDelta(delta))
+		fmt.Fprintf(&b, "%d. %s. Голоса: %d", i+1, label, counts[opt.ID])
 		if opt.Conservative {
-			label += " · осторожно"
+			b.WriteString(" (приоритет при ничьей)")
 		}
+		b.WriteByte('\n')
 		buttons = append(buttons, gameengine.Button{
 			Label: label,
 			Verb:  VerbVote,
 			Arg:   fmt.Sprintf("%s:%d:%s", inc.ID, inc.Turn, opt.ID),
 		})
 	}
-	if inc.ClueTurn == 0 {
+	b.WriteString("\nПобеждает вариант с наибольшим числом голосов. При ничьей побеждает вариант с приоритетом, если он среди лидеров, или первый из лидеров по списку.\nГолос можно изменить до конца хода. Без голосов состояние не меняется.")
+	if inc.ClueTurn == 0 && clue != "" {
 		buttons = append(buttons, gameengine.Button{
-			Label: "Подсказка",
+			Label: "Подсказка Хранителя прода",
 			Verb:  VerbClue,
 			Arg:   fmt.Sprintf("%s:%d", inc.ID, inc.Turn),
 		})
@@ -115,31 +117,41 @@ func runningView(inc *incident, now time.Time) gameengine.Result {
 	return gameengine.Result{Text: b.String(), Buttons: buttons}
 }
 
-func finalView(inc *incident) gameengine.Result {
+func finalView(inc *incident, now time.Time) gameengine.Result {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Инцидент «%s»: %s.\n", inc.Scenario.Title, outcomeLabel(inc.Outcome))
+	fmt.Fprintf(&b, "%s\nИтог: %s.\n", inc.Scenario.Title, outcomeLabel(inc.Outcome))
 	if inc.Outcome == outcomeCancelled {
 		if inc.CancelReason != "" {
-			b.WriteString(inc.CancelReason)
-			b.WriteString("\n")
+			fmt.Fprintf(&b, "\n%s\n", inc.CancelReason)
 		}
 	} else {
-		fmt.Fprintf(&b, "Причина: %s\n", roundCause(inc))
-		b.WriteString("Ходы:\n")
+		fmt.Fprintf(&b, "\nОчки восстановления: %d. Порог: %d.\n", inc.Score, inc.Scenario.RestoreAt)
+		if inc.Scenario.Version >= 2 {
+			confirmed := "нет"
+			if recoveryConfirmed(inc) {
+				confirmed = "есть"
+			}
+			fmt.Fprintf(&b, "Подтверждение: %s.\n", confirmed)
+		}
+		if inc.Scenario.Cause != "" {
+			fmt.Fprintf(&b, "Причина сбоя: %s\n", inc.Scenario.Cause)
+		}
 		for _, result := range inc.TurnResults {
 			if result.NoVotes {
-				fmt.Fprintf(&b, "%d. Голосов не было; ход прошёл без изменений.\n", result.Turn)
+				fmt.Fprintf(&b, "\nХод %d. Голосов не было. Состояние не изменилось.\n", result.Turn)
 				continue
 			}
-			fmt.Fprintf(&b, "%d. «%s» (%s). %s", result.Turn, result.OptionLabel, result.Counts, result.Effect)
+			fmt.Fprintf(&b, "\nХод %d. %s (%s). %s\n", result.Turn, result.OptionLabel, scoreDelta(result.Delta), result.Effect)
 			if result.Tie {
-				b.WriteString(" Голоса разделились; сработал порядок в карточке.")
+				fmt.Fprintf(&b, "%s\n", tieReason(inc, result.Turn, result.OptionID))
 			}
-			b.WriteString("\n")
 		}
-		fmt.Fprintf(&b, "Что повлияло: %s\n", inc.Scenario.Debrief)
 	}
-	b.WriteString("Разбор хранится 30 дней.")
+	if !now.Before(inc.HistoryUntil) {
+		b.WriteString("\nРазбор больше не хранится.")
+		return gameengine.Result{Text: b.String()}
+	}
+	b.WriteString("\nРазбор хранится 30 дней.")
 
 	return gameengine.Result{
 		Text: b.String(),
@@ -193,12 +205,8 @@ func retrospective(st *bolt.Bucket, a gameengine.Action) (gameengine.Result, err
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "Разбор инцидента «%s»\n", inc.Scenario.Title)
-	fmt.Fprintf(&b, "Итог: %s.\n", outcomeLabel(inc.Outcome))
-	if page == 1 && inc.Scenario.Debrief != "" {
-		b.WriteString(inc.Scenario.Debrief)
-		b.WriteString("\n")
-	}
+	fmt.Fprintf(&b, "Разбор инцидента \"%s\"\n", inc.Scenario.Title)
+	fmt.Fprintf(&b, "Итог: %s.\n\n", outcomeLabel(inc.Outcome))
 	start := (page - 1) * RetroPageSize
 	end := start + RetroPageSize
 	if end > len(entries) {
@@ -208,7 +216,7 @@ func retrospective(st *bolt.Bucket, a gameengine.Action) (gameengine.Result, err
 		b.WriteString("Принятых действий нет.\n")
 	}
 	for _, entry := range entries[start:end] {
-		b.WriteString(renderHistoryEntry(entry))
+		b.WriteString(renderHistoryEntry(inc, entry))
 		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "Страница %d из %d.", page, pages)
@@ -232,35 +240,33 @@ func retrospective(st *bolt.Bucket, a gameengine.Action) (gameengine.Result, err
 	return gameengine.Result{Text: b.String(), Buttons: buttons}, nil
 }
 
-func renderHistoryEntry(e historyEntry) string {
+func renderHistoryEntry(inc *incident, e historyEntry) string {
 	switch e.Kind {
 	case kindOpen:
-		return fmt.Sprintf("Лобби · Участник %d открыл инцидент.", e.Actor)
+		return fmt.Sprintf("Участник %d: открыт сбор команды.", e.Actor)
 	case kindJoin:
-		return fmt.Sprintf("Лобби · Участник %d присоединился.", e.Actor)
+		return fmt.Sprintf("Участник %d в команде.", e.Actor)
 	case kindStart:
-		return fmt.Sprintf("Лобби · Участник %d начал инцидент.", e.Actor)
+		return fmt.Sprintf("Участник %d: инцидент запущен.", e.Actor)
 	case kindVote:
 		if e.PreviousLabel != "" {
-			return fmt.Sprintf("Ход %d · Участник %d: «%s» (изменён с «%s»).",
-				e.Turn, e.Actor, e.OptionLabel, e.PreviousLabel)
+			return fmt.Sprintf("Ход %d. Участник %d: голос изменён с \"%s\" на \"%s\".",
+				e.Turn, e.Actor, e.PreviousLabel, e.OptionLabel)
 		}
-		return fmt.Sprintf("Ход %d · Участник %d: «%s».", e.Turn, e.Actor, e.OptionLabel)
+		return fmt.Sprintf("Ход %d. Участник %d: голос за \"%s\".", e.Turn, e.Actor, e.OptionLabel)
 	case kindClue:
-		return fmt.Sprintf("Ход %d · Участник %d открыл подсказку: %s", e.Turn, e.Actor, e.Clue)
+		return fmt.Sprintf("Ход %d. Участник %d: открыта подсказка. %s", e.Turn, e.Actor, e.Clue)
 	case kindResult:
 		if e.OptionLabel == "" {
-			return fmt.Sprintf("Ход %d · Голосов не было; ход прошёл без изменений.", e.Turn)
+			return fmt.Sprintf("Ход %d. Голосов не было. Состояние не изменилось.", e.Turn)
 		}
-		line := fmt.Sprintf("Ход %d · Выполнили: «%s» (%s). %s", e.Turn, e.OptionLabel, e.Counts, e.Effect)
+		line := fmt.Sprintf("Ход %d. Выполнили: %s. Голоса по порядку вариантов: %s. %s", e.Turn, e.OptionLabel, e.Counts, e.Effect)
 		if e.Tie {
-			line += " Голоса разделились; сработал порядок в карточке."
+			line += " " + tieReason(inc, e.Turn, e.OptionID)
 		}
 		return line
-	case kindCancel, kindExpire:
-		return "Лобби · " + e.Effect
 	default:
-		return "Лобби · действие учтено."
+		return e.Effect
 	}
 }
 
@@ -277,20 +283,19 @@ func outcomeLabel(outcome string) string {
 	}
 }
 
-func roundCause(inc *incident) string {
-	if len(inc.TurnResults) == 0 {
-		return "Ни одно решение не было принято."
+func scoreDelta(delta int) string {
+	if delta > 0 {
+		return fmt.Sprintf("+%d", delta)
 	}
-	last := inc.TurnResults[len(inc.TurnResults)-1]
-	if !last.NoVotes {
-		return last.Effect
+	return strconv.Itoa(delta)
+}
+
+func tieReason(inc *incident, turnNumber int, optionID string) string {
+	opt, ok := optionByID(inc.Scenario.Turns[turnNumber-1], optionID)
+	if ok && opt.Conservative {
+		return "При равенстве голосов победил вариант с приоритетом."
 	}
-	for i := len(inc.TurnResults) - 2; i >= 0; i-- {
-		if !inc.TurnResults[i].NoVotes {
-			return "Последний ход прошёл без голосов. " + inc.TurnResults[i].Effect
-		}
-	}
-	return "Ни одно решение не было принято."
+	return "При равенстве голосов победил первый из лидеров по порядку в карточке."
 }
 
 func participantNames(ids []int64) string {
@@ -315,12 +320,9 @@ func participantNames(ids []int64) string {
 func remaining(now, deadline time.Time) string {
 	d := deadline.Sub(now)
 	if d <= 0 {
-		return "меньше секунды"
+		return "время вышло"
 	}
-	seconds := int(d / time.Second)
-	if seconds < 1 {
-		seconds = 1
-	}
+	seconds := (d + time.Second - 1) / time.Second
 	return fmt.Sprintf("%d с", seconds)
 }
 

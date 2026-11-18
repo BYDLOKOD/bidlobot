@@ -75,7 +75,7 @@ func securePickIndex(n int) (int, error) {
 func pickUnowned(mask uint32) (Item, error) {
 	remaining := len(catalogue) - collectedCount(mask)
 	if remaining <= 0 {
-		return Item{}, gameengine.Reject(`Коллекция собрана: крутить нечего, репутация не списана.`)
+		return Item{}, gameengine.Reject("Коллекция собрана. Репутация не списана.")
 	}
 	idx, err := pickIndex(remaining)
 	if err != nil {
@@ -107,10 +107,13 @@ func Apply(tx *bolt.Tx, a gameengine.Action) (gameengine.Result, error) {
 		return gameengine.Result{}, fmt.Errorf("automat: state bucket unavailable")
 	}
 	switch a.Verb {
-	case "view":
+	case "view", "collection":
 		p, err := loadPlayer(st, a.UserID)
 		if err != nil {
 			return gameengine.Result{}, err
+		}
+		if a.Verb == "collection" {
+			return renderCollection(p), nil
 		}
 		return renderView(p), nil
 	case "spin":
@@ -134,7 +137,7 @@ func spinPrompt(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.R
 		return gameengine.Result{}, err
 	}
 	if p.mask == fullMask() {
-		return gameengine.Result{}, gameengine.Reject(`Коллекция собрана: все 12 отмазок уже есть. Крутка не нужна, репутация не списана.`)
+		return gameengine.Result{}, gameengine.Reject("Коллекция собрана. Репутация не списана.")
 	}
 	w, err := gameengine.Wallet(tx, a.ChatID, a.UserID)
 	if err != nil {
@@ -142,12 +145,11 @@ func spinPrompt(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.R
 	}
 	if w.Available < SpinPrice {
 		return gameengine.Result{}, gameengine.Reject(fmt.Sprintf(
-			`Не хватает репутации: крутка стоит %s, на счету %s. Получите репутацию через /praise.`,
-			money(SpinPrice), money(w.Available)))
+			"Не хватает репутации. Цена: %s. Доступно: %s.", money(SpinPrice), money(w.Available)))
 	}
 	remaining := len(catalogue) - collectedCount(p.mask)
-	text := fmt.Sprintf("Крутка стоит %s. В пуле осталось %d %s.\nВыпавшая отмазка сразу попадёт в коллекцию.",
-		money(SpinPrice), remaining, plural(remaining, "отмазка", "отмазки", "отмазок"))
+	text := fmt.Sprintf("Потратить %s на одну отмазку?\nОсталось %d из %d. Без повторов.",
+		money(SpinPrice), remaining, len(catalogue))
 	return gameengine.Result{
 		Text: text,
 		Buttons: []gameengine.Button{
@@ -159,7 +161,7 @@ func spinPrompt(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.R
 
 func confirmSpin(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.Result, error) {
 	if a.Key == "" {
-		return gameengine.Result{}, gameengine.Reject(`Не удалось подтвердить крутку: нет ключа запроса. Откройте /excuses заново.`)
+		return gameengine.Result{}, gameengine.Reject("Не удалось подтвердить: нет ключа запроса. Откройте /excuses заново.")
 	}
 	p, err := loadPlayer(st, a.UserID)
 	if err != nil {
@@ -174,7 +176,7 @@ func confirmSpin(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.
 		return gameengine.Result{}, gameengine.Reject(`Коллекция изменилась с момента открытия кнопки. Откройте /excuses заново.`)
 	}
 	if p.mask == fullMask() {
-		return gameengine.Result{}, gameengine.Reject(`Коллекция собрана: все 12 отмазок уже есть. Репутация не списана.`)
+		return gameengine.Result{}, gameengine.Reject("Коллекция собрана. Репутация не списана.")
 	}
 	w, err := gameengine.Wallet(tx, a.ChatID, a.UserID)
 	if err != nil {
@@ -182,8 +184,7 @@ func confirmSpin(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.
 	}
 	if w.Available < SpinPrice {
 		return gameengine.Result{}, gameengine.Reject(fmt.Sprintf(
-			`Не хватает репутации: крутка стоит %s, на счету %s.`,
-			money(SpinPrice), money(w.Available)))
+			"Не хватает репутации. Цена: %s. Доступно: %s.", money(SpinPrice), money(w.Available)))
 	}
 	item, err := pickUnowned(p.mask)
 	if err != nil {
@@ -196,13 +197,16 @@ func confirmSpin(tx *bolt.Tx, st *bolt.Bucket, a gameengine.Action) (gameengine.
 	if err := savePlayer(st, a.UserID, p); err != nil {
 		return gameengine.Result{}, err
 	}
-	count := collectedCount(p.mask)
-	text := fmt.Sprintf("Выпала отмазка №%d.\n\u00ab%s\u00bb\nСписано %s. В коллекции %d из %d.",
-		item.ID, item.Phrase, money(SpinPrice), count, len(catalogue))
-	buttons := []gameengine.Button{
-		{Label: "Экипировать", Verb: "equip", Arg: strconv.Itoa(item.ID)},
-		{Label: "К коллекции", Verb: "view"},
+	text := fmt.Sprintf("%s\n\nСписано %s. В коллекции %d из %d.",
+		item.Phrase, money(SpinPrice), collectedCount(p.mask), len(catalogue))
+	buttons := make([]gameengine.Button, 0, 3)
+	if p.mask != fullMask() {
+		buttons = append(buttons, gameengine.Button{Label: "Крутить ещё за " + money(SpinPrice), Verb: "spin"})
 	}
+	buttons = append(buttons,
+		gameengine.Button{Label: "Выбрать для автоответа", Verb: "equip", Arg: strconv.Itoa(item.ID)},
+		collectionButton(),
+	)
 	return gameengine.Result{Text: text, Buttons: buttons}, nil
 }
 
@@ -226,12 +230,7 @@ func equipPhrase(st *bolt.Bucket, a gameengine.Action) (gameengine.Result, error
 	if err := savePlayer(st, a.UserID, p); err != nil {
 		return gameengine.Result{}, err
 	}
-	if p.enabled {
-		return renderView(p), nil
-	}
-	res := renderView(p)
-	res.Text = fmt.Sprintf("Экипирована отмазка №%d.\n%s\nЧтобы бот отвечал, включите автоответ.", item.ID, res.Text)
-	return res, nil
+	return renderView(p), nil
 }
 
 func setEnabled(st *bolt.Bucket, a gameengine.Action, on bool) (gameengine.Result, error) {
@@ -240,7 +239,7 @@ func setEnabled(st *bolt.Bucket, a gameengine.Action, on bool) (gameengine.Resul
 		return gameengine.Result{}, err
 	}
 	if on && p.equipped == 0 {
-		return gameengine.Result{}, gameengine.Reject(`Сначала экипируйте отмазку из коллекции.`)
+		return gameengine.Result{}, gameengine.Reject("Сначала выберите фразу из коллекции.")
 	}
 	p.enabled = on
 	if err := savePlayer(st, a.UserID, p); err != nil {
@@ -250,52 +249,62 @@ func setEnabled(st *bolt.Bucket, a gameengine.Action, on bool) (gameengine.Resul
 }
 
 func renderView(p player) gameengine.Result {
-	count := collectedCount(p.mask)
-	var b []byte
-	b = append(b, "Автомат отмазок\n"...)
-	b = append(b, fmt.Sprintf("Коллекция: %d из %d.\n", count, len(catalogue))...)
-	for _, it := range catalogue {
-		if p.mask&(1<<uint(it.ID-1)) == 0 {
-			continue
-		}
-		b = append(b, fmt.Sprintf("%d. %s\n", it.ID, it.Phrase)...)
-	}
-	if it, ok := itemByID(p.equipped); ok {
-		b = append(b, fmt.Sprintf("Экипировано: №%d \u00ab%s\u00bb\n", it.ID, it.Phrase)...)
+	var b strings.Builder
+	b.WriteString("Автомат отмазок\n\n")
+	buttons := make([]gameengine.Button, 0, 3)
+	if remaining := len(catalogue) - collectedCount(p.mask); remaining == 0 {
+		b.WriteString("Коллекция собрана. Новых отмазок нет.\n")
 	} else {
-		b = append(b, "Экипировано: пока ничего.\n"...)
-	}
-	if p.enabled {
-		b = append(b, "Автоответ: включён.\n"...)
-	} else {
-		b = append(b, "Автоответ: выключен.\n"...)
-	}
-	if p.mask == fullMask() {
-		b = append(b, "Пул собран целиком, новых круток нет."...)
-	} else {
-		b = append(b, fmt.Sprintf("Крутка: %s.\n", money(SpinPrice))...)
-	}
-
-	var buttons []gameengine.Button
-	if p.mask != fullMask() {
+		fmt.Fprintf(&b, "Одна отмазка за %s. Без повторов.\nВ автомате осталось %d из %d.\n", money(SpinPrice), remaining, len(catalogue))
 		buttons = append(buttons, gameengine.Button{Label: "Крутить за " + money(SpinPrice), Verb: "spin"})
 	}
-	for _, it := range catalogue {
-		if p.mask&(1<<uint(it.ID-1)) == 0 {
-			continue
-		}
-		buttons = append(buttons, gameengine.Button{
-			Label: fmt.Sprintf("Экипировать №%d", it.ID),
-			Verb:  "equip",
-			Arg:   strconv.Itoa(it.ID),
-		})
+	buttons = append(buttons, collectionButton())
+	if it, ok := itemByID(p.equipped); ok {
+		fmt.Fprintf(&b, "\nДля автоответа выбрана фраза:\n%s\n", it.Phrase)
 	}
 	if p.enabled {
+		b.WriteString("Автоответ: включён. Бот может ответить, когда вас упомянут.")
 		buttons = append(buttons, gameengine.Button{Label: "Выключить автоответ", Verb: "disable"})
-	} else if p.equipped != 0 {
-		buttons = append(buttons, gameengine.Button{Label: "Включить автоответ", Verb: "enable"})
+	} else {
+		b.WriteString("Автоответ: выключен.")
+		if p.equipped != 0 {
+			buttons = append(buttons, gameengine.Button{Label: "Включить автоответ", Verb: "enable"})
+		}
 	}
-	return gameengine.Result{Text: string(b), Buttons: buttons}
+	return gameengine.Result{Text: b.String(), Buttons: buttons}
+}
+
+func collectionButton() gameengine.Button {
+	return gameengine.Button{Label: "Коллекция", Verb: "collection"}
+}
+
+func renderCollection(p player) gameengine.Result {
+	count := collectedCount(p.mask)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Коллекция отмазок: %d из %d\n\n", count, len(catalogue))
+	buttons := make([]gameengine.Button, 0, count+1)
+	if count == 0 {
+		b.WriteString("Пока нет отмазок. Первую можно получить в автомате.")
+	} else {
+		b.WriteString("Выберите фразу для автоответа.\n")
+		for _, it := range catalogue {
+			if p.mask&(1<<uint(it.ID-1)) == 0 {
+				continue
+			}
+			fmt.Fprintf(&b, "\n%d. %s", it.ID, it.Phrase)
+			if it.ID == p.equipped {
+				b.WriteString(" (выбрана)")
+				continue
+			}
+			buttons = append(buttons, gameengine.Button{
+				Label: fmt.Sprintf("Выбрать №%d", it.ID),
+				Verb:  "equip",
+				Arg:   strconv.Itoa(it.ID),
+			})
+		}
+	}
+	buttons = append(buttons, gameengine.Button{Label: "К автомату", Verb: "view"})
+	return gameengine.Result{Text: b.String(), Buttons: buttons}
 }
 
 func spinQuote(mask uint32) string {

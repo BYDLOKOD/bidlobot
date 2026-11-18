@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -60,8 +61,12 @@ func (g *gameActions) command(module string) th.MessageHandler {
 			verb = "show"
 		}
 		if module == "farm" {
+			args := commandArgs(msg.Text)
+			if args == "" {
+				return g.openFarm(ctx, msg)
+			}
 			var err error
-			verb, arg, err = g.farmParse(commandArgs(msg.Text))
+			verb, arg, err = g.farmParse(args)
 			if err != nil {
 				return g.send(ctx, msg.Chat.ID, msg.MessageThreadID, msg.From.ID, module, gameengine.Result{Text: err.Error()})
 			}
@@ -72,6 +77,18 @@ func (g *gameActions) command(module string) th.MessageHandler {
 		}
 		return g.send(ctx, msg.Chat.ID, msg.MessageThreadID, msg.From.ID, module, r)
 	}
+}
+
+func (g *gameActions) openFarm(ctx context.Context, msg telego.Message) error {
+	p := &telego.SendMessageParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageThreadID: msg.MessageThreadID, Text: "Карта фермы пока недоступна."}
+	if g.farmLink != nil {
+		if link := g.farmLink(msg.Chat.ID); link != "" {
+			p.Text = "Ферма чата"
+			p.ReplyMarkup = &telego.InlineKeyboardMarkup{InlineKeyboard: [][]telego.InlineKeyboardButton{{{Text: "Открыть ферму", URL: link, Style: "primary"}}}}
+		}
+	}
+	_, err := g.api.SendMessage(ctx, p)
+	return err
 }
 
 func gameButtonOwner(owner int64, module, verb string) int64 {
@@ -99,14 +116,34 @@ func (g *gameActions) keyboard(chatID, userID int64, module string, result gamee
 			g.log.Error("game button exceeds Telegram limit", "module", module, "verb", b.Verb)
 			continue
 		}
-		rows = append(rows, []telego.InlineKeyboardButton{{Text: b.Label, CallbackData: payload}})
+		button := telego.InlineKeyboardButton{Text: b.Label, CallbackData: payload}
+		switch b.Verb {
+		case "spin", "confirm", "open", "join":
+			button.Style = "primary"
+		case "start", "collect":
+			button.Style = "success"
+		}
+		rows = append(rows, []telego.InlineKeyboardButton{button})
 	}
 	if module == "farm" && g.farmLink != nil {
 		if link := g.farmLink(chatID); link != "" {
-			rows = append(rows, []telego.InlineKeyboardButton{{Text: "Открыть карту фермы", URL: link}})
+			rows = append(rows, []telego.InlineKeyboardButton{{Text: "Открыть ферму", URL: link}})
 		}
 	}
 	return &telego.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func gameHeading(module, text string) []telego.MessageEntity {
+	if module == "prod" || module == "automat" {
+		if first, _, ok := strings.Cut(text, "\n"); ok && first != "" {
+			n := 0
+			for _, r := range first {
+				n += utf16.RuneLen(r)
+			}
+			return []telego.MessageEntity{{Type: "bold", Length: n}}
+		}
+	}
+	return nil
 }
 
 func (g *gameActions) send(ctx context.Context, chatID int64, topic int, actor int64, module string, result gameengine.Result) error {
@@ -117,7 +154,7 @@ func (g *gameActions) send(ctx context.Context, chatID int64, topic int, actor i
 		result.Text = g.incidentNames(ctx, chatID, result.Text)
 	}
 	markup := g.keyboard(chatID, actor, module, result)
-	params := &telego.SendMessageParams{ChatID: telego.ChatID{ID: chatID}, MessageThreadID: topic, Text: result.Text}
+	params := &telego.SendMessageParams{ChatID: telego.ChatID{ID: chatID}, MessageThreadID: topic, Text: result.Text, Entities: gameHeading(module, result.Text)}
 	if len(markup.InlineKeyboard) > 0 {
 		params.ReplyMarkup = markup
 	}
@@ -156,7 +193,8 @@ func (g *gameActions) callback(_ *th.Context, q telego.CallbackQuery) error {
 	}
 	key := "c" + q.ID
 	// A paid confirmation belongs to the original card, not to each tap.
-	if (module == "automat" && verb == "confirm") || (module == "prod" && verb == "open") || (module == "farm" && (verb == "buy" || verb == "accept")) {
+	farmPurchase := module == "farm" && (verb == "buy" || verb == "accept" || verb == "seed" || verb == "plot" || verb == "build")
+	if (module == "automat" && verb == "confirm") || (module == "prod" && verb == "open") || farmPurchase {
 		key = fmt.Sprintf("p%d:%s", msg.MessageID, body)
 	}
 	a := gameengine.Action{ChatID: storage.AbsChatID(msg.Chat.ID), UserID: q.From.ID, CardID: msg.MessageID, Key: key, Verb: verb, Arg: arg, Now: time.Now().UTC()}
@@ -197,7 +235,7 @@ func (g *gameActions) callback(_ *th.Context, q telego.CallbackQuery) error {
 	if module == "prod" {
 		r.Text = g.incidentNames(ctx, msg.Chat.ID, r.Text)
 	}
-	_, err = g.api.EditMessageText(ctx, &telego.EditMessageTextParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageID: msg.MessageID, Text: r.Text, ReplyMarkup: g.keyboard(msg.Chat.ID, q.From.ID, module, r)})
+	_, err = g.api.EditMessageText(ctx, &telego.EditMessageTextParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageID: msg.MessageID, Text: r.Text, Entities: gameHeading(module, r.Text), ReplyMarkup: g.keyboard(msg.Chat.ID, q.From.ID, module, r)})
 	return err
 }
 
@@ -232,7 +270,7 @@ func (g *gameActions) renderIncidents(ctx context.Context) error {
 		r := entry.Result
 		r.Text = g.incidentNames(ctx, chatID, r.Text)
 		sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		_, editErr := g.api.EditMessageText(sendCtx, &telego.EditMessageTextParams{ChatID: telego.ChatID{ID: chatID}, MessageID: entry.CardID, Text: r.Text, ReplyMarkup: g.keyboard(chatID, 0, "prod", r)})
+		_, editErr := g.api.EditMessageText(sendCtx, &telego.EditMessageTextParams{ChatID: telego.ChatID{ID: chatID}, MessageID: entry.CardID, Text: r.Text, Entities: gameHeading("prod", r.Text), ReplyMarkup: g.keyboard(chatID, 0, "prod", r)})
 		cancel()
 		if editErr != nil && !strings.Contains(editErr.Error(), "message is not modified") && !strings.Contains(editErr.Error(), "message to edit not found") {
 			g.log.Warn("render incident", "error", editErr)

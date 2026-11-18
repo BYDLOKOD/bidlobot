@@ -17,6 +17,19 @@ func positiveToken(raw string, max int) (int, bool) {
 	return n, err == nil && n > 0 && n <= max
 }
 
+func shopReceipt() gameengine.Result {
+	return gameengine.Result{
+		Text: fmt.Sprintf("Магазин фермы. Цены на кнопках указаны в очках репутации. Для мельницы нужно %d ед. зерна, для печи %d ед. муки. Строительство занимает 1 час.", kMillCostGrain, kOvenCostFlour),
+		Buttons: []gameengine.Button{
+			{Label: fmt.Sprintf("Купить семя за %d", kSeedPrice), Verb: "seed", Arg: "1"},
+			{Label: fmt.Sprintf("Купить грядку за %d", kPlotPrice), Verb: "plot"},
+			{Label: fmt.Sprintf("Построить мельницу за %d", kMillCostRep), Verb: "build", Arg: "mill"},
+			{Label: fmt.Sprintf("Построить печь за %d", kOvenCostRep), Verb: "build", Arg: "oven"},
+			{Label: "Ферма", Verb: "board"},
+		},
+	}
+}
+
 func (s *store) buySeeds(userID int64, arg string, now int64) (gameengine.Result, error) {
 	count := 1
 	if strings.TrimSpace(arg) != "" {
@@ -43,7 +56,7 @@ func (s *store) buySeeds(userID int64, arg string, now int64) (gameengine.Result
 		return gameengine.Result{}, err
 	}
 	return gameengine.Result{
-		Text: fmt.Sprintf("Куплено семян: %d. Цена: %d. Баланс: %d. Посадка: /farm plant.", count, cost, available),
+		Text: fmt.Sprintf("Куплено семян: %d. Списано: %d. Доступно: %d.", count, cost, available),
 		Buttons: []gameengine.Button{
 			{Label: "Посадить", Verb: "plant", Arg: "p" + strconv.Itoa(freePlotOrFirst(p))},
 			{Label: "Ферма", Verb: "board"},
@@ -215,8 +228,7 @@ func (s *store) plant(userID int64, arg string, now int64) (gameengine.Result, e
 		return gameengine.Result{}, err
 	}
 	return gameengine.Result{
-		Text: fmt.Sprintf("Посажено (%s) на грядку %d. Сбор: %s, зерно %d.",
-			seedSource, index, deadlineText(end), kPlantYield),
+		Text: fmt.Sprintf("Грядка %d засеяна. Использовано %s. Урожай созреет %s.", index, seedSource, deadlineText(end)),
 		Buttons: []gameengine.Button{
 			{Label: "Ферма", Verb: "board"},
 			{Label: "Рынок", Verb: "market"},
@@ -514,7 +526,7 @@ func (s *store) collectReceipt(userID int64, now int64, settled []harvest) (game
 	next := s.nextActorCompletion(userID, now)
 	if next == 0 {
 		return gameengine.Result{
-			Text:    "Готовой продукции нет. Посадите семя: /farm plant.",
+			Text:    "Готовых работ нет. Проверьте запасы в амбаре.",
 			Buttons: buttons,
 		}, nil
 	}
@@ -579,7 +591,7 @@ func (s *store) boardReceipt(userID int64, now int64, join bool) (gameengine.Res
 		p.count(goodGrain), p.count(goodFlour), p.count(goodBread), p.count(goodSeed),
 		yesNo(p.StarterSeed), listings, budget)
 	if created {
-		text = "Ферма открыта. У вас грядка 1 и стартовое семя. Посадите его: /farm plant. " + text
+		text = "Ферма открыта. У вас одна грядка и стартовое семя. " + text
 	}
 	buttons := []gameengine.Button{
 		{Label: "Посадить", Verb: "plant", Arg: "p" + strconv.Itoa(freePlotOrFirst(p))},

@@ -75,6 +75,8 @@ func registerRoutes(
 	// supergroup tree so their slash commands coexist with
 	// stats/summarize/youtube.
 	registerGameRoutes(sgGroup, a)
+	sgGroup.Use(a.eightBallMiddleware)
+	sgGroup.HandleMessage(a.gateMsg("8ball", 3*time.Second, a.handleEightBall), th.CommandEqual("8ball"))
 	if g := a.gameActions; g != nil {
 		sgGroup.HandleMessage(a.gateMsg("excuses", 3*time.Second, g.command("automat")), th.CommandEqual("excuses"))
 		sgGroup.HandleMessage(a.gateMsg("prod", 3*time.Second, g.command("prod")), th.CommandEqual("prod"))

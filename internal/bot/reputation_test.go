@@ -434,10 +434,10 @@ func TestRepShowsWalletTitleAndDistance(t *testing.T) {
 	}
 	body := sender.lastMsg()
 	for _, want := range []string{
-		"доступно: <b>6</b>",
-		"в резерве: <b>4</b>",
-		"счёт: <b>0</b> \u2014 Участник",
-		"до \u00abДежурный\u00bb: <b>12</b>",
+		"Доступно: <b>6</b>",
+		"В резерве: <b>4</b>",
+		"Очки: <b>0</b>\nЗвание: Участник",
+		"Следующее звание: Дежурный. Осталось очков: <b>12</b>.",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("/rep missing %q in %q", want, body)
@@ -482,20 +482,20 @@ func TestRepTopByScoreWithTitlesAndObservedMembers(t *testing.T) {
 		t.Fatalf("/reptop listed an unobserved member: %q", body)
 	}
 	lines := strings.Split(body, "\n")
-	if len(lines) != 11 { // header + ten entries
-		t.Fatalf("/reptop lines = %d, want 11: %q", len(lines), body)
+	if len(lines) != 12 || !strings.HasPrefix(lines[1], "<pre>") {
+		t.Fatalf("expected a heading, column labels and ten rows: %q", body)
 	}
-	if !strings.Contains(lines[1], "u110") || !strings.Contains(lines[1], "<b>12</b>") || !strings.Contains(lines[1], "Дежурный") {
-		t.Fatalf("first entry = %q", lines[1])
+	if !strings.Contains(lines[2], "u110") || !strings.Contains(lines[2], "12") || !strings.Contains(lines[2], "Дежурный") {
+		t.Fatalf("first entry = %q", lines[2])
 	}
-	if !strings.Contains(lines[1], "открывать инцидент") {
-		t.Fatalf("first entry must show the unlocked activity: %q", lines[1])
+	if strings.Contains(body, "открывать инцидент") {
+		t.Fatalf("the table must not repeat game instructions: %q", body)
 	}
-	if !strings.Contains(lines[2], "u111") || !strings.Contains(lines[2], "<b>6</b>") {
-		t.Fatalf("second entry = %q", lines[2])
+	if !strings.Contains(lines[3], "u111") || !strings.Contains(lines[3], " 6 ") {
+		t.Fatalf("second entry = %q", lines[3])
 	}
-	if !strings.Contains(lines[3], "u100") {
-		t.Fatalf("tie must fall back to user id ascending, third entry = %q", lines[3])
+	if !strings.Contains(lines[4], "u100") {
+		t.Fatalf("tie must fall back to user id ascending, third entry = %q", lines[4])
 	}
 }
 
@@ -503,7 +503,7 @@ func TestRepTopEmpty(t *testing.T) {
 	h, sender, _, _, _, cleanup := newRepHandler(t)
 	defer cleanup()
 	_ = h.HandleRepTop(nil, repMessage("/reptop", aliceUser))
-	if got := sender.lastMsg(); !strings.Contains(got, "пока никто не набрал счёт") {
+	if got := sender.lastMsg(); !strings.Contains(got, "Ни у кого пока нет очков.") {
 		t.Fatalf("empty leaderboard copy = %q", got)
 	}
 }
@@ -514,7 +514,7 @@ func TestRepHighestTitle(t *testing.T) {
 	seedScore(t, store, repTestChatID, aliceUser.ID, 72, 8000)
 	_ = h.HandleRep(nil, repMessage("/rep", aliceUser))
 	body := sender.lastMsg()
-	if !strings.Contains(body, "Хранитель прода") || !strings.Contains(body, "это высший титул") {
+	if !strings.Contains(body, "Звание: Хранитель прода") || strings.Contains(body, "Следующее звание:") {
 		t.Fatalf("highest title copy = %q", body)
 	}
 }

@@ -20,6 +20,7 @@ func setCommands(ctx context.Context, bot *telego.Bot, ownerID int64) error {
 		{Command: "excuses", Description: "Автомат отмазок"},
 		{Command: "prod", Description: "Прод не спит"},
 		{Command: "farm", Description: "Общая ферма"},
+		{Command: "8ball", Description: "Задать вопрос шару"},
 		{Command: "refs", Description: "Реферальные ссылки чата"},
 		{Command: "refreg", Description: "Добавить реферальную ссылку"},
 		{Command: "flush", Description: "Повторить неудачные запросы"},

@@ -105,7 +105,7 @@ func TestIncidentRoundAndRetrospective(t *testing.T) {
 	started := applyAction(t, engine, gameengine.Action{
 		ChatID: chatID, UserID: sponsor, Key: "start", Verb: VerbStart, Arg: id + ":0", Now: now.Add(20 * time.Second),
 	})
-	if !strings.Contains(started.Text, "Смена 1 из 3") {
+	if !strings.Contains(started.Text, "Ход 1 из 3") || !strings.Contains(started.Text, "Что видно: В журнале поиска ошибки чтения полей") {
 		t.Fatalf("start card: %q", started.Text)
 	}
 	if available, reserved, _ := wallet(t, db, chatID, sponsor); available != 12 || reserved != 0 {
@@ -121,13 +121,15 @@ func TestIncidentRoundAndRetrospective(t *testing.T) {
 	vote(1, "v1", "t1rollback", now.Add(30*time.Second))
 	vote(2, "v2", "t1rollback", now.Add(31*time.Second))
 	vote(3, "v3", "t1cache", now.Add(32*time.Second))
-	vote(3, "v3-changed", "t1rollback", now.Add(33*time.Second))
+	vote(2, "v2-changed", "t1restart", now.Add(33*time.Second))
 
 	settled, err := engine.Advance(now.Add(65 * time.Second))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settled) != 1 || !strings.Contains(settled[0].Result.Text, "Смена 2 из 3") {
+	if len(settled) != 1 || !strings.Contains(settled[0].Result.Text, "Ход 2 из 3") ||
+		!strings.Contains(settled[0].Result.Text, "старая схема") ||
+		!strings.Contains(settled[0].Result.Text, "Пересобрать индекс (+2)") {
 		t.Fatalf("turn 1 settlement: %+v", settled)
 	}
 
@@ -157,7 +159,8 @@ func TestIncidentRoundAndRetrospective(t *testing.T) {
 		if len(settled) != 1 {
 			t.Fatalf("turn %d settlement count: %+v", step.turn, settled)
 		}
-		if step.turn == 2 && !strings.Contains(settled[0].Result.Text, "Смена 3 из 3") {
+		if step.turn == 2 && (!strings.Contains(settled[0].Result.Text, "Ход 3 из 3") ||
+			!strings.Contains(settled[0].Result.Text, "20 из 20")) {
 			t.Fatalf("turn 2 settlement: %q", settled[0].Result.Text)
 		}
 	}
@@ -165,7 +168,7 @@ func TestIncidentRoundAndRetrospective(t *testing.T) {
 	if !strings.Contains(final.Text, "сервис восстановлен") {
 		t.Fatalf("final card: %q", final.Text)
 	}
-	if !strings.Contains(final.Text, "Причина:") || !strings.Contains(final.Text, "Что повлияло:") {
+	if !strings.Contains(final.Text, "Причина сбоя:") || !strings.Contains(final.Text, "Подтверждение:") {
 		t.Fatalf("final card lacks cause/debrief: %q", final.Text)
 	}
 	retroButton := buttonWithVerb(t, final, VerbRetro)
@@ -187,10 +190,12 @@ func TestIncidentRoundAndRetrospective(t *testing.T) {
 		ChatID: chatID, UserID: 2, Key: "retro-2", Verb: VerbRetro, Arg: next.Arg, Now: now.Add(161 * time.Second),
 	})
 	allRetro := retro.Text + retro2.Text
-	if !strings.Contains(allRetro, "«Очистить кэш»") || !strings.Contains(allRetro, "изменён с") {
+	if !strings.Contains(allRetro, "Очистить кэш") || !strings.Contains(allRetro, "голос изменён") {
 		t.Fatalf("retro hides a changed, losing vote: %q", allRetro)
 	}
-	if !strings.Contains(allRetro, "Выполнили: «Откатить выкладку»") {
+	if !strings.Contains(allRetro, "Выполнили: Откатить выкладку") ||
+		!strings.Contains(allRetro, "При равенстве голосов победил вариант с приоритетом.") ||
+		strings.Contains(allRetro, "победил первый из лидеров") {
 		t.Fatalf("retro lacks applied turn result: %q", allRetro)
 	}
 
@@ -242,7 +247,7 @@ func TestLobbyExpiryReleasesReservation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settled) != 1 || !strings.Contains(settled[0].Result.Text, "Трое не набрались") {
+	if len(settled) != 1 || !strings.Contains(settled[0].Result.Text, "Время на сбор команды вышло") {
 		t.Fatalf("lobby expiry settlement: %+v", settled)
 	}
 	if available, reserved, _ := wallet(t, db, chatID, sponsor); available != 20 || reserved != 0 {
@@ -311,6 +316,54 @@ func TestAuthoredScenariosHaveWinningSequence(t *testing.T) {
 		}
 		if score < scen.RestoreAt || !contains(scen.FinalOK, sequence[len(sequence)-1]) {
 			t.Fatalf("%s winning sequence scores %d, needs %d and final %v", id, score, scen.RestoreAt, scen.FinalOK)
+		}
+	}
+}
+
+func TestSearchWithoutRollbackRemainsIncompatible(t *testing.T) {
+	engine, db := newHarness(t)
+	const chatID, sponsor = int64(701), int64(1)
+	previous := sponsorMinScore
+	sponsorMinScore = 0
+	t.Cleanup(func() { sponsorMinScore = previous })
+	fund(t, db, chatID, sponsor, 20)
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	do := func(user int64, verb, arg string) gameengine.Result {
+		return applyAction(t, engine, gameengine.Action{
+			ChatID: chatID, UserID: user, Key: fmt.Sprintf("%d:%s:%s", user, verb, arg), Verb: verb, Arg: arg, Now: now,
+		})
+	}
+	opened := do(sponsor, VerbOpen, "search")
+	lobby := buttonWithVerb(t, opened, VerbJoin).Arg
+	id, _, _ := strings.Cut(lobby, ":")
+	for user := int64(1); user <= 3; user++ {
+		do(user, VerbJoin, lobby)
+	}
+	do(sponsor, VerbStart, lobby)
+
+	for _, step := range []struct {
+		option string
+		want   []string
+		absent string
+	}{
+		{id + ":1:t1cache", []string{"новая схема", "Пересобрать индекс (+1)"}, "Работает старая схема"},
+		{id + ":2:t2reindex", []string{"17 из 20", "Проверить выдачу (0)"}, "20 из 20"},
+		{id + ":3:t3verify", []string{"сервис не восстановлен", "Проверка нашла 17 из 20", "Подтверждение: нет"}, "Проверка прошла"},
+	} {
+		do(sponsor, VerbVote, step.option)
+		now = now.Add(TurnLifetime)
+		settled, err := engine.Advance(now)
+		if err != nil || len(settled) != 1 {
+			t.Fatalf("advance after %s: %+v, %v", step.option, settled, err)
+		}
+		text := settled[0].Result.Text
+		for _, want := range step.want {
+			if !strings.Contains(text, want) {
+				t.Errorf("after %s: %q does not include %q", step.option, text, want)
+			}
+		}
+		if strings.Contains(text, step.absent) {
+			t.Errorf("after %s: %q incorrectly includes %q", step.option, text, step.absent)
 		}
 	}
 }

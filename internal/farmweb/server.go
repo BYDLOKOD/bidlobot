@@ -22,16 +22,18 @@ import (
 	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/gameengine"
+	"github.com/veschin/bidlobot/internal/gameengine/farm"
 )
 
 type Server struct {
-	engine *gameengine.Engine
-	base   string
-	secret []byte
-	launch cipher.AEAD
-	member func(context.Context, int64, int64) bool
-	board  func(*bolt.Tx, int64, int64, time.Time) (any, error)
-	parse  func(string) (string, string, error)
+	engine  *gameengine.Engine
+	base    string
+	secret  []byte
+	launch  cipher.AEAD
+	member  func(context.Context, int64, int64) bool
+	board   func(*bolt.Tx, int64, int64, time.Time) (any, error)
+	parse   func(string) (string, string, error)
+	display func(context.Context, int64, int64) string
 }
 
 func New(engine *gameengine.Engine, botName, appName, token string, member func(context.Context, int64, int64) bool, board func(*bolt.Tx, int64, int64, time.Time) (any, error), parse func(string) (string, string, error)) (*Server, error) {
@@ -59,6 +61,11 @@ func New(engine *gameengine.Engine, botName, appName, token string, member func(
 		return nil, err
 	}
 	return &Server{engine: engine, base: "https://t.me/" + botName + "/" + appName, secret: mac([]byte("WebAppData"), token), launch: aead, member: member, board: board, parse: parse}, nil
+}
+
+// SetDisplayResolver configures optional yard labels before serving requests.
+func (s *Server) SetDisplayResolver(resolve func(context.Context, int64, int64) string) {
+	s.display = resolve
 }
 
 func mac(key []byte, text string) []byte {
@@ -178,6 +185,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err := s.engine.View(func(tx *bolt.Tx) error { var err error; board, err = s.board(tx, -chat, user, now); return err }); err != nil {
 			failure(500, "Ферма не открылась. Попробуйте ещё раз.")
 			return
+		}
+		if view, ok := board.(*farm.View); ok && s.display != nil {
+			for i := range view.Yards {
+				yard := &view.Yards[i]
+				if yard.OwnerID != user {
+					yard.OwnerName = strings.Join(strings.Fields(s.display(ctx, -chat, yard.OwnerID)), " ")
+				}
+			}
 		}
 		send(200, board)
 		return

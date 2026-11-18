@@ -116,12 +116,12 @@ func (a *App) replyWithExcuse(msg *telego.Message) {
 		}); err != nil || !allowed || phrase != pending.Phrase {
 			return
 		}
-		name := shared.UserDisplay(user.Username, user.FirstName)
+		name := strings.Join(strings.Fields(shared.UserDisplay(user.Username, user.FirstName)), " ")
 		if name == "" {
-			name = "участник"
+			name = fmt.Sprint(id)
 		}
 		name = strings.ReplaceAll(name, "@", "@\u2060")
-		_, err = sender.SendMessageOnce(ctx, &telego.SendMessageParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageThreadID: msg.MessageThreadID, Text: fmt.Sprintf("Отмазка (%s): \u00ab%s\u00bb", name, phrase), ReplyParameters: &telego.ReplyParameters{MessageID: msg.MessageID}})
+		_, err = sender.SendMessageOnce(ctx, &telego.SendMessageParams{ChatID: telego.ChatID{ID: msg.Chat.ID}, MessageThreadID: msg.MessageThreadID, Text: fmt.Sprintf("Отмазка для %s:\n%s", name, phrase), ReplyParameters: &telego.ReplyParameters{MessageID: msg.MessageID}})
 		if err != nil {
 			g.log.Warn("deliver excuse reply", "error", err)
 		}
