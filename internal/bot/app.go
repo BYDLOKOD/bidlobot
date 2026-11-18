@@ -46,6 +46,7 @@ type App struct {
 	memberSvc   *membership.Service
 	inlineSvc   *InlineService
 	games       *GamesRegistry
+	gameActions *gameActions
 	cooldown    *cooldown
 
 	// summarize is the always-on Pi/OMP summarization feature.
@@ -215,16 +216,14 @@ func (a *App) AttachHealth(dbOpen func() bool, getMeOK func(ctx context.Context)
 	return nil
 }
 
-// AttachGames installs the mini-games registry. Call before Run so that
-// registerRoutes sees the wiring. Passing nil is a no-op.
+// AttachGames installs the public social-command registry (currently
+// reputation only). Call before Run so that registerRoutes sees the
+// wiring. Passing nil is a no-op.
 func (a *App) AttachGames(g *GamesRegistry) {
 	if g == nil {
 		return
 	}
 	a.games = g
-	if a.inlineSvc != nil && g.InlineRouter != nil {
-		a.inlineSvc.SetGameRouter(g.InlineRouter)
-	}
 }
 
 // AttachSummarize wires the Pi/OMP summarization feature.
@@ -290,6 +289,14 @@ func (a *App) Run(ctx context.Context, statsH *stats.Handler) error {
 	bh.Use(a.inFlightMiddleware())
 
 	registerRoutes(bh, a, statsH)
+
+	if a.gameActions != nil {
+		a.inFlight.Add(1)
+		go func() {
+			defer a.inFlight.Done()
+			a.gameActions.tick(ctx)
+		}()
+	}
 
 	go a.statsBuffer.Run(ctx, 60*time.Second)
 	if a.monthBuffer != nil {
@@ -689,14 +696,15 @@ func (a *App) replySummarize(msg *telego.Message, reply string) error {
 	return nil
 }
 
-const helpSupergroup = `BidloBot - статистика, мини-игры и модерация.
+const helpSupergroup = `BidloBot - статистика, репутация и рефки.
 
   /stats         - обзор чата
   /stats top     - топ участников
   /stats today   - активность за день
-  /dice [emoji]  - бросок кубика
-  /battle X Y    - голосование реакциями за 60с
-  /quiz          - угадай язык по сниппету
+  /praise @user  - похвалить участника
+  /roast @user   - поджарить участника
+  /rep           - твой баланс репутации
+  /reptop        - топ репутации
   /refs          - все рефки
   /refreg        - добавить рефку
 

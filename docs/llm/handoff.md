@@ -1,6 +1,15 @@
-# Handoff - 2026-10-27 (birthday greetings)
+# Handoff
 
-## 1. State (what is true right now)
+## Reputation and games
+
+- Release prices in the [TZ](../../TZ.md): spin 8, incident 18, seed 4,
+  plot 20, mill 30, oven 40. Wallets, title thresholds, player-set prices
+  and co-op payouts are unchanged.
+- The production rollout was not started. See the
+  [release prerequisites](70_deployment.md#kubernetes-deploy-production)
+  for the backup, test-group smoke and Mini App HTTPS setup.
+
+## Birthday greetings: last recorded state
 
 - **Birthday greetings implemented, not deployed.** `BIRTHDAY_ENABLED`
   defaults to `false`.

@@ -9,11 +9,12 @@ import (
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-// cooldown is a per-(user,key) minimum-interval gate. Games and /stats
-// have no natural rate limit, so a single member could flood a
-// 200-person chat with /dice or /battle. This bounds invocation
-// frequency per user without adding any reply (a "wait" message would
-// itself be spam - we just silently drop the over-frequency call).
+// cooldown is a per-(user,key) minimum-interval gate. Public commands
+// such as /stats and the reputation transfers have no natural rate
+// limit, so a single member could flood a 200-person chat. This bounds
+// invocation frequency per user without adding any reply (a "wait"
+// message would itself be spam - we just silently drop the
+// over-frequency call).
 // cooldownEvictAfter is far longer than any gate window (max 30s), so
 // evicting entries older than this never drops a still-relevant
 // cooldown but keeps the map from growing for the process lifetime

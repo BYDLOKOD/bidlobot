@@ -17,8 +17,8 @@ import "strings"
 // helpEntry is one command line: the full invocation example plus a short
 // description of what it does.
 type helpEntry struct {
-	cmd  string // e.g. "/battle Go Rust"
-	desc string // e.g. "голосование реакциями, 60 секунд"
+	cmd  string // e.g. "/praise @user"
+	desc string // e.g. "похвалить участника"
 }
 
 // helpSection groups entries under a bold MarkdownV2 header.
@@ -42,26 +42,20 @@ var helpSections = []helpSection{
 		},
 	},
 	{
-		title: "Игры",
-		entries: []helpEntry{
-			{cmd: "/dice", desc: "бросок кубика"},
-			{cmd: "/battle Go Rust", desc: "голосование реакциями за 60 секунд"},
-			{cmd: "/quiz", desc: "угадай язык по сниппету"},
-			{cmd: "/poll вопрос | вариант1 | вариант2", desc: "опрос"},
-			{cmd: "/8ball вопрос", desc: "шар предсказаний"},
-			{cmd: "/guess", desc: "угадай число от 1 до 100"},
-			{cmd: "/hangman", desc: "виселица на IT-словах"},
-			{cmd: "/duel @user", desc: "дуэль"},
-			{cmd: "/trivia", desc: "IT-викторина"},
-		},
-	},
-	{
 		title: "Репутация",
 		entries: []helpEntry{
 			{cmd: "/praise @user", desc: "похвалить участника"},
 			{cmd: "/roast @user", desc: "поджарить участника"},
 			{cmd: "/rep", desc: "твой баланс репутации"},
 			{cmd: "/reptop", desc: "топ репутации"},
+		},
+	},
+	{
+		title: "Игры",
+		entries: []helpEntry{
+			{cmd: "/excuses", desc: "крутить автомат и выбрать отмазку"},
+			{cmd: "/prod", desc: "открыть инцидент или присоединиться к игре"},
+			{cmd: "/farm", desc: "грядки, производство, торговля и аренда"},
 		},
 	},
 	{

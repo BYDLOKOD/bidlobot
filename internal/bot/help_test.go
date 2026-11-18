@@ -13,8 +13,8 @@ func TestBuildHelpMarkdownContainsSections(t *testing.T) {
 	for _, want := range []string{
 		"*BidloBot \\- команды*",
 		"`/stats top` \\- топ участников",
-		"`/battle Go Rust` \\- голосование реакциями за 60 секунд",
 		"`/praise @user` \\- похвалить участника",
+		"`/rep` \\- твой баланс репутации",
 		"`/refreport ID` \\- удалить рефку по ID",
 	} {
 		if !strings.Contains(text, want) {

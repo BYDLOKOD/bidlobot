@@ -30,7 +30,6 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
-	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,7 +40,6 @@ import (
 
 	"github.com/veschin/bidlobot/internal/domain/reputation"
 	"github.com/veschin/bidlobot/internal/shared"
-	"github.com/veschin/bidlobot/internal/storage"
 )
 
 // repBatchWindow is how long rep events accumulate before one combined
@@ -213,28 +211,28 @@ func (r *repReactor) RecordOwner(rec ownerRecord) {
 }
 
 // repReactor is the reaction->rep pipeline: author lookup, emoji mapping,
-// reputation Apply, and the 10-second batcher that emits one combined
-// message per chat.
+// one atomic settlement, and the 10-second batcher that emits one
+// combined message per chat.
 type repReactor struct {
-	store  reputation.Store
-	admins AdminChecker
-	index  *msgAuthorIndex
-	batch  *repBatcher
-	log    *slog.Logger
+	store reputation.Store
+	index *msgAuthorIndex
+	batch *repBatcher
+	log   *slog.Logger
 }
 
 // NewRepReactor wires the reaction-rep pipeline. sender is the
 // rate-limited public-surface sender used for the combined rep messages.
-func NewRepReactor(store reputation.Store, admins AdminChecker, sender repSender, log *slog.Logger) *repReactor {
+// The AdminChecker argument is kept for wiring stability; administrators
+// receive the same deltas as everyone else.
+func NewRepReactor(store reputation.Store, _ AdminChecker, sender repSender, log *slog.Logger) *repReactor {
 	if log == nil {
 		log = slog.Default()
 	}
 	return &repReactor{
-		store:  store,
-		admins: admins,
-		index:  newMsgAuthorIndex(maxIndexedMessages),
-		batch:  newRepBatcher(sender, log),
-		log:    log,
+		store: store,
+		index: newMsgAuthorIndex(maxIndexedMessages),
+		batch: newRepBatcher(sender, log),
+		log:   log,
 	}
 }
 
@@ -303,58 +301,84 @@ func (r *repReactor) Handle(_ *th.Context, reaction telego.MessageReactionUpdate
 		return nil // self-reaction
 	}
 
-	absChat := storage.AbsChatID(reaction.Chat.ID)
-	actorAdmin, ok := r.isAdmin(absChat, reaction.User.ID)
-	if !ok {
+	if !r.isStillMember(reaction.Chat.ID, reaction.User.ID) {
 		return nil
 	}
-	targetAdmin, ok := r.isAdmin(absChat, author.userID)
-	if !ok {
+	if !r.isStillMember(reaction.Chat.ID, author.userID) {
+		r.log.Info("rep reaction: author is not a current member",
+			"chat_id", reaction.Chat.ID, "message_id", reaction.MessageID, "user_id", author.userID)
 		return nil
 	}
 
-	res, err := r.store.Apply(context.Background(), absChat, reaction.User.ID, author.userID, kind, actorAdmin, targetAdmin)
+	res, err := r.store.Settle(context.Background(), reputation.SocialRequest{
+		ChatID:          reaction.Chat.ID,
+		ActorID:         reaction.User.ID,
+		TargetID:        author.userID,
+		Kind:            kind,
+		Source:          reputation.SourceReaction,
+		SourceMessageID: reaction.MessageID,
+	})
 	if err != nil {
 		switch {
 		case errors.Is(err, reputation.ErrSelfTarget),
 			errors.Is(err, reputation.ErrInsufficientBalance),
-			errors.Is(err, reputation.ErrTargetInsufficientBalance):
-			// Socially expected: self-target, broke actor, broke target.
-			// Silent - no chat spam for a reaction.
+			errors.Is(err, reputation.ErrPairLimit),
+			errors.Is(err, reputation.ErrSenderLimit),
+			errors.Is(err, reputation.ErrDuplicateSource):
+			// Socially expected: a repeated reaction, a daily limit or
+			// an empty wallet. Silent - no chat spam for a reaction.
 			return nil
 		default:
-			r.log.Warn("rep reaction apply failed", "error", err, "chat_id", reaction.Chat.ID)
+			r.log.Warn("rep reaction settle failed", "error", err, "chat_id", reaction.Chat.ID)
 			return nil
 		}
 	}
 
+	line := ""
+	if kind == reputation.KindPraise {
+		line = praiseLine(reaction.Chat.ID, repReasonNone)
+	} else {
+		line = "Минус по адресу."
+	}
 	r.batch.Add(reaction.Chat.ID, repEvent{
-		kind:          kind,
-		actor:         repDisplay(reaction.User.Username, reaction.User.FirstName, reaction.User.ID),
-		target:        repDisplay(author.username, author.firstName, author.userID),
-		delta:         repDelta(kind, targetAdmin),
-		actorBalance:  res.ActorBalance,
-		targetBalance: res.TargetBalance,
-		quote:         author.quote,
-		link:          shared.MessageLink(reaction.Chat.ID, author.threadID, reaction.MessageID),
-		tmpl:          repTemplate(kind),
+		kind:              kind,
+		actor:             repDisplay(reaction.User.Username, reaction.User.FirstName, reaction.User.ID),
+		target:            repDisplay(author.username, author.firstName, author.userID),
+		line:              line,
+		actorWalletDelta:  res.ActorWalletDelta,
+		targetWalletDelta: res.TargetWalletDelta,
+		targetScoreDelta:  res.TargetScoreDelta,
+		actorAvailable:    res.Actor.Available,
+		targetAvailable:   res.Target.Available,
+		targetScore:       res.Target.Score,
+		quote:             author.quote,
+		link:              shared.MessageLink(reaction.Chat.ID, author.threadID, reaction.MessageID),
 	})
 	return nil
 }
 
-// isAdmin resolves admin status for the reputation Apply. ok=false on a
-// lookup failure - the caller skips the reaction (better to drop one rep
-// than to apply it with a wrong admin flag).
-func (r *repReactor) isAdmin(absChatID, userID int64) (bool, bool) {
-	if r.admins == nil {
-		return false, true
+// isStillMember verifies current membership before a reaction write.
+// The sender is the production Telegram client, which exposes
+// GetChatMember; a sender without that method fails closed.
+func (r *repReactor) isStillMember(chatID, userID int64) bool {
+	verifier, ok := r.batch.sender.(repMemberVerifier)
+	if !ok {
+		r.log.Warn("rep reaction membership verifier unavailable", "chat_id", chatID, "user_id", userID)
+		return false
 	}
-	isAdmin, err := r.admins.IsAdmin(absChatID, userID)
-	if err != nil {
-		r.log.Warn("rep admin check failed", "error", err, "abs_chat_id", absChatID, "user_id", userID)
-		return false, false
+	cm, err := verifier.GetChatMember(context.Background(), &telego.GetChatMemberParams{
+		ChatID: telego.ChatID{ID: chatID},
+		UserID: userID,
+	})
+	if err != nil || cm == nil {
+		r.log.Warn("rep reaction membership check failed", "error", err, "chat_id", chatID, "user_id", userID)
+		return false
 	}
-	return isAdmin, true
+	return cm.MemberIsMember()
+}
+
+type repMemberVerifier interface {
+	GetChatMember(context.Context, *telego.GetChatMemberParams) (telego.ChatMember, error)
 }
 
 // repEmojiToKind maps the first tracked emoji in NewReaction to a
@@ -407,51 +431,24 @@ func repDisplay(username, firstName string, userID int64) string {
 	return html.EscapeString(d)
 }
 
-// repDelta mirrors the balance math in storage.ReputationRepo.Apply so
-// the batcher can report the actual change.
-func repDelta(kind reputation.Kind, targetIsAdmin bool) int {
-	switch kind {
-	case reputation.KindPraise:
-		if targetIsAdmin {
-			return 6
-		}
-		return 3
-	case reputation.KindRoast:
-		return -1
-	default:
-		return 0
-	}
-}
-
 // repEvent is one credited rep change, accumulated for the batcher.
 type repEvent struct {
-	kind          reputation.Kind
-	actor         string // HTML-escaped inert display
-	target        string // HTML-escaped inert display
-	delta         int
-	actorBalance  int
-	targetBalance int
+	kind              reputation.Kind
+	actor             string // HTML-escaped inert display
+	target            string // HTML-escaped inert display
+	line              string // curated public line, already final
+	actorWalletDelta  int
+	targetWalletDelta int
+	targetScoreDelta  int
+	actorAvailable    int
+	targetAvailable   int
+	targetScore       int
 	// quote is the raw (unescaped) text of the reacted message; the
 	// composer escapes and, when link is set, makes it the link text.
 	quote string
 	// link is the t.me permalink of the reacted message ("" when the
 	// chat is no supergroup or the message cannot be addressed).
 	link string
-	// tmpl is the phrase chosen for this entry when the event was
-	// created (see repTemplate).
-	tmpl string
-}
-
-// repTemplate picks the phrase for one entry. The draw happens when the
-// event is created, not when it is rendered: composeRepMessages measures
-// a rendered chunk to decide where to split and flush renders it again,
-// so a fresh draw per render would make the measured length differ from
-// the sent one.
-func repTemplate(kind reputation.Kind) string {
-	if kind == reputation.KindRoast {
-		return roastTemplates[rand.IntN(len(roastTemplates))]
-	}
-	return praiseTemplates[rand.IntN(len(praiseTemplates))]
 }
 
 // repQuoteText cleans one message text into a rep quote: collapses every
@@ -671,45 +668,46 @@ func composeRepMessages(events []repEvent) []string {
 	return out
 }
 
-// writeRepEntry appends one credited reaction: the classic /praise
-// /roast line, the quote of the reacted message (made the permalink's
-// link text), and the balance report. A quote on its own line keeps the
-// joke readable while the link stays tappable.
+// writeRepEntry appends one credited reaction: the curated public line,
+// the deterministic signed receipt, and the quote of the reacted message
+// made the permalink's link text. actor/target must already be
+// HTML-escaped; send the result with ParseMode HTML.
 func writeRepEntry(b *strings.Builder, e repEvent) {
-	tmpl := e.tmpl
-	if tmpl == "" {
-		tmpl = repTemplate(e.kind)
-	}
 	// The reacted message is reachable through exactly one link: its
 	// quote when there is one, else the target's own name.
 	head := e.target
 	if e.quote == "" && e.link != "" {
 		head = fmt.Sprintf(`<a href="%s">%s</a>`, e.link, e.target)
 	}
-	body := strings.Replace(tmpl, "%s", head, 1)
-
-	quote := ""
-	if e.quote != "" {
-		q := defuseMentions(escQuote(e.quote))
-		if e.link != "" {
-			quote = fmt.Sprintf("<a href=\"%s\">«%s»</a>", e.link, q)
+	line := e.line
+	if line == "" {
+		if e.kind == reputation.KindRoast {
+			line = "Минус по адресу."
 		} else {
-			quote = "«" + q + "»"
+			line = "Плюс по адресу."
 		}
 	}
 
-	balance := fmt.Sprintf("<i>(Баланс: %s: %d, %s: %d)</i>",
-		e.actor, e.actorBalance, e.target, e.targetBalance)
-	if e.kind == reputation.KindRoast {
-		fmt.Fprintf(b, "%s\n\nлови %d, чучело, от %s.\n", body, e.delta, e.actor)
-	} else {
-		fmt.Fprintf(b, "%s\n\nдержи %+d от %s.\n", body, e.delta, e.actor)
+	fmt.Fprintf(b, "%s\n\n", line)
+	fmt.Fprintf(b, "<b>%+d</b> к репе %s, <b>%+d</b> к счёту; <b>%+d</b> у %s.\n",
+		e.targetWalletDelta, head,
+		e.targetScoreDelta,
+		e.actorWalletDelta, e.actor,
+	)
+
+	if e.quote != "" {
+		q := defuseMentions(escQuote(e.quote))
+		if e.link != "" {
+			b.WriteString(fmt.Sprintf("<a href=\"%s\">\u00ab%s\u00bb</a>\n", e.link, q))
+		} else {
+			b.WriteString("\u00ab" + q + "\u00bb\n")
+		}
 	}
-	if quote != "" {
-		b.WriteString(quote)
-		b.WriteString("\n")
-	}
-	b.WriteString(balance)
+	fmt.Fprintf(b, "<i>Доступно: %s \u2014 %d, %s \u2014 %d. Счёт: %s \u2014 %d.</i>",
+		e.actor, e.actorAvailable,
+		e.target, e.targetAvailable,
+		e.target, e.targetScore,
+	)
 }
 
 // repAuthorIndexMiddleware feeds the rep reactor's author index from the

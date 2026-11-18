@@ -21,7 +21,7 @@ devlog (immutable history). Run `./validate.sh` after any edit.
 
 ## Entries
 
-- [25_games.md](25_games.md) - mini-games: command/cooldown table, rate-limit + bounded-notice rules, inline (roast/praise moved to reputation)
+- [25_games.md](25_games.md) - shared game engine, three modules, and legacy game cutover
 - [30_stats.md](30_stats.md) - chat statistics: counting rules, buffering, lifetime + monthly nominations, display, MSK day boundary
 - [45_summarize.md](45_summarize.md) - admin-only `/summarize`: OMP/Pi CLI + DeepSeek V4 Flash, RAM-only window, weighted digest with cost, deferred retry, privacy
 - [50_telegram.md](50_telegram.md) - Telegram API specifics: chat types, anonymous admins, rate limits + per-user cooldown notice, error handling, onboarding + admission gate, captcha, shutdown

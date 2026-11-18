@@ -2,74 +2,56 @@
 id: games
 kind: spec
 touches:
-  - internal/bot/games.go
-  - internal/bot/games_8ball.go
-  - internal/bot/games_battle.go
-  - internal/bot/games_dice.go
-  - internal/bot/games_duel.go
-  - internal/bot/games_guess.go
-  - internal/bot/games_hangman.go
-  - internal/bot/games_inline.go
-  - internal/bot/games_poll.go
-  - internal/bot/games_quip.go
-  - internal/bot/games_quiz.go
-  - internal/bot/games_trivia.go
-  - internal/bot/inline.go
-  - internal/bot/cooldown.go
-  - internal/games/
-  - internal/storage/dice_repo.go
-  - internal/storage/quiz_repo.go
-  - internal/storage/guess_repo.go
-  - internal/storage/hangman_repo.go
+  - internal/gameengine/
+  - internal/farmweb/
+  - internal/bot/game_actions.go
+  - internal/bot/game_mentions.go
+  - internal/storage/game_state.go
 written: 2026-05-15
-updated: 2026-05-15
+updated: 2026-11-18
 ---
 
-# Mini-games
+# Chat games
 
-See also: [PRD.md](PRD.md), [50_telegram.md](50_telegram.md)
-(per-user cooldown + bounded "slow down" notice).
+[TZ.md](../../TZ.md) defines the rules and release scenarios. [Reputation](59_reputation.md)
+owns the wallet and the title score; spending never changes the score.
 
-Public, read-only chat-engagement commands. All sends go through the
-rate-limited `tgclient` wrapper (never the raw `*telego.Bot`); every
-command is wrapped by `App.gateMsg(key, every, handler)` for a per-user
-cooldown. Wired in `internal/bot/games.go` (`GamesRegistry` +
-`registerGameRoutes`); inline suggestions in `internal/bot/games_inline.go`
-+ the `inline.go` catalog. Per-chat state (where any) lives in its own
-bbolt bucket mirroring `dice_leaderboard`/`quiz_leaderboard`.
+| Command | Group activity |
+|---|---|
+| `/excuses` | Confirm a spin for 8 reputation, collect and equip a phrase, and explicitly enable or disable mention replies. |
+| `/prod` | Sponsor a three-turn group incident for 18 reputation. Guests join and vote for free. The final card links to the chronological retrospective. |
+| `/farm` | Grow crops, build production, sell goods, rent slots and deliver co-op contracts. The shop charges 4 per seed, 20 per plot, 30 for a mill or 40 for an oven, plus building materials where required. Telegram and the Mini App share the same farm prices and state. |
 
-## Commands & cooldowns
+## Common engine
 
-| Command | Cooldown | State | Notes |
-|---|---|---|---|
-| `/dice [emoji]` | 5s | leaderboard | 6 dice emoji |
-| `/battle X Y` | 30s | in-mem | 60s reaction vote |
-| `/quiz` / `/quiz top` | 8s | leaderboard | guess language by snippet |
-| `/poll Q \| a \| b \| ...` | 10s | none | native `SendPoll`; `/poll quiz Q \| *correct \| ...` = quiz poll; 2-10 options |
-| `/8ball <question>` | 5s | none | curated SFW IT verdicts; injectable rand |
-| `/guess` / `/guess N` / `/guess top` | 5s | per-chat round + wins | number 1-100, first correct wins; stale round (>1h) auto-recycled |
-| `/hangman` / `/hangman <letter>` | 5s | per-chat round | IT word list; 6 wrong = loss |
-| `/duel @user` | 15s | none | immediate two-dice resolution; rejects self/bot; opponent must be a member of THIS chat (membership-checked) |
-| `/trivia` / `/trivia top` | 8s | quiz leaderboard (shared) | IT multiple-choice; callback predicate registered BEFORE quiz's broad one |
+The transport verifies current Telegram membership before a write.
+The engine commits the module action, wallet postings, deadline and
+request key together in bbolt. Paid Telegram confirmations use the
+original card as their request key. Mini App writes use an authenticated
+actor and a client request ID. A retry does not spend twice. The scheduler
+processes persisted deadlines after restart; the incident worker edits the
+shared Telegram card from a durable render intent without replaying a vote
+or a wallet action.
 
-`/roast` and `/praise` were game commands until 2026-07; since commit
-334bc94 they are **reputation transfers** (`/praise`: +3 to target,
-`/roast`: -1 to target, both −1 from actor) - see
-[59_reputation.md](59_reputation.md). `/rep` `/reptop` are reputation
-commands too, registered alongside the games in `registerGameRoutes`.
+## Module boundaries
 
-## Rules
+- `automat`: A spin selects from the owner's unused phrases. Automatic
+  replies use only explicit Telegram mention entities and the first
+  eligible target. Replies are attributed to the bot and rate-limited.
+  An ambiguous send is not retried.
+- `prod`: Lobby holds the cost until three current participants start.
+  A cancelled or expired lobby releases it. Three authored scenarios
+  resolve deterministically; the retrospective includes accepted vote
+  changes, even if their option lost. It expires after 30 days.
+- `farm`: Plants and production run on persisted deadlines. The market
+  reserves listed stock; offers reserve free production capacity.
+  Accepted leases survive departure. The co-op has a finite daily
+  budget. `/farm help` lists text commands. See [deployment](70_deployment.md)
+  for the optional Mini App listener.
 
-- Group surface only (supergroup). Inline `@bot <cmd> ...` produces a pure
-  slash-command suggestion (the slash handler does the work - one code
-  path). Empty inline query lists the catalog.
-- Over-frequency: the handler is not run; exactly one "не части - /X
-  раз в Nс" reply is sent per (user,command) window, then silence - a
-  flooder cannot amplify, a normal user still gets feedback. Details in
-  [50_telegram.md](50_telegram.md).
-- All curated text (8ball/roast/praise/hangman words) is SFW - these run
-  in a 200-member chat. (Roast/praise templates still exist in the text
-  catalog but are now used by the reputation handler, see above.)
-- Randomness is injectable so tests are deterministic.
-- `/nominations` (the monthly awards) is NOT here - it is the monthly
-  stats board, see [30_stats.md](30_stats.md).
+## Legacy cutover
+
+`/dice`, `/battle`, `/quiz`, `/poll`, `/8ball`, `/guess`, `/hangman`,
+`/duel` and `/trivia` are no longer routed, suggested or listed. Their
+stored rows remain inert. Telegram's own polls and dice are unaffected.
+[59_reputation.md](59_reputation.md) covers the retained social commands.

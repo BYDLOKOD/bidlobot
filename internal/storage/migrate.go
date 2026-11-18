@@ -83,6 +83,12 @@ func MigrateChatID(_ context.Context, db *bolt.DB, oldAbs, newAbs int64) (*Migra
 		if err := migrateReferrals(tx, oldAbs, newAbs, report); err != nil {
 			return fmt.Errorf("referrals: %w", err)
 		}
+		if _, err := migrateReputationChat(tx, oldAbs, newAbs); err != nil {
+			return fmt.Errorf("reputation: %w", err)
+		}
+		if err := migrateGameChat(tx, oldAbs, newAbs); err != nil {
+			return fmt.Errorf("games: %w", err)
+		}
 		return nil
 	})
 	if err != nil {

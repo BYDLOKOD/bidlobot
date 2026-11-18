@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Общая ферма</title>
+  <link rel="stylesheet" href="farm.css">
+  <script src="https://telegram.org/js/telegram-web-app.js" defer></script>
+  <script src="farm.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><div><h1>Общая ферма</h1><p id="wallet"></p></div><button id="refresh" type="button">Обновить</button></header>
+    <p id="notice" role="status" aria-live="polite">Открываем ферму...</p>
+    <section aria-labelledby="yard-title"><h2 id="yard-title">Дворы</h2><div id="yards"></div></section>
+    <section aria-labelledby="market-title"><h2 id="market-title">Рынок и аренда</h2><div id="market"></div></section>
+    <section aria-labelledby="action-title"><h2 id="action-title">Ваши действия</h2><div id="buttons"></div>
+      <div id="confirm"></div>
+    </section>
+  </main>
+</body>
+</html>

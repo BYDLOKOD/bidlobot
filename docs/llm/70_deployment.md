@@ -71,6 +71,18 @@ test can no longer ship an image. Bootstrap (bbolt seed restore) and
 backup (scale-to-0 helper-pod recipe) runbooks live in
 `deploy/README.md` on the `gitops` branch.
 
+Before the first reputation-and-games rollout, save and verify a restorable
+copy of the production bbolt database using the GitOps backup runbook. Keep
+the snapshot outside the pod and record the running image digest. Do not
+roll back to a pre-migration binary on the migrated database; reconcile
+post-cutover activity before restoring the pre-cutover snapshot.
+
+Use a separate bot token and a test group to verify the new prices, opted-in
+mention delivery, an incident and its retrospective, and farm purchases.
+To release the Mini App, configure its BotFather short name and HTTPS
+origin, then verify launch from the group and denial to a nonmember.
+Do not point a second poller at the production bot token.
+
 ## Prerequisites
 
 - Linux host with Docker 24+ and Compose v2 (`docker compose version`).
@@ -177,6 +189,13 @@ Optional:
   `ChatFullInfo.birthdate` through `getChat` and stores no birth date.
   Enabling it makes the bot post one public greeting per chat on a
   member's birthday ([66_birthdays.md](66_birthdays.md)).
+- `FARM_APP_NAME` -- BotFather short name of the farm Mini App. When unset,
+  `/farm` remains available in Telegram and no farm listener starts.
+- `FARM_HTTP_ADDR` -- default `127.0.0.1:8081`. Proxy the listener at the
+  root of a dedicated HTTPS origin and configure that origin in BotFather.
+  In a container, bind to a private network interface reachable by the
+  reverse proxy; do not publish the cleartext listener to the internet.
+  The server validates signed Telegram launch data and current membership.
 - `INSTAGRAM_PROXY` / `INSTAGRAM_COOKIES` -- egress for the Instagram
   repost download ([61_instagram_repost.md](61_instagram_repost.md)).
   Instagram is blocked outright on some ISPs (Russia blocks it at the

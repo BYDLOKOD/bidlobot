@@ -62,7 +62,7 @@ func membershipChatMemberHandler(svc *membership.Service, adminCache *shared.Adm
 // msgOnboardingAdmin is the public message posted when the bot is
 // promoted to administrator. It tells members what commands are available.
 const msgOnboardingAdmin = "<b>BidloBot</b> подключён.\n\n" +
-	"Статистика и игры: /stats, /dice, /quiz.\n" +
+	"Статистика и репутация: /stats, /praise, /rep.\n" +
 	"Администраторам: /summarize - итог чата через AI."
 
 const unauthorizedAdmissionNoticeLimit uint64 = 2

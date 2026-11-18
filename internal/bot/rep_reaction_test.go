@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -54,8 +53,6 @@ func TestMsgAuthorIndexReRecordDoesNotGrow(t *testing.T) {
 	idx.Record(key, msgAuthor{userID: 1})
 	idx.Record(key, msgAuthor{userID: 2}) // refresh
 	idx.Record(msgKey{chatID: -100, msgID: 2}, msgAuthor{userID: 3})
-	// Capacity is 1; re-record must not have pushed a second FIFO entry,
-	// so msgID 1 (refreshed) is evicted only by msgID 2.
 	if _, ok := idx.Lookup(key); ok {
 		t.Fatal("refreshed key must be evicted by newer message at capacity 1")
 	}
@@ -99,7 +96,7 @@ func TestRepEmojiToKind(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // newRepReactorForTest builds a reactor with a real bbolt reputation repo,
-// a controllable admin checker, and a recording sender.
+// a live membership stub and a recording sender.
 func newRepReactorForTest(t *testing.T) (*repReactor, *stubRepSender, *storage.ReputationRepo, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -108,7 +105,7 @@ func newRepReactorForTest(t *testing.T) (*repReactor, *stubRepSender, *storage.R
 		t.Fatalf("NewBoltStore: %v", err)
 	}
 	store := storage.NewReputationRepo(bs.DB())
-	sender := &stubRepSender{}
+	sender := &stubRepSender{DefaultMember: &telego.ChatMemberMember{Status: "member"}}
 	r := NewRepReactor(store, stubAdminCacheFunc(func(id int64) bool { return false }), sender, testLogger())
 	return r, sender, store, func() { _ = bs.Close() }
 }
@@ -126,25 +123,33 @@ func reactionFor(reactor *telego.User, msgID int, emoji string) telego.MessageRe
 	}
 }
 
+func reactionWallet(t *testing.T, store *storage.ReputationRepo, userID int64) reputation.Account {
+	t.Helper()
+	account, err := store.Wallet(context.Background(), 1001234567890, userID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return account
+}
+
 func TestRepReactorPraiseCreditsAuthor(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()
-	// Alice writes message 5.
 	r.RecordMessage(&telego.Message{
 		MessageID: 5,
 		Chat:      telego.Chat{ID: -1001234567890},
 		From:      aliceUser,
 	})
-	// Bob likes it.
 	if err := r.Handle(nil, reactionFor(bobUser, 5, emojiLike)); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	bal, err := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if err != nil {
-		t.Fatal(err)
+	alice := reactionWallet(t, store, aliceUser.ID)
+	bob := reactionWallet(t, store, bobUser.ID)
+	if alice.Available != 13 || alice.Score != 3 {
+		t.Fatalf("alice = %+v, want 13/3", alice)
 	}
-	if bal != 10+3 {
-		t.Fatalf("alice balance after praise = %d, want %d", bal, 10+3)
+	if bob.Available != 9 {
+		t.Fatalf("bob = %+v, want 9", bob)
 	}
 }
 
@@ -161,12 +166,9 @@ func TestRepReactorRoastDebitsAuthor(t *testing.T) {
 			if err := r.Handle(nil, reactionFor(bobUser, 7, emoji)); err != nil {
 				t.Fatalf("Handle: %v", err)
 			}
-			bal, err := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if bal != 10-1 {
-				t.Fatalf("alice balance after roast = %d, want %d", bal, 10-1)
+			alice := reactionWallet(t, store, aliceUser.ID)
+			if alice.Available != 9 || alice.Score != 0 {
+				t.Fatalf("alice after roast = %+v, want 9/0", alice)
 			}
 		})
 	}
@@ -181,45 +183,35 @@ func TestRepReactorSkipsSelfReaction(t *testing.T) {
 		From:      aliceUser,
 	})
 	_ = r.Handle(nil, reactionFor(aliceUser, 9, emojiLike))
-	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal != 10 {
-		t.Fatalf("self-reaction must not change balance, got %d", bal)
+	if got := reactionWallet(t, store, aliceUser.ID); got.Available != 10 || got.Score != 0 {
+		t.Fatalf("self-reaction mutated wallet: %+v", got)
 	}
 }
 
 func TestRepReactorCreditsOwnerOfBotRepost(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()
-	// The bot reposts Alice's TikTok link as message 21; RecordOwner
-	// indexes the bot-sent message under Alice. Bob likes the REPOST.
 	r.RecordOwner(ownerRecord{ChatID: -1001234567890, MsgID: 21, Owner: aliceUser, Text: "ловите видос"})
 	if err := r.Handle(nil, reactionFor(bobUser, 21, emojiLike)); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
-	bal, err := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if err != nil {
-		t.Fatal(err)
+	alice := reactionWallet(t, store, aliceUser.ID)
+	if alice.Available != 13 || alice.Score != 3 {
+		t.Fatalf("alice after like on bot repost = %+v", alice)
 	}
-	if bal != 10+3 {
-		t.Fatalf("alice balance after like on bot repost = %d, want %d", bal, 10+3)
-	}
-	// The owner cannot farm rep by liking their own repost.
 	_ = r.Handle(nil, reactionFor(aliceUser, 21, emojiLike))
-	bal2, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal2 != 10+3 {
-		t.Fatalf("self-like on own repost must not change balance, got %d", bal2)
+	if got := reactionWallet(t, store, aliceUser.ID); got.Available != 13 || got.Score != 3 {
+		t.Fatalf("self-like on own repost must not change wallet: %+v", got)
 	}
 }
 
 func TestRepReactorRecordOwnerNilSafety(t *testing.T) {
 	var r *repReactor
-	// Feature off (nil reactor) and nil user must be no-ops.
 	r.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2, Owner: aliceUser})
 	r2, _, _, cleanup := newRepReactorForTest(t)
 	defer cleanup()
 	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2})
 	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 2, Owner: &telego.User{ID: 1, IsBot: true}})
-	// A send result with no usable id is not indexed either.
 	r2.RecordOwner(ownerRecord{ChatID: 1, MsgID: 0, Owner: aliceUser})
 	if _, ok := r2.index.Lookup(msgKey{chatID: 1, msgID: 2}); ok {
 		t.Fatal("nil and bot users must not be indexed")
@@ -232,11 +224,9 @@ func TestRepReactorRecordOwnerNilSafety(t *testing.T) {
 func TestRepReactorUnindexedBotMessageStillSkipped(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()
-	// A bot message never seen by RecordOwner: no index entry, no rep.
 	_ = r.Handle(nil, reactionFor(bobUser, 999, emojiLike))
-	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal != 10 {
-		t.Fatalf("unindexed message must not change balance, got %d", bal)
+	if got := reactionWallet(t, store, aliceUser.ID); got.Available != 10 {
+		t.Fatalf("unindexed message must not change balance, got %+v", got)
 	}
 }
 
@@ -248,7 +238,6 @@ func TestRepReactorSkipsAnonymousAndBotReactors(t *testing.T) {
 		Chat:      telego.Chat{ID: -1001234567890},
 		From:      aliceUser,
 	})
-	// Anonymous: User == nil, ActorChat set.
 	anon := telego.MessageReactionUpdated{
 		Chat:      telego.Chat{ID: -1001234567890},
 		MessageID: 11,
@@ -260,25 +249,21 @@ func TestRepReactorSkipsAnonymousAndBotReactors(t *testing.T) {
 	if err := r.Handle(nil, anon); err != nil {
 		t.Fatalf("Handle anonymous: %v", err)
 	}
-	// Bot reactor.
 	bot := &telego.User{ID: 999, IsBot: true, Username: "somebot"}
 	if err := r.Handle(nil, reactionFor(bot, 11, emojiLike)); err != nil {
 		t.Fatalf("Handle bot: %v", err)
 	}
-	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal != 10 {
-		t.Fatalf("anonymous/bot reactions must not change balance, got %d", bal)
+	if got := reactionWallet(t, store, aliceUser.ID); got.Available != 10 {
+		t.Fatalf("anonymous/bot reactions must not change balance, got %+v", got)
 	}
 }
 
 func TestRepReactorSkipsUnknownMessage(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()
-	// No RecordMessage for message 13.
 	_ = r.Handle(nil, reactionFor(bobUser, 13, emojiLike))
-	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal != 10 {
-		t.Fatalf("unattributed reaction must not change balance, got %d", bal)
+	if got := reactionWallet(t, store, aliceUser.ID); got.Available != 10 {
+		t.Fatalf("unattributed reaction must not change balance, got %+v", got)
 	}
 }
 
@@ -292,13 +277,12 @@ func TestRepReactorSkipsBotAuthorMessage(t *testing.T) {
 		From:      botAuthor,
 	})
 	_ = r.Handle(nil, reactionFor(bobUser, 15, emojiLike))
-	bal, _ := store.Balance(context.Background(), 1001234567890, bobUser.ID, false)
-	if bal != 10 {
-		t.Fatalf("reaction on bot message must not debit reactor, got %d", bal)
+	if got := reactionWallet(t, store, bobUser.ID); got.Available != 10 {
+		t.Fatalf("reaction on bot message must not debit reactor, got %+v", got)
 	}
 }
 
-func TestRepReactorRemovalDoesNotReverse(t *testing.T) {
+func TestRepReactorRemovalDoesNotReverseOrResettle(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()
 	r.RecordMessage(&telego.Message{
@@ -306,9 +290,7 @@ func TestRepReactorRemovalDoesNotReverse(t *testing.T) {
 		Chat:      telego.Chat{ID: -1001234567890},
 		From:      aliceUser,
 	})
-	// Bob likes.
 	_ = r.Handle(nil, reactionFor(bobUser, 17, emojiLike))
-	// Bob removes the reaction: NewReaction empty.
 	removed := telego.MessageReactionUpdated{
 		Chat:        telego.Chat{ID: -1001234567890},
 		MessageID:   17,
@@ -318,25 +300,94 @@ func TestRepReactorRemovalDoesNotReverse(t *testing.T) {
 	if err := r.Handle(nil, removed); err != nil {
 		t.Fatalf("Handle removal: %v", err)
 	}
-	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal != 13 {
-		t.Fatalf("removal must not reverse the praise, want 13 got %d", bal)
+	// Re-adding the same reaction is the same source event: it must not
+	// settle twice.
+	_ = r.Handle(nil, reactionFor(bobUser, 17, emojiLike))
+	alice := reactionWallet(t, store, aliceUser.ID)
+	if alice.Available != 13 || alice.Score != 3 {
+		t.Fatalf("removal/re-add changed the wallet: %+v", alice)
 	}
 }
 
-func TestRepReactorAdminTargetGetsSix(t *testing.T) {
+func TestRepReactorPairLimitStopsAlternatingPluses(t *testing.T) {
 	r, _, store, cleanup := newRepReactorForTest(t)
 	defer cleanup()
-	r.admins = stubAdminCacheFunc(func(id int64) bool { return id == aliceUser.ID })
+	r.RecordMessage(&telego.Message{
+		MessageID: 31,
+		Chat:      telego.Chat{ID: -1001234567890},
+		From:      aliceUser,
+	})
+	r.RecordMessage(&telego.Message{
+		MessageID: 32,
+		Chat:      telego.Chat{ID: -1001234567890},
+		From:      aliceUser,
+	})
+	// Bob likes two different Alice messages the same day: the second is
+	// the same unordered pair and must not settle.
+	_ = r.Handle(nil, reactionFor(bobUser, 31, emojiLike))
+	_ = r.Handle(nil, reactionFor(bobUser, 32, emojiLike))
+	alice := reactionWallet(t, store, aliceUser.ID)
+	bob := reactionWallet(t, store, bobUser.ID)
+	if alice.Available != 13 || alice.Score != 3 {
+		t.Fatalf("pair limit failed on target: %+v", alice)
+	}
+	if bob.Available != 9 {
+		t.Fatalf("pair limit failed on actor: %+v", bob)
+	}
+}
+
+func TestRepReactorSenderLimitShared(t *testing.T) {
+	r, _, store, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	authors := []*telego.User{
+		{ID: 201, Username: "a1", FirstName: "A1"},
+		{ID: 202, Username: "a2", FirstName: "A2"},
+		{ID: 203, Username: "a3", FirstName: "A3"},
+		{ID: 204, Username: "a4", FirstName: "A4"},
+	}
+	for i, author := range authors {
+		r.RecordMessage(&telego.Message{
+			MessageID: 40 + i,
+			Chat:      telego.Chat{ID: -1001234567890},
+			From:      author,
+		})
+	}
+	for i := range 3 {
+		_ = r.Handle(nil, reactionFor(bobUser, 40+i, emojiLike))
+	}
+	_ = r.Handle(nil, reactionFor(bobUser, 43, emojiLike))
+	if got := reactionWallet(t, store, 204); got.Available != 10 || got.Score != 0 {
+		t.Fatalf("fourth reaction must be dropped by the sender limit: %+v", got)
+	}
+}
+
+func TestRepReactorAdminTargetGetsSameThree(t *testing.T) {
+	r, _, store, cleanup := newRepReactorForTest(t)
+	defer cleanup()
 	r.RecordMessage(&telego.Message{
 		MessageID: 19,
 		Chat:      telego.Chat{ID: -1001234567890},
-		From:      aliceUser, // alice is admin
+		From:      aliceUser, // alice is an administrator
 	})
 	_ = r.Handle(nil, reactionFor(bobUser, 19, emojiLike))
-	bal, _ := store.Balance(context.Background(), 1001234567890, aliceUser.ID, false)
-	if bal != 20+6 {
-		t.Fatalf("admin target praise = %d, want %d", bal, 20+6)
+	alice := reactionWallet(t, store, aliceUser.ID)
+	if alice.Available != 13 || alice.Score != 3 {
+		t.Fatalf("administrator target payout = %+v, want 13/3", alice)
+	}
+}
+
+func TestRepReactorFailsClosedWithoutMembership(t *testing.T) {
+	r, sender, store, cleanup := newRepReactorForTest(t)
+	defer cleanup()
+	sender.DefaultMember = &telego.ChatMemberLeft{Status: "left"}
+	r.RecordMessage(&telego.Message{
+		MessageID: 23,
+		Chat:      telego.Chat{ID: -1001234567890},
+		From:      aliceUser,
+	})
+	_ = r.Handle(nil, reactionFor(bobUser, 23, emojiLike))
+	if got := reactionWallet(t, store, aliceUser.ID); got.Available != 10 || got.Score != 0 {
+		t.Fatalf("unverified membership must not settle: %+v", got)
 	}
 }
 
@@ -344,8 +395,6 @@ func TestRepReactorAdminTargetGetsSix(t *testing.T) {
 // repBatcher
 // ---------------------------------------------------------------------------
 
-// stubRepSender is already defined in reputation_test.go; this helper
-// waits until n messages have been sent.
 func waitForSends(t *testing.T, s *stubRepSender, n int) []string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -370,19 +419,31 @@ func waitForSends(t *testing.T, s *stubRepSender, n int) []string {
 	return nil
 }
 
+func praiseEvent(actor, target, line string) repEvent {
+	return repEvent{
+		kind: reputation.KindPraise, actor: actor, target: target, line: line,
+		actorWalletDelta: -1, targetWalletDelta: 3, targetScoreDelta: 3,
+		actorAvailable: 10, targetAvailable: 13, targetScore: 3,
+	}
+}
+
 func TestRepBatcherFlushesCombinedMessage(t *testing.T) {
 	sender := &stubRepSender{}
 	r := newRepBatcher(sender, testLogger())
 	r.window = 30 * time.Millisecond
 
-	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3, actorBalance: 10, targetBalance: 13})
-	r.Add(-100, repEvent{kind: reputation.KindRoast, actor: "dave", target: "bob", delta: -1, actorBalance: 5, targetBalance: 2})
+	r.Add(-100, praiseEvent("carol", "alice", "Первый плюс."))
+	r.Add(-100, repEvent{
+		kind: reputation.KindRoast, actor: "dave", target: "bob", line: "Минус по адресу.",
+		actorWalletDelta: -1, targetWalletDelta: -1, targetScoreDelta: -1,
+		actorAvailable: 5, targetAvailable: 2, targetScore: 0,
+	})
 	texts := waitForSends(t, sender, 1)
 
-	if !strings.Contains(texts[0], "держи +3 от carol.") || !strings.Contains(texts[0], "Баланс: carol: 10, alice: 13") {
+	if !strings.Contains(texts[0], "Первый плюс.") || !strings.Contains(texts[0], "+3</b> к репе alice") {
 		t.Fatalf("combined message missing praise entry, got %q", texts[0])
 	}
-	if !strings.Contains(texts[0], "лови -1, чучело, от dave.") || !strings.Contains(texts[0], "Баланс: dave: 5, bob: 2") {
+	if !strings.Contains(texts[0], "Минус по адресу.") || !strings.Contains(texts[0], "Доступно: dave \u2014 5, bob \u2014 2") {
 		t.Fatalf("combined message missing roast entry, got %q", texts[0])
 	}
 }
@@ -392,17 +453,16 @@ func TestRepBatcherSplitsWindows(t *testing.T) {
 	r := newRepBatcher(sender, testLogger())
 	r.window = 30 * time.Millisecond
 
-	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3, actorBalance: 10, targetBalance: 13})
+	r.Add(-100, praiseEvent("carol", "alice", "Первый."))
 	texts := waitForSends(t, sender, 1)
 	if !strings.Contains(texts[0], "alice") {
 		t.Fatalf("first window message wrong: %q", texts[0])
 	}
 
-	// Second event lands after the window flushed -> new window, new message.
 	time.Sleep(60 * time.Millisecond)
-	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "carol", delta: 3, actorBalance: 10, targetBalance: 16})
+	r.Add(-100, praiseEvent("carol", "carol", "Второй."))
 	texts = waitForSends(t, sender, 2)
-	if !strings.Contains(texts[1], "carol") {
+	if !strings.Contains(texts[1], "carol") || !strings.Contains(texts[1], "Второй.") {
 		t.Fatalf("second window message wrong: %q", texts[1])
 	}
 }
@@ -412,8 +472,8 @@ func TestRepBatcherSeparatesChats(t *testing.T) {
 	r := newRepBatcher(sender, testLogger())
 	r.window = 30 * time.Millisecond
 
-	r.Add(-100, repEvent{kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3, actorBalance: 10, targetBalance: 13})
-	r.Add(-200, repEvent{kind: reputation.KindRoast, actor: "dave", target: "bob", delta: -1, actorBalance: 5, targetBalance: 2})
+	r.Add(-100, praiseEvent("carol", "alice", "Первый."))
+	r.Add(-200, praiseEvent("dave", "bob", "Второй."))
 	texts := waitForSends(t, sender, 2)
 	if len(texts) != 2 {
 		t.Fatalf("two chats must produce two messages, got %d: %v", len(texts), texts)
@@ -425,8 +485,6 @@ func TestRepBatcherSeparatesChats(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRepReactorHandleBatchesIntoFanout(t *testing.T) {
-	// Verify the reactor feeds its batcher: two reactions in the same
-	// window produce one combined message via the sender.
 	r, sender, _, cleanup := newRepReactorForTest(t)
 	defer cleanup()
 	r.batch.window = 30 * time.Millisecond
@@ -441,6 +499,7 @@ func TestRepReactorHandleBatchesIntoFanout(t *testing.T) {
 		Chat:      telego.Chat{ID: -1001234567890},
 		From:      bobUser,
 	})
+	// Two different actors, so the sender limit does not interfere.
 	_ = r.Handle(nil, reactionFor(carolUser, 21, emojiLike))
 	_ = r.Handle(nil, reactionFor(daveUser, 22, emojiLike))
 
@@ -479,11 +538,9 @@ func TestRepQuoteTextTruncatesOnRuneBoundary(t *testing.T) {
 	if n := utf8.RuneCountInString(got); n != repQuoteMaxRunes+1 {
 		t.Fatalf("quote has %d runes, want %d (+ ellipsis)", n, repQuoteMaxRunes+1)
 	}
-	if !strings.HasSuffix(got, "…") {
+	if !strings.HasSuffix(got, "\u2026") {
 		t.Fatalf("truncated quote must end with an ellipsis: %q", got)
 	}
-
-	// A quote exactly at the limit is kept whole, without an ellipsis.
 	exact := strings.Repeat("я", repQuoteMaxRunes)
 	if got := repQuoteText(exact); got != exact {
 		t.Fatalf("quote at the limit must not be touched, got %d runes", utf8.RuneCountInString(got))
@@ -520,63 +577,62 @@ func TestRepQuoteForPrefersTextAndLabelsMedia(t *testing.T) {
 
 func TestComposeRepEntryLinksTheQuote(t *testing.T) {
 	text := composeRepMessage([]repEvent{{
-		kind: reputation.KindPraise, actor: "carol", target: "alice",
-		delta: 6, actorBalance: 10, targetBalance: 16,
+		kind: reputation.KindPraise, actor: "carol", target: "alice", line: "Плюс по адресу.",
+		actorWalletDelta: -1, targetWalletDelta: 3, targetScoreDelta: 3,
+		actorAvailable: 10, targetAvailable: 13, targetScore: 3,
 		quote: "починил деплой",
 		link:  "https://t.me/c/1234567890/42",
 	}})
 
-	want := `<a href="https://t.me/c/1234567890/42">«починил деплой»</a>`
+	want := "<a href=\"https://t.me/c/1234567890/42\">\u00abпочинил деплой\u00bb</a>"
 	if !strings.Contains(text, want) {
 		t.Fatalf("quote must be the permalink's link text:\n%s", text)
 	}
-	if !strings.Contains(text, "держи +6 от carol.") {
-		t.Fatalf("action line lost:\n%s", text)
+	if !strings.Contains(text, "Плюс по адресу.") {
+		t.Fatalf("public line lost:\n%s", text)
 	}
-	if !strings.Contains(text, "Баланс: carol: 10, alice: 16") {
-		t.Fatalf("balance line lost:\n%s", text)
+	if !strings.Contains(text, "+3</b> к репе alice") || !strings.Contains(text, "Счёт: alice \u2014 3") {
+		t.Fatalf("receipt lost:\n%s", text)
 	}
-	if strings.Index(text, "«") > strings.Index(text, "Баланс") {
-		t.Fatalf("quote must sit above the balance report:\n%s", text)
+	if strings.Index(text, "\u00ab") > strings.Index(text, "Счёт:") {
+		t.Fatalf("quote must sit above the wallet report:\n%s", text)
 	}
 }
 
 func TestComposeRepEntryEscapesAndDefusesQuote(t *testing.T) {
 	text := composeRepMessage([]repEvent{{
-		kind: reputation.KindRoast, actor: "carol", target: "alice", delta: -1,
+		kind: reputation.KindRoast, actor: "carol", target: "alice", line: "Минус по адресу.",
+		actorWalletDelta: -1, targetWalletDelta: -1, targetScoreDelta: -1,
 		quote: `<b>@dave</b> & co`,
 	}})
 
-	if strings.Contains(text, "<b>") {
+	if strings.Contains(text, "<b>@dave") || strings.Contains(text, "<b>a & b</b>") {
 		t.Fatalf("markup from the quoted message must be escaped:\n%s", text)
 	}
 	if !strings.Contains(text, "&lt;b&gt;") || !strings.Contains(text, "&amp; co") {
 		t.Fatalf("quote must be HTML-escaped:\n%s", text)
 	}
-	// U+2060 breaks Telegram's bare-@mention parse: quoting someone else's
-	// text must never ping the people it names.
 	if !strings.Contains(text, "@\u2060dave") {
 		t.Fatalf("mention in the quote must be defused:\n%s", text)
 	}
 }
 
 func TestComposeRepEntryFallsBackToNameLink(t *testing.T) {
-	// No quote (a pre-restart message, or a bot repost with no text): the
-	// target's name carries the permalink instead.
 	text := composeRepMessage([]repEvent{{
-		kind: reputation.KindRoast, actor: "carol", target: "bob", delta: -1,
+		kind: reputation.KindRoast, actor: "carol", target: "bob", line: "Минус по адресу.",
+		actorWalletDelta: -1, targetWalletDelta: -1, targetScoreDelta: -1,
 		link: "https://t.me/c/1234567890/7",
 	}})
 	if !strings.Contains(text, `<a href="https://t.me/c/1234567890/7">bob</a>`) {
 		t.Fatalf("target name must carry the link when there is no quote:\n%s", text)
 	}
-	if strings.Contains(text, "«") {
+	if strings.Contains(text, "\u00ab") {
 		t.Fatalf("no quote line expected:\n%s", text)
 	}
 
-	// Nothing known at all: plain inert text, as before.
 	plain := composeRepMessage([]repEvent{{
-		kind: reputation.KindPraise, actor: "carol", target: "bob", delta: 3,
+		kind: reputation.KindPraise, actor: "carol", target: "bob", line: "Плюс по адресу.",
+		actorWalletDelta: -1, targetWalletDelta: 3, targetScoreDelta: 3,
 	}})
 	if strings.Contains(plain, "<a href") {
 		t.Fatalf("no link expected without one:\n%s", plain)
@@ -585,24 +641,18 @@ func TestComposeRepEntryFallsBackToNameLink(t *testing.T) {
 
 func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
 	events := make([]repEvent, 0, 40)
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		events = append(events, repEvent{
-			kind: reputation.KindPraise, actor: "carol", target: "alice",
-			delta: 3, actorBalance: 1, targetBalance: 2,
+			kind: reputation.KindPraise, actor: "carol", target: "alice", line: praiseGeneric[0],
+			actorWalletDelta: -1, targetWalletDelta: 3, targetScoreDelta: 3,
+			actorAvailable: 1, targetAvailable: 2, targetScore: 3,
 			quote: strings.Repeat("я", repQuoteMaxRunes),
 			link:  "https://t.me/c/1234567890/42",
-			// Production events carry the phrase drawn in Handle; the
-			// fixture must too, or the split would measure a different
-			// render than it emits and the budget assertion would be
-			// soft again.
-			tmpl: praiseTemplates[0],
 		})
 	}
 
-	// The chunk the batcher measures must be the chunk it sends: with the
-	// phrase fixed per event, composing twice has to yield the same text.
 	if a, b := composeRepMessage(events), composeRepMessage(events); a != b {
-		t.Fatal("composeRepMessage must be deterministic for events that carry their phrase")
+		t.Fatal("composeRepMessage must be deterministic for events that carry their line")
 	}
 
 	msgs := composeRepMessages(events)
@@ -611,16 +661,13 @@ func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
 	}
 	total := 0
 	for _, m := range msgs {
-		// The budget is measured in bytes (len of a Go string), while
-		// Telegram counts UTF-16 units: assert both, so a regression to
-		// rune counting cannot slip through on Cyrillic text.
 		if len(m) > repMessageMaxChars {
 			t.Fatalf("chunk of %d bytes equals or exceeds the %d-byte budget", len(m), repMessageMaxChars)
 		}
 		if u := utf16Units(m); u > 4096 {
 			t.Fatalf("chunk of %d UTF-16 units exceeds Telegram's 4096 limit", u)
 		}
-		total += strings.Count(m, "Баланс:")
+		total += strings.Count(m, "Счёт:")
 	}
 	if total != len(events) {
 		t.Fatalf("splitting dropped entries: %d of %d survived", total, len(events))
@@ -634,8 +681,6 @@ func TestComposeRepMessagesSplitsOnBudget(t *testing.T) {
 	}
 }
 
-// utf16Units counts the UTF-16 code units of s, which is what Telegram
-// measures against its 4096 limit (an emoji outside the BMP costs two).
 func utf16Units(s string) int {
 	n := 0
 	for _, r := range s {
@@ -649,8 +694,6 @@ func utf16Units(s string) int {
 }
 
 func TestSentMessagesOf(t *testing.T) {
-	// The album return path: Telegram answers one Message per album item,
-	// and each carries the topic it landed in.
 	if got := sentMessageOf(nil); got != (sentMessage{}) {
 		t.Fatalf("sentMessageOf(nil) = %+v, want the zero value", got)
 	}
@@ -678,10 +721,10 @@ func TestRepBatcherDisablesLinkPreview(t *testing.T) {
 	b := newRepBatcher(sender, testLogger())
 	b.window = 20 * time.Millisecond
 
-	b.Add(-100, repEvent{
-		kind: reputation.KindPraise, actor: "carol", target: "alice", delta: 3,
-		quote: "починил деплой", link: "https://t.me/c/1234567890/42",
-	})
+	event := praiseEvent("carol", "alice", "Плюс по адресу.")
+	event.quote = "починил деплой"
+	event.link = "https://t.me/c/1234567890/42"
+	b.Add(-100, event)
 	waitForSends(t, sender, 1)
 
 	sender.mu.Lock()
@@ -738,8 +781,6 @@ func TestRepReactorTopicPermalinkCarriesThread(t *testing.T) {
 }
 
 func TestRepReactorOwnerRepostCarriesQuote(t *testing.T) {
-	// A liked TikTok/X repost credits the human who posted the link and
-	// quotes what the bot posted for them.
 	r, sender, _, cleanup := newRepReactorForTest(t)
 	defer cleanup()
 	r.batch.window = 30 * time.Millisecond
@@ -758,6 +799,3 @@ func TestRepReactorOwnerRepostCarriesQuote(t *testing.T) {
 		t.Fatalf("repost permalink lost:\n%s", texts[0])
 	}
 }
-
-// silence the unused-import guard for sync in case stubs change.
-var _ = sync.Mutex{}

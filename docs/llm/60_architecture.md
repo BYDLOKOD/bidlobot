@@ -5,7 +5,8 @@ touches:
   - cmd/bidlobot/
   - internal/bot/
   - internal/domain/
-  - internal/games/
+  - internal/gameengine/
+  - internal/farmweb/
   - internal/shared/
   - internal/storage/
   - internal/testutil/
@@ -46,8 +47,9 @@ internal/
     xpost.go              X/Twitter sidecar client
     referral.go           referral catalog UX
     reputation.go         praise/roast/rep economy
-    games*.go             game registry + handlers (dice/battle/quiz/...)
-    inline.go             read-only inline catalog (stats/games/help)
+    game_actions.go       signed game controls + incident card worker
+    game_mentions.go      opted-in excuse replies on Telegram mentions
+    inline.go             read-only inline catalog
     cooldown.go           per-user per-command flood gate
     callback.go           legacy v1: dispatcher catch-all
     failure_catalog.go    randomized Russian decline phrases
@@ -63,8 +65,9 @@ internal/
     captcha/     math challenge lifecycle + welcome animation
     summarize/   RAM ring buffer + OMP/Pi runner
     referral/    referral matching/validation
-    reputation/  balance economy rules
-  games/           dice / battle / duel / guess / hangman / quiz ...
+    reputation/  spendable wallet and title score
+  gameengine/      transaction boundary, scheduler, Automat, Prod and Farm
+  farmweb/         authenticated Mini App for the farm
   shared/          admin cache, target resolve, format
   shared/safe.go   Go(): panic-safe background goroutine launcher
   shared/ratelimit per-chat outgoing token bucket
@@ -109,8 +112,7 @@ internal/
 |   InlineService -> read-only catalog only               |
 |                                                         |
 |  fanouts:                                               |
-|   message_reaction -> battle observer + rep reactor     |
-|     + membership                                        |
+|   message_reaction -> reputation + membership         |
 |   my_chat_member  -> admission gate + onboarding        |
 |   chat_member     -> membership + captcha               |
 |  callbacks (order matters):                             |
@@ -177,8 +179,9 @@ Side-effect axes:
 | `warnings` | `w:{uuid}` | `moderation.Warning` JSON (legacy) |
 | `warns_by_target` | `wt:<absChatID>:<targetUserID>:<uuid>` | secondary index |
 | `pending_actions` | `pa:<16-hex>` | `pending.Action` JSON (legacy) |
-| `dice_leaderboard`, `quiz_leaderboard` | per-chat | game leaderboards |
-| `reputation` | `r:<absChatID>:<userID>` | `{balance}` |
+| Legacy game buckets | per-chat | inert saved game rows |
+| `reputation` | chat and user | wallet, reservation and title score |
+| Game buckets | chat, module and deadline | game state, request keys and render intents |
 | `captcha` | `cc:<id>` | challenge |
 | `captcha_user_idx` | `ccu:<absChatID>:<userID>` | active challenge lookup |
 | `gracekick` | per-chat | campaign records (idle) |
@@ -238,7 +241,7 @@ migration (documented, not silently handled).
 
 `AllowedUpdates` (`app.go:116-125`): `message`, `callback_query`,
 `my_chat_member` (admission + onboarding), `chat_member` (membership +
-captcha), `message_reaction` (membership + battle + reputation report),
+captcha), `message_reaction` (membership + reputation),
 `inline_query`. No `edited_message`, no `chat_join_request`.
 
 ## Background goroutines (`App.Run`)

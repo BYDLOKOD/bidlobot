@@ -5,21 +5,20 @@ import "context"
 // Store is the persistence contract for the reputation domain.
 // Implementations must be safe for concurrent use and durable.
 type Store interface {
-	// Apply performs one atomic reputation operation inside a single
-	// bbolt transaction. It lazily initializes actor and target with
-	// the default balance (10 for regular, 20 for admin) on first
-	// access. Returns a typed validation error (ErrSelfTarget,
-	// ErrInsufficientBalance, ErrTargetInsufficientBalance) or a
-	// Result on success.
-	Apply(ctx context.Context, absChatID, actorID, targetID int64, kind Kind, actorIsAdmin, targetIsAdmin bool) (Result, error)
+	// Wallet returns the current wallet and title state for a user in a
+	// chat. An absent record yields the new-member defaults: available
+	// 10, reserved 0, score 0. It is a read and does not fabricate
+	// activity history.
+	Wallet(ctx context.Context, chatID, userID int64) (Account, error)
 
-	// Balance returns the current balance for a user in a chat.
-	// On first access, lazily initializes with the default balance
-	// (10 for regular, 20 for admin). This modifies the store so
-	// callers should use it intentionally.
-	Balance(ctx context.Context, absChatID, userID int64, isAdmin bool) (int, error)
+	// Settle applies one praise or roast atomically. It enforces the
+	// per-pair and per-sender daily limits, deduplicates the source
+	// event, debits the actor and applies the target's wallet and title
+	// changes in one transaction. Validation errors are the sentinel
+	// errors in this package.
+	Settle(ctx context.Context, req SocialRequest) (Result, error)
 
-	// Leaderboard returns the top N entries for a chat, sorted by
-	// balance descending then user ID ascending. limit<=0 returns all.
-	Leaderboard(ctx context.Context, absChatID int64, limit int) ([]Entry, error)
+	// Leaderboard returns scored members for a chat, sorted by title
+	// score descending then user ID ascending. limit<=0 returns all.
+	Leaderboard(ctx context.Context, chatID int64, limit int) ([]Entry, error)
 }

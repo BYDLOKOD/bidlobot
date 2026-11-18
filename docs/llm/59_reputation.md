@@ -4,63 +4,147 @@ kind: spec
 touches:
   - internal/bot/reputation.go
   - internal/bot/rep_reaction.go
+  - internal/bot/games_quip.go
   - internal/domain/reputation/
   - internal/shared/link.go
   - internal/storage/reputation_repo.go
 written: 2026-08-16
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 # Reputation
 
-Durable per-chat reputation economy (commits 334bc94, 04a4bfa). Users
-earn/spend balance by praising and roasting each other; balance and
-leaderboards are public. Registered in `registerGameRoutes`
-(`games.go:107-112`) with the games - the commands share the game
-cooldown table.
+Per-chat wallet and title score (REP-1..5). The wallet is spendable
+reputation; the title score is a separate social standing that no
+transfer, purchase, rent or game result may change. A registered user
+starts with wallet 10 and score 0, regardless of Telegram administrator
+status.
+
+## Model
+
+`reputation.Account{ChatID, UserID, Available, Reserved, Score}`.
+`Available` is spendable, `Reserved` is held for an accepted commitment,
+`Score` is the title score. Both wallet values and the score are
+nonnegative.
+
+| Title | Threshold | Unlocked activity |
+|-------|-----------|-------------------|
+| Участник | 0 | крутить автомат, вступать в инциденты, торговать, арендовать и выращивать |
+| Дежурный | 12 | открывать инцидент |
+| Мастер | 36 | сдавать свои слоты производства |
+| Хранитель прода | 72 | просить дополнительную подсказку в инциденте |
+
+`TitleForScore` returns the highest reached title; `NextTitle` returns
+the next threshold and whether one exists. Four valid praises take a new
+player to the first threshold.
 
 ## Commands (supergroup)
 
 | Command | Cooldown | Action |
 |---------|----------|--------|
-| `/praise [@user\|reply]` | 8s | actor −1, target +3 (+6 if target is admin) |
-| `/roast [@user\|reply]` | 8s | actor −1, target −1 |
-| `/rep` | 5s | own balance (italic report) |
-| `/reptop` | 5s | top-10 leaderboard |
+| `/praise [help\|explanation\|review] [@user\|reply]` | 8s | actor wallet −1; target wallet +3 and score +3 |
+| `/roast [@user\|reply]` | 8s | actor wallet −1; target removes up to one unreserved wallet unit and up to one score point |
+| `/rep` | 5s | own available, reserved, score, title and distance to the next title |
+| `/reptop` | 5s | ten current scored members by title score |
 
 Target resolution: reply-to or `@username` via the membership store.
+The optional reason token selects praise wording only; it never changes
+the amount and is never inferred from the quoted message.
 
-## Rules (`reputation_repo.go`)
+## Settlement (`reputation_repo.go`)
 
-- Default balance **10** (admins 20). Floors at 0 -
-  `ErrInsufficientBalance` (actor) / `ErrTargetInsufficientBalance`
-  (target would go negative).
-- Self-target rejected (`ErrSelfTarget`).
-- **Live membership check before ANY mutation**: `GetChatMember`
-  fail-closed - an old replied-to message can outlive a missed leave
-  event; a left member is not debited/credited (`isStillMember`).
-- Admin flags resolved via `AdminCache` at apply time (a fresh
-  promotion counts immediately).
-- Persisted in bbolt bucket `reputation`, key `r:<absChat>:<userID>` =
-  JSON `{balance}`; lazy-init on first read; leaderboard = chat-prefix
-  scan, sort balance desc / userID asc, limit 10.
+One `Settle` call runs in one bbolt write transaction:
 
-## UX
+1. Deduplicate the source event by actor, source kind and source message
+   id. Re-adding the same reaction is a no-op, not a second settlement.
+2. Enforce one settlement per unordered member pair per chat per UTC day.
+3. Enforce three outgoing settlements per sender per UTC day, shared by
+   slash and reaction inputs.
+4. Debit the actor one wallet unit. Insufficient spendable funds fail
+   before any write.
+5. Praise credits the target +3 wallet and +3 score. Roast removes at
+   most one `Available` unit (never `Reserved`) and at most one score
+   point; a zero wallet does not block the score change.
+6. Commit pair, sender and source markers with the wallet writes.
 
-Randomized template lines (Russian) + italic balance report; top-10
-list renders display names with numeric-id fallback (inert - no `@`,
-no `tg://user?id=`, per `command-output-no-third-party-ping`).
-Errors: "его уже нет в чате" / "себе нельзя" / "у тебя ничего не
-осталось".
+Administrators receive exactly the same deltas. There is no
+administrator branch in storage or in the handlers.
+
+Validation errors are `ErrSelfTarget`, `ErrInsufficientBalance`,
+`ErrPairLimit`, `ErrSenderLimit`, `ErrDuplicateSource`,
+`ErrInsufficientReserve` and `ErrInvalidAmount`. A failed settlement
+does not consume a limit or create a source marker.
+
+Day-scoped counters are pruned once per chat when the UTC day changes;
+source deduplication markers are retained so an old reaction cannot
+settle again.
+
+## Shared wallet API
+
+Other domains settle inside their own bbolt transaction and never write
+wallet fields directly:
+
+```go
+ReputationWallet(tx *bolt.Tx, chatID, userID int64) (reputation.Account, error)
+AdjustReputationWallet(tx *bolt.Tx, chatID, userID int64, available, reserved int) error
+```
+
+The read returns defaults for an absent record and never writes. The
+adjustment takes signed deltas, normalizes the chat id with
+`storage.AbsChatID`, rejects a negative `Available` or `Reserved`, and
+never changes `Score`. Reservation capture is therefore
+`Adjust(..., -n, +n)`; spending a reservation is the reverse. No game or
+farm module may call a title-score setter.
+
+## Storage and migration
+
+Bucket `reputation`, key `r:<absChat>:<userID>`. The current value is
+JSON `{available,reserved,score}`.
+
+Legacy v1 stored `{balance}`. Migration seeds `Available` and `Score`
+from that balance exactly once and never invents activity history; an
+absent legacy row takes the new-member defaults. `meta:v=2` is committed
+in the same transaction as the rewritten rows.
+
+- `ReputationMigrationNeeded(db)` is a read-only startup probe: it tells
+  the caller whether a pre-cutover backup is required without creating
+  one on every boot.
+- `MigrateReputation(db, backup)` writes a consistent snapshot when
+  `backup` is non-nil and then performs the migration. A second call is a
+  no-op and cannot double a balance.
+- First settlement or wallet adjustment also migrates lazily, so an
+  unnoticed v1 database cannot be settled with a zero wallet.
+
+Operational order is: stop the old writer, back up, run the new binary.
+Do not boot an old binary against a database after new settlements: it
+would read `{balance:0}` and write the old shape. Roll back only to a
+consistent backup after reconciling post-cutover activity.
+
+Chat-id migration must rekey `r:`, `rp:`, `ro:` and `rs:` keys and the
+`rd:` day marker. `migrateReputationChat(tx, oldAbs, newAbs)` performs
+the in-transaction rekey; the destination row wins, so a move cannot
+double a wallet.
+
+## `/rep` and `/reptop`
+
+`/rep` shows available, reserved, score, title and distance to the next
+title, or states that the highest title is reached. `/reptop` reads only
+title scores, requires positive score, filters to members observed in
+the chat (a left/kicked record is not current), sorts score descending
+then user ID ascending, and caps at ten. Every name is inert: no `@`,
+no mention entity. The line shows the score, title and unlocked
+activity. Reads use observed membership; writes use live Telegram
+verification.
 
 ## Reaction report (`rep_reaction.go`)
 
-Reactions are the second rep path and need no command:
+Reactions are the second social input and share the same limits and
+settlement path:
 
 | Reaction | Kind | Delta |
 |----------|------|-------|
-| 👍 | praise | +3 (+6 when the message author is admin) |
-| 👎 / 🤡 | roast | -1 |
+| 👍 | praise | actor −1; author +3 wallet and +3 score |
+| 👎 / 🤡 | roast | actor −1; author up to −1 wallet and −1 score |
 
 - **Author attribution.** `message_reaction` carries no message author,
   so the bot indexes `(chat, messageID) -> {author, quote, thread}` from
@@ -68,6 +152,14 @@ Reactions are the second rep path and need no command:
   at 5000 entries, RAM only, FIFO eviction. A reaction whose message is
   not indexed (sent before a restart, or evicted) is dropped - the Bot
   API cannot read a message back by id.
+- **Live membership.** Before settlement the bot verifies the reactor and
+  the author through `GetChatMember`; a missing verifier or a failed
+  lookup drops the reaction rather than settling on stale membership.
+- **Deduplication.** One source reaction per actor and message can
+  settle. Removing the reaction does not roll it back, and re-adding it
+  does not settle again.
+- **Limits.** A reaction consumes the same pair and sender limits as
+  `/praise` and `/roast`; a dropped reaction produces no chat message.
 - **Batching.** One combined message per chat per 10s window; several
   reactions in the window become several blocks. A burst that outgrows
   `repMessageMaxChars` (3800) is split on block boundaries into several
@@ -92,9 +184,8 @@ Reactions are the second rep path and need no command:
   no text means no quote.
 - **Untrusted text.** A quote is somebody else's message: `<`, `>`, `&`
   are escaped, and every `@` gets a U+2060 WORD JOINER so quoting a
-  message can never ping the people it names
-  (`command-output-no-third-party-ping`). Link previews are disabled on
-  the report.
+  message can never ping the people it names. Link previews are disabled
+  on the report.
 
 ### Permalink form
 
@@ -125,9 +216,33 @@ reaches the composer.
   bot needs message content (privacy off), exactly as it did for author
   attribution.
 
+## Copy catalogue (`games_quip.go`)
+
+The positive catalogue is the 40-line launch set:
+
+- lines 1-16: generic praise (`praiseGeneric`);
+- lines 17-24: help (`praiseHelp`);
+- lines 25-32: explanation (`praiseExplanation`);
+- lines 33-40: review (`praiseReview`).
+
+A line is a complete public sentence. The deterministic signed receipt
+follows it and carries the actual wallet and score changes; the
+catalogue never supplies an amount, a consent or an error reason.
+Reason-specific lines appear only when the sender writes the reason word
+(`help`, `explanation`, `review`, with Russian aliases). The selector
+never infers a reason from the quoted message.
+
+Selection avoids repeating a line among the last five public uses of the
+same family in the same chat where alternatives exist. The history is
+process-local and bounded; rotation does not need durable state.
+
+Roast and refusal copy is deterministic Russian: the receipt names the
+actor and target with the signed deltas, and each refusal names its cause
+(pair limit, sender limit, duplicate source, empty wallet, departed
+member, bot target, self target). Names are inert and never ping.
+
 ## Privacy
 
-Needs message content (reply/`@user` targeting) - privacy OFF. Note:
-`/roast` `/praise` historically were curated-template games; since
-commit 334bc94 they are reputation transfers (see
-[25_games.md](25_games.md) - the game table no longer lists them).
+Needs message content (reply/`@user` targeting) - privacy OFF.
+`/praise` and `/roast` are reputation transfers, not mini-games; see
+[25_games.md](25_games.md) for the removed legacy game surfaces.
