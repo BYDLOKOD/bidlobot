@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -240,5 +241,21 @@ func TestCooldown_Notice_MustUseFailureCatalog(t *testing.T) {
 	if !failureCatalogContains(snd.Messages[0].Text) {
 		t.Errorf("cooldown notice text must be from FailureCatalog; got hardcoded %q",
 			snd.Messages[0].Text)
+	}
+}
+
+func TestDice_SendDiceError_MustUseFailureCatalog(t *testing.T) {
+	h, bot, _ := newDiceTestHandler(6)
+	bot.SendDiceErr = errors.New("rate limit")
+
+	if err := h.HandleDice(nil, newDiceTestMessage("/dice")); err != nil {
+		t.Fatal(err)
+	}
+	if len(bot.MessageCalls) == 0 {
+		t.Fatalf("expected fallback reply when SendDice fails, got 0 messages")
+	}
+	if !failureCatalogContains(bot.MessageCalls[0].Text) {
+		t.Errorf("dice provider failure reply must be from FailureCatalog; got hardcoded %q",
+			bot.MessageCalls[0].Text)
 	}
 }

@@ -279,13 +279,47 @@ func (c *Client) SendMessage(ctx context.Context, params *telego.SendMessagePara
 	return msg, err
 }
 
-// SendMessageOnce avoids a duplicate visible post when a network failure
-// leaves Telegram's delivery outcome unknown. The caller records the intent.
-func (c *Client) SendMessageOnce(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
-	if err := c.limiter.Wait(ctx, absInt64(params.ChatID.ID)); err != nil {
-		return nil, err
+// SendDice wraps telego.Bot.SendDice. Dice is a chat-visible message so
+// it shares the per-chat rate budget with every other public send -
+// otherwise a flood of /dice would blow past Telegram's 20/min/chat.
+func (c *Client) SendDice(ctx context.Context, params *telego.SendDiceParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
 	}
-	return c.bot.SendMessage(ctx, params)
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendDice",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendDice(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
+}
+
+// SendPoll wraps telego.Bot.SendPoll. A poll is a chat-visible message
+// so it shares the per-chat rate budget like the other public games.
+func (c *Client) SendPoll(ctx context.Context, params *telego.SendPollParams) (*telego.Message, error) {
+	if params == nil {
+		return nil, errors.New("tgclient: nil params")
+	}
+	var msg *telego.Message
+	err := c.runWrite(ctx, params.ChatID.ID, "sendPoll",
+		func(ctx context.Context) error {
+			m, e := c.bot.SendPoll(ctx, params)
+			if e != nil {
+				return e
+			}
+			msg = m
+			return nil
+		},
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
+	)
+	return msg, err
 }
 
 // SendPhoto wraps telego.Bot.SendPhoto. A photo is a chat-visible

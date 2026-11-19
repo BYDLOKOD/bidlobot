@@ -2,12 +2,9 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -29,11 +26,6 @@ import (
 	"github.com/veschin/bidlobot/internal/domain/monthstats"
 	"github.com/veschin/bidlobot/internal/domain/stats"
 	"github.com/veschin/bidlobot/internal/domain/summarize"
-	"github.com/veschin/bidlobot/internal/farmweb"
-	"github.com/veschin/bidlobot/internal/gameengine"
-	"github.com/veschin/bidlobot/internal/gameengine/automat"
-	"github.com/veschin/bidlobot/internal/gameengine/farm"
-	"github.com/veschin/bidlobot/internal/gameengine/prod"
 	"github.com/veschin/bidlobot/internal/shared"
 	"github.com/veschin/bidlobot/internal/shared/ratelimit"
 	"github.com/veschin/bidlobot/internal/shared/retry"
@@ -102,10 +94,6 @@ func main() {
 	}
 
 	db := store.DB()
-	if err := upgradeReputation(db, cfg.DBPath); err != nil {
-		log.Error("upgrade reputation", "error", err)
-		os.Exit(1)
-	}
 
 	botInfo, err := tgBot.GetMe(context.Background())
 	if err != nil {
@@ -245,35 +233,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Reputation routes and game modules share one durable wallet.
+	// Phase 4 mini-games: dice / battle / quiz. Constructor wires the
+	// inline router and slash handlers; AttachGames installs them on App.
 	app.AttachGames(buildGames(db, tgClient, botInfo.Username, adminCache, log))
-	engine := gameengine.New(db, map[string]gameengine.Module{
-		"automat": automat.Apply,
-		"prod":    prod.Apply,
-		"farm":    farm.Apply,
-	})
-	var farmLink func(int64) string
-	var farmServer *http.Server
-	var farmListener net.Listener
-	if name := os.Getenv("FARM_APP_NAME"); name != "" {
-		handler, err := farmweb.New(engine, botInfo.Username, name, cfg.Token, func(ctx context.Context, chatID, userID int64) bool {
-			member, err := tgClient.GetChatMember(ctx, &telego.GetChatMemberParams{ChatID: telego.ChatID{ID: chatID}, UserID: userID})
-			return err == nil && member != nil && member.MemberIsMember()
-		}, farm.Board, farm.Parse)
-		if err != nil {
-			log.Error("configure farm Mini App", "error", err)
-			os.Exit(1)
-		}
-		handler.SetDisplayResolver(displayResolver.UserDisplay)
-		farmListener, err = net.Listen("tcp", envOr("FARM_HTTP_ADDR", "127.0.0.1:8081"))
-		if err != nil {
-			log.Error("listen for farm Mini App", "error", err)
-			os.Exit(1)
-		}
-		farmServer = &http.Server{Handler: handler, ReadHeaderTimeout: 4 * time.Second, ReadTimeout: 8 * time.Second, WriteTimeout: 12 * time.Second, IdleTimeout: 30 * time.Second}
-		farmLink = handler.Link
-	}
-	app.AttachGameEngine(engine, cfg.Token, farmLink, farm.Parse, displayResolver)
 
 	// Chat-scoped referral catalog: /refs lists, /refreg registers,
 	// /refreport is admin moderation. Always on; the handler is nil-
@@ -314,14 +276,6 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-	if farmServer != nil {
-		go func() {
-			if err := farmServer.Serve(farmListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Error("farm Mini App server", "error", err)
-				cancel()
-			}
-		}()
-	}
 
 	summarizeSvc.SetAppContext(ctx)
 	summarizeSvc.AttachWaitGroup(app.InFlight())
@@ -335,14 +289,6 @@ func main() {
 
 	<-ctx.Done()
 	log.Info("shutdown signal received")
-	if farmServer != nil {
-		stopCtx, stop := context.WithTimeout(context.Background(), 8*time.Second)
-		if err := farmServer.Shutdown(stopCtx); err != nil {
-			log.Warn("stop farm Mini App", "error", err)
-			_ = farmServer.Close()
-		}
-		stop()
-	}
 
 	app.Stop()
 
@@ -351,29 +297,6 @@ func main() {
 	}
 
 	log.Info("shutdown complete")
-}
-
-func upgradeReputation(db *bolt.DB, dir string) error {
-	needed, err := storage.ReputationMigrationNeeded(db)
-	if err != nil || !needed {
-		return err
-	}
-	backup, err := os.CreateTemp(dir, "bidlobot-before-reputation-v2-*.db")
-	if err != nil {
-		return err
-	}
-	defer backup.Close()
-	if err := db.View(func(tx *bolt.Tx) error {
-		_, err := tx.WriteTo(backup)
-		return err
-	}); err != nil {
-		return err
-	}
-	if err := backup.Sync(); err != nil {
-		return err
-	}
-	_, err = storage.MigrateReputation(db, nil)
-	return err
 }
 
 func setupLogger(level string) *slog.Logger {

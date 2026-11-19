@@ -16,11 +16,29 @@ import (
 // back to a prefix filter over the catalog.
 type InlineService struct {
 	log *slog.Logger
+	// gameRouter is consulted before the default catalog filter so
+	// mini-game commands (dice/battle/quiz) can register without
+	// the inline package importing the games packages. Returns
+	// (results, true) when the command was handled; (nil, false) when
+	// the inline service should continue with the default filter.
+	gameRouter InlineGameRouter
+}
+
+// InlineGameRouter is the contract a mini-game module implements to plug
+// itself into inline-mode dispatch. The router receives the lowercased
+// first token (cmd) and the trailing tokens (args). Implementations must
+// be cheap and side-effect-free: inline queries fire on every keystroke.
+type InlineGameRouter interface {
+	Route(cmd string, args []string, actor telego.User) (results []telego.InlineQueryResult, handled bool)
 }
 
 func NewInlineService(log *slog.Logger) *InlineService {
 	return &InlineService{log: log}
 }
+
+// SetGameRouter wires a router that handles dice/battle/quiz inline
+// queries. Idempotent; passing nil disables routing.
+func (s *InlineService) SetGameRouter(r InlineGameRouter) { s.gameRouter = r }
 
 // inlineCommand describes one offer the bot suggests when the user types
 // "@bidlobot ..." in any chat. All entries are read-only and fire a
@@ -53,10 +71,40 @@ func catalog() []inlineCommand {
 			send:        "/stats today",
 		},
 		{
+			id:          "dice",
+			title:       "🎲 Бросить кубик",
+			description: "Отправить /dice - бросок 1-6",
+			send:        "/dice",
+		},
+		{
+			id:          "battle",
+			title:       "🥊 Реакция-баттл",
+			description: "Используйте: battle X Y - голосование за 60с",
+			send:        "/help",
+		},
+		{
+			id:          "quiz",
+			title:       "🧩 Код-квиз",
+			description: "Отправить /quiz - угадай язык",
+			send:        "/quiz",
+		},
+		{
 			id:          "stats_month",
 			title:       "📊 Итоги месяца",
 			description: "Отправить /stats month - номинации за месяц",
 			send:        "/stats month",
+		},
+		{
+			id:          "poll",
+			title:       "📊 Опрос",
+			description: "poll Вопрос | вариант1 | вариант2",
+			send:        "/help",
+		},
+		{
+			id:          "8ball",
+			title:       "🎱 Шар предсказаний",
+			description: "8ball <вопрос>",
+			send:        "/help",
 		},
 		{
 			id:          "roast",
@@ -69,6 +117,30 @@ func catalog() []inlineCommand {
 			title:       "👏 Похвалить",
 			description: "Отправить /praise [@user]",
 			send:        "/praise",
+		},
+		{
+			id:          "guess",
+			title:       "🔢 Угадай число",
+			description: "Отправить /guess - число 1-100",
+			send:        "/guess",
+		},
+		{
+			id:          "hangman",
+			title:       "🪢 Виселица",
+			description: "Отправить /hangman - IT-слова",
+			send:        "/hangman",
+		},
+		{
+			id:          "duel",
+			title:       "⚔️ Дуэль",
+			description: "duel @user - кубик-дуэль",
+			send:        "/help",
+		},
+		{
+			id:          "trivia",
+			title:       "🎓 IT-викторина",
+			description: "Отправить /trivia - вопрос с вариантами",
+			send:        "/trivia",
 		},
 		{
 			id:          "help",
@@ -90,6 +162,13 @@ func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQue
 	parts := strings.Fields(q)
 	cmd := strings.ToLower(parts[0])
 	args := parts[1:]
+	actor := query.From
+
+	if s.gameRouter != nil {
+		if results, ok := s.gameRouter.Route(cmd, args, actor); ok {
+			return results
+		}
+	}
 
 	switch cmd {
 	case "stats":

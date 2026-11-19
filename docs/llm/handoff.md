@@ -1,21 +1,15 @@
 # Handoff
 
-## Reputation and games
+## Games and reputation rollback
 
-- Production showed the first reputation-and-games release. This redesign
-  has not been deployed.
-- `/8ball` is restored. Its rare spontaneous answers appear as standalone
-  messages in the same topic. `/reptop` shows four columns, without an
-  explanation per player. Existing prices and reputation scores are unchanged.
-- The redesign adds a playable pixel map, fixes the farm shop and keeps
-  the current farm economy. The incident cards expose choice-dependent
-  signals. Automat shows the prize first and puts the collection on a
-  separate screen.
-- See the [release prerequisites](70_deployment.md#kubernetes-deploy-production)
-  for test-group and Mini App HTTPS setup. Do not treat the locally signed
-  browser fixture as proof of a live Telegram launch.
+- The previous games and reputation rules are restored from `d99d4b0`.
+  `/reptop` keeps the table format and ranks the restored single balance.
+- Balance reads include both available and reserved funds from records
+  written by the reverted release. No bulk conversion or removal of
+  stored game data is performed.
+- The rollback has not been deployed.
 
-## Birthday greetings: last recorded state
+## 1. State (what is true right now)
 
 - **Birthday greetings implemented, not deployed.** `BIRTHDAY_ENABLED`
   defaults to `false`.

@@ -6,21 +6,23 @@ import (
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
-	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/domain/stats"
-	"github.com/veschin/bidlobot/internal/gameengine/farm"
-	"github.com/veschin/bidlobot/internal/storage"
 )
 
 // reactionFanout returns the single message_reaction handler that runs
-// every observer the bot needs: the reputation reaction pipeline (when
-// wired), then membership tracking (always). Telego routes a reaction to
+// every observer the bot needs: membership tracking (always), plus the
+// battle observer (when games are wired). Telego routes a reaction to
 // the first matching handler only, so we cannot register them as
 // siblings - one would mask the other.
 func reactionFanout(a *App, log *slog.Logger) th.MessageReactionHandler {
 	membership := membershipReactionHandler(a.memberSvc, log)
 	return func(ctx *th.Context, reaction telego.MessageReactionUpdated) error {
+		if a.games != nil && a.games.Battle.ReactionObserver != nil {
+			if err := a.games.Battle.ReactionObserver(ctx, reaction); err != nil {
+				log.Warn("battle reaction observer failed", "error", err)
+			}
+		}
 		if a.repReactor != nil {
 			if err := a.repReactor.Handle(ctx, reaction); err != nil {
 				log.Warn("rep reaction observer failed", "error", err)
@@ -43,15 +45,6 @@ func chatMemberFanout(a *App, log *slog.Logger) th.ChatMemberUpdatedHandler {
 		if err := membership(ctx, cmu); err != nil {
 			log.Warn("membership chat-member handler failed", "error", err)
 		}
-		if g := a.gameActions; g != nil && cmu.Chat.Type == telego.ChatTypeSupergroup &&
-			cmu.OldChatMember.MemberIsMember() && !cmu.NewChatMember.MemberIsMember() {
-			user := cmu.NewChatMember.MemberUser()
-			if err := g.engine.Update(func(tx *bolt.Tx) error {
-				return farm.Leave(tx, storage.AbsChatID(cmu.Chat.ID), user.ID)
-			}); err != nil {
-				log.Warn("release unaccepted farm offers", "error", err)
-			}
-		}
 		return captcha(ctx, cmu)
 	}
 }
@@ -71,19 +64,10 @@ func registerRoutes(
 
 	sgGroup := bh.Group(supergroupPredicate())
 
-	// Reputation routes (/praise, /roast, /rep, /reptop) share the
-	// supergroup tree so their slash commands coexist with
-	// stats/summarize/youtube.
-	registerGameRoutes(sgGroup, a)
-	sgGroup.Use(a.eightBallMiddleware)
-	sgGroup.HandleMessage(a.gateMsg("8ball", 3*time.Second, a.handleEightBall), th.CommandEqual("8ball"))
-	if g := a.gameActions; g != nil {
-		sgGroup.HandleMessage(a.gateMsg("excuses", 3*time.Second, g.command("automat")), th.CommandEqual("excuses"))
-		sgGroup.HandleMessage(a.gateMsg("prod", 3*time.Second, g.command("prod")), th.CommandEqual("prod"))
-		sgGroup.HandleMessage(a.gateMsg("farm", 2*time.Second, g.command("farm")), th.CommandEqual("farm"))
-		bh.HandleCallbackQuery(g.callback, gameCallbackPredicate())
-		sgGroup.Use(a.excuseMentionMiddleware)
-	}
+	// Game routes (dice, battle, quiz, 8ball, roast/praise, etc.)
+	// share the supergroup tree so their slash commands and
+	// callbacks coexist with stats/summarize/youtube.
+	registerGameRoutes(bh, sgGroup, a)
 	// Avoid the typed-nil-interface trap: a nil *monthstats.Buffer boxed
 	// into MonthlyIncrementer is a non-nil interface, so pass an untyped
 	// nil when the monthly engine is not wired (e.g. minimal test apps).
@@ -166,8 +150,9 @@ func registerRoutes(
 	}
 
 	// Callback ordering matters: feature-specific predicates must precede
-	// the broader ones (captcha before referral before owner chats) -
-	// telego routes a callback to the first matching handler only.
+	// the broader ones (captcha before referral before owner chats before
+	// the games "g1:" prefix) - telego routes a callback to the first
+	// matching handler only.
 	if a.captchaSvc != nil {
 		bh.HandleCallbackQuery(captchaCallbackHandler(a.captchaSvc, a.log), captchaCallbackPredicate())
 	}

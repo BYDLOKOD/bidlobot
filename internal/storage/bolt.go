@@ -11,17 +11,17 @@ import (
 )
 
 // Buckets from the archived bio domain ("profiles", "profiles_by_chat")
-// and the removed mini-games ("dice_leaderboard", "quiz_leaderboard" plus
-// the guess/hangman round buckets) are no longer created; existing
-// databases keep them untouched on disk (bbolt never drops buckets
-// implicitly), and no code reads or writes them, so old saved rows stay
-// inert.
+// are no longer created; existing databases keep them untouched on
+// disk (bbolt never drops buckets implicitly), and migrate.go skips
+// them, so nothing reads or writes them.
 var buckets = []string{
 	"stats",
 	"stats_by_chat",
 	"members",
 	"members_by_chat",
 	"chats",
+	"dice_leaderboard",
+	"quiz_leaderboard",
 	"stats_month",
 	"stats_month_idx",
 	"stats_month_state",

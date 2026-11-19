@@ -62,8 +62,7 @@ Auto-forwarded from linked channel. `sender_chat` field present instead of `from
 
 ## Deep linking
 
-`/farm` can open a Telegram Mini App via `startapp` with an expiring
-chat reference. The profile FSM's `reg_` and `upd_` payloads are retired.
+Not used anymore (the profile FSM with `reg_`/`upd_` payloads was archived with the bio domain).
 
 ## Bot command scopes
 
@@ -71,7 +70,7 @@ Set via `setMyCommands` at startup (`setup.go`):
 
 | Scope | Commands |
 |-------|---------|
-| `BotCommandScopeAllGroupChats` | stats, summarize, roast, praise, rep, reptop, excuses, prod, farm, 8ball, refs, refreg, flush |
+| `BotCommandScopeAllGroupChats` | stats, summarize, dice, battle, quiz, poll, 8ball, roast, praise, rep, reptop, guess, hangman, duel, trivia, refs, refreg, flush |
 | `BotCommandScopeAllChatAdministrators` | group commands + refreport |
 | `BotCommandScopeChat(owner)` | start, help, chats |
 

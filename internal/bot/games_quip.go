@@ -1,201 +1,94 @@
 package bot
 
-// Curated Russian reputation copy.
-//
-// The positive catalogue is the launch set from the target
-// specification: lines 1-16 are generic praise, 17-24 help, 25-32
-// explanation, 33-40 review. Lines 17-40 are used only when the sender
-// explicitly selects the reason; the bot never infers a reason from the
-// quoted message. A public line is followed by the deterministic signed
-// receipt, so the copy never replaces the amount that changed.
-//
-// Selection avoids repeating a line among the last five public uses of
-// the same family in the same chat where alternatives exist. The history
-// is process-local and bounded; copy rotation does not need durable
-// state.
-
-import (
-	"math/rand/v2"
-	"strings"
-	"sync"
-)
-
-type repReason int
-
-const (
-	repReasonNone repReason = iota
-	repReasonHelp
-	repReasonExplanation
-	repReasonReview
-)
-
-func (r repReason) family() string {
-	switch r {
-	case repReasonHelp:
-		return "praise-help"
-	case repReasonExplanation:
-		return "praise-explanation"
-	case repReasonReview:
-		return "praise-review"
-	default:
-		return "praise-generic"
-	}
+// roastTemplates and praiseTemplates are the shared, deliberately
+// understated corpora used by the durable ReputationHandler responses
+// and the reaction-rep replies. Every entry carries exactly one "%s"
+// placeholder (the target's display string, already HTML-escaped before
+// formatting); every entry closes with an unfinished thought marked by
+// "..." to keep one quiet voice. The TestQuipTemplatesCuratedCounts
+// guard enforces both invariants.
+var roastTemplates = []string{
+	"ну ты даёшь, %s...",
+	"%s опять отличился... не в ту сторону.",
+	"%s сделал как проще... всем остальным теперь сложнее.",
+	"%s починил одно... остальное стало понятнее, но не лучше.",
+	"%s снова назвал это быстрым фиксом...",
+	"%s проверил на проде... другого стенда, видимо, не заслужили.",
+	"%s оставил всё как есть... только хуже.",
+	"%s добавил ещё один слой... до истины теперь не докопаться.",
+	"%s забыл про тесты... тесты не забыли.",
+	"%s закрыл задачу... проблема осталась.",
+	"%s выбрал временное решение... навсегда.",
+	"%s снова коммитит в main... тишина перед пайплайном.",
+	"%s написал TODO... работа почти завершена.",
+	"%s оптимизировал... теперь медленно, но сложно.",
+	"%s объяснил архитектуру... вопросов стало больше.",
+	"%s убрал проверку... ошибка тоже исчезла из логов.",
+	"%s не прочитал сообщение выше... традиции важны.",
+	"%s нашёл крайний случай... уже после релиза.",
+	"%s добавил ретрай... причина осталась.",
+	"%s переименовал баг... теперь это ограничение.",
+	"%s снова забыл контекст... контекст не сопротивлялся.",
+	"%s оставил магическое число... пусть следующие гадают.",
+	"%s сделал рефакторинг... функциональность вспоминают.",
+	"%s сократил код... вместе с нужной веткой.",
+	"%s обновил зависимость... день перестал быть свободным.",
+	"%s написал комментарий... код всё равно не согласен.",
+	"%s вынес абстракцию... пользоваться стало некому.",
+	"%s решил не логировать... неизвестность спокойнее.",
+	"%s пропустил ошибку... она не пропустила прод.",
+	"%s добавил флаг... выключить последствия нельзя.",
+	"%s сделал красиво... работать было необязательно.",
+	"%s снова не воспроизвёл баг... пользователь смог.",
+	"%s выбрал дефолт... никто не знает какой.",
+	"%s оставил миграцию на потом... данные уже ушли.",
+	"%s проверил happy path... остальные пути грустят.",
+	"%s добавил кеш... теперь ошибка быстрее.",
+	"%s сделал универсально... конкретно не работает.",
+	"%s убрал дублирование... вместе с различиями.",
+	"%s всё задокументировал... кроме правды.",
+	"%s закончил спринт... спринт с ним не закончил.",
 }
 
-// parseRepReason splits an optional explicit reason from the command
-// arguments. Only an unprefixed first word is a reason; "@alice" stays a
-// target.
-func parseRepReason(args string) (repReason, string) {
-	args = strings.TrimSpace(args)
-	if args == "" {
-		return repReasonNone, ""
-	}
-	first, rest := args, ""
-	if i := strings.IndexAny(args, " \t\n"); i >= 0 {
-		first = args[:i]
-		rest = strings.TrimSpace(args[i+1:])
-	}
-	switch strings.ToLower(first) {
-	case "help", "помощь":
-		return repReasonHelp, rest
-	case "explanation", "explain", "объяснение":
-		return repReasonExplanation, rest
-	case "review", "ревью":
-		return repReasonReview, rest
-	default:
-		return repReasonNone, args
-	}
-}
-
-var praiseGeneric = []string{
-	"Тут плюс к репе напрашивался.",
-	"Этот плюс по адресу.",
-	"За такое и репу не жалко.",
-	"Вот и повод сказать спасибо.",
-	"Хорошо, что чат заметил.",
-	"За это хочется поставить плюс.",
-	"Эту благодарность передали по адресу.",
-	"Спасибо перевели в репу.",
-	"Мелочь в балансе, но по делу.",
-	"Этот плюс не за красивые логи.",
-	"Плюс дошёл без повторной отправки.",
-	"Перевод без комиссии банка.",
-	"На этот раз хватило короткого \u00abспасибо\u00bb.",
-	"Репа пришла. Письмо в бухгалтерию не нужно.",
-	"У этой благодарности есть квитанция.",
-	"Этот плюс можно пустить в дело.",
-}
-
-var praiseHelp = []string{
-	"Подхватить чужую задачу в нужный момент \u2014 отдельный навык.",
-	"Спасибо, что помогли довести дело до конца.",
-	"С такой помощью можно возвращаться к работе.",
-	"В нужную минуту нашлась пара свободных рук.",
-	"Спасибо, что не пришлось разбираться в одиночку.",
-	"Спасибо, что нашлось на это время.",
-	"После такой подсказки снова понятно, за что браться.",
-	"Хорошо, когда на просьбу о помощи отвечают делом.",
-}
-
-var praiseExplanation = []string{
-	"Теперь понятно, где искать причину.",
-	"Спасибо за ответ, который не пришлось расшифровывать.",
-	"Эту мысль теперь можно объяснить следующему человеку.",
-	"Из объяснения понятно, что проверить сначала.",
-	"Спасибо, что показали ход мысли, а не только результат.",
-	"Пример сработал лучше длинной инструкции.",
-	"Теперь понятно, почему первый способ не подошёл.",
-	"Можно закрыть лишние вкладки: ответ нашёлся здесь.",
-}
-
-var praiseReview = []string{
-	"Хорошо, что это заметили до релиза.",
-	"Спасибо за замечание, по которому понятно, что исправить.",
-	"Спасибо, что внимательно прошлись по коду.",
-	"Один вопрос в разборе сэкономил ещё один круг правок.",
-	"Спасибо, что проверили и случай за пределами примера.",
-	"Хорошо, что нашлась конкретная строка для правки.",
-	"После такого разбора проще оставить код следующему человеку.",
-	"Спасибо за конкретику: понятно, что оставить и что переделать.",
-}
-
-func praiseCatalogue(reason repReason) []string {
-	switch reason {
-	case repReasonHelp:
-		return praiseHelp
-	case repReasonExplanation:
-		return praiseExplanation
-	case repReasonReview:
-		return praiseReview
-	default:
-		return praiseGeneric
-	}
-}
-
-// repCopySelector keeps the last five public line indices per chat and
-// family. Safe for concurrent use: slash handlers and the reaction
-// batcher share one selector.
-type repCopySelector struct {
-	mu   sync.Mutex
-	last map[repCopyFamily][]int
-}
-
-type repCopyFamily struct {
-	chatID int64
-	name   string
-}
-
-func newRepCopySelector() *repCopySelector {
-	return &repCopySelector{last: make(map[repCopyFamily][]int)}
-}
-
-// pick returns a line, preferring one outside the last five uses of the
-// family. When the pool has no alternative it picks any line.
-func (s *repCopySelector) pick(chatID int64, family string, lines []string) string {
-	if len(lines) == 0 {
-		return ""
-	}
-	key := repCopyFamily{chatID: chatID, name: family}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	recent := s.last[key]
-	recentSet := make(map[int]struct{}, len(recent))
-	for _, idx := range recent {
-		recentSet[idx] = struct{}{}
-	}
-	candidates := make([]int, 0, len(lines))
-	for i := range lines {
-		if _, used := recentSet[i]; !used {
-			candidates = append(candidates, i)
-		}
-	}
-	if len(candidates) == 0 {
-		candidates = make([]int, len(lines))
-		for i := range lines {
-			candidates[i] = i
-		}
-	}
-	idx := candidates[rand.IntN(len(candidates))]
-
-	recent = append(recent, idx)
-	if len(recent) > 5 {
-		recent = recent[len(recent)-5:]
-	}
-	s.last[key] = recent
-	return lines[idx]
-}
-
-func (s *repCopySelector) reset() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.last = make(map[repCopyFamily][]int)
-}
-
-// repCopy is the process-wide selector shared by the slash handler and
-// the reaction report, so a line is not repeated between the two inputs.
-var repCopy = newRepCopySelector()
-
-func praiseLine(chatID int64, reason repReason) string {
-	return repCopy.pick(chatID, reason.family(), praiseCatalogue(reason))
+var praiseTemplates = []string{
+	"%s сделал хорошее дело... бывает.",
+	"%s всё-таки помог... странный день.",
+	"%s сегодня не подвёл... пока.",
+	"%s закрыл задачу... тишина стала чуть терпимее.",
+	"%s починил то, что давно просили... уже не верилось.",
+	"%s оказался полезен... неловко вышло.",
+	"%s сделал как надо... без лишнего шума.",
+	"%s не прошёл мимо... зря мы сомневались.",
+	"%s разобрался... кому-то же пришлось.",
+	"%s спас чужой вечер... свой, видимо, уже нет.",
+	"%s довёл дело до конца... редкое зрелище.",
+	"%s оставил после себя рабочий код... почти надежда.",
+	"%s заметил проблему раньше прода... невероятно.",
+	"%s помог команде... и ничего не попросил.",
+	"%s исправил баг... один из многих.",
+	"%s сделал ревью... стало немного меньше страшно.",
+	"%s объяснил спокойно... силы ещё остались.",
+	"%s не усложнил... уже достижение.",
+	"%s выбрал нормальное решение... случайность исключать нельзя.",
+	"%s вспомнил про тесты... до релиза.",
+	"%s удержал прод... ещё на один день.",
+	"%s убрал техдолг... маленький кусок бесконечности.",
+	"%s ответил по делу... чат даже притих.",
+	"%s признал ошибку... мир не закончился.",
+	"%s помог новичку... круг замкнулся не сразу.",
+	"%s написал документацию... кому-то станет чуть легче.",
+	"%s нашёл причину... не только симптом.",
+	"%s не стал спорить и просто сделал... мрачно эффективно.",
+	"%s вернул всё в рабочее состояние... ненадолго, наверное.",
+	"%s проверил крайний случай... тот самый.",
+	"%s сохранил чужое время... своего не пожалел.",
+	"%s сделал понятнее... редкая роскошь.",
+	"%s предупредил заранее... катастрофа отложена.",
+	"%s пришёл с решением... без презентации на сорок слайдов.",
+	"%s выдержал этот спринт... и даже помог другим.",
+	"%s не бросил задачу на полпути... подозрительно.",
+	"%s сделал меньше кода... и он работает.",
+	"%s оставил систему лучше, чем нашёл... чуть-чуть.",
+	"%s всё проверил... теперь можно бояться предметно.",
+	"%s заслужил плюс... хотя радоваться рано.",
 }

@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"html"
 	"log/slog"
+	"math/rand/v2"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/mymmrac/telego"
 	th "github.com/mymmrac/telego/telegohandler"
@@ -29,198 +31,126 @@ type reputationMembers interface {
 	GetMember(context.Context, int64, int64) (*membership.Member, error)
 }
 
-// ReputationHandler makes praise, roast, score and leaderboard commands
-// durable per-chat. Administrators receive the same deltas as everyone
-// else; the optional AdminChecker argument is kept for wiring stability.
+// ReputationHandler makes praise, roast, and score commands durable per-chat.
 type ReputationHandler struct {
 	bot     reputationSender
 	store   reputation.Store
 	members reputationMembers
+	admins  AdminChecker
 	log     *slog.Logger
 }
 
 // NewReputationHandler constructs the public social-rating command handler.
-func NewReputationHandler(bot reputationSender, store reputation.Store, members reputationMembers, log *slog.Logger, _ ...AdminChecker) *ReputationHandler {
+// admins is optional for focused tests; production passes the shared admin cache.
+func NewReputationHandler(bot reputationSender, store reputation.Store, members reputationMembers, log *slog.Logger, admins ...AdminChecker) *ReputationHandler {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &ReputationHandler{bot: bot, store: store, members: members, log: log}
+	h := &ReputationHandler{bot: bot, store: store, members: members, log: log}
+	if len(admins) > 0 {
+		h.admins = admins[0]
+	}
+	return h
 }
 
 func (h *ReputationHandler) HandlePraise(_ *th.Context, msg telego.Message) error {
-	return h.apply(msg, reputation.KindPraise)
+	return h.apply(msg, reputation.KindPraise, praiseTemplates)
 }
 
 func (h *ReputationHandler) HandleRoast(_ *th.Context, msg telego.Message) error {
-	return h.apply(msg, reputation.KindRoast)
+	return h.apply(msg, reputation.KindRoast, roastTemplates)
 }
 
 func (h *ReputationHandler) HandleRep(_ *th.Context, msg telego.Message) error {
 	if msg.From == nil || msg.From.IsBot {
 		return nil
 	}
-	account, err := h.store.Wallet(context.Background(), msg.Chat.ID, msg.From.ID)
+	isAdmin, ok := h.isAdmin(msg, msg.From.ID)
+	if !ok {
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
+	}
+	balance, err := h.store.Balance(context.Background(), storage.AbsChatID(msg.Chat.ID), msg.From.ID, isAdmin)
 	if err != nil {
-		h.log.Warn("reputation wallet failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
-		return h.reply(msg, "Не удалось загрузить кошелёк.")
+		h.log.Warn("reputation balance failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
-
-	title := reputation.TitleForScore(account.Score)
-	lines := []string{
-		fmt.Sprintf("<b>%s</b>", h.actorDisplay(msg.From)),
-		fmt.Sprintf("Доступно: <b>%d</b>\nВ резерве: <b>%d</b>", account.Available, account.Reserved),
-		fmt.Sprintf("Очки: <b>%d</b>\nЗвание: %s", account.Score, title.Name),
-	}
-	if next, ok := reputation.NextTitle(account.Score); ok {
-		lines = append(lines, fmt.Sprintf("Следующее звание: %s. Осталось очков: <b>%d</b>.", next.Name, next.Threshold-account.Score))
-	}
-	return h.reply(msg, strings.Join(lines, "\n"))
+	return h.reply(msg, fmt.Sprintf("у %s осталось <b>%d</b> репутации...", h.actorDisplay(msg.From), balance))
 }
 
 func (h *ReputationHandler) HandleRepTop(_ *th.Context, msg telego.Message) error {
 	if msg.From == nil || msg.From.IsBot {
 		return nil
 	}
-	entries, err := h.store.Leaderboard(context.Background(), msg.Chat.ID, 0)
+	const limit = 10
+	entries, err := h.store.Leaderboard(context.Background(), storage.AbsChatID(msg.Chat.ID), limit)
 	if err != nil {
 		h.log.Warn("reputation leaderboard failed", "error", err, "chat_id", msg.Chat.ID)
-		return h.reply(msg, "Не удалось загрузить рейтинг.")
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
+	}
+	if len(entries) == 0 {
+		return h.reply(msg, "тут пока пусто... как обычно.")
 	}
 
-	var table strings.Builder
-	fmt.Fprintf(&table, "<b>Рейтинг чата</b>\n<pre>%2s  %-13s %5s  %s", "№", "Участник", "Очки", "Звание")
-	rank := 0
-	for _, entry := range entries {
-		if rank == 10 {
-			break
-		}
-		member := h.observedMember(msg.Chat.ID, entry.UserID)
-		if member == nil || member.IsBot || !memberCurrent(member) {
-			continue
-		}
-		title := reputation.TitleForScore(entry.Score)
-		name := shared.UserDisplay(member.Username, member.FirstName)
-		name = strings.Join(strings.Fields(name), " ")
-		if name == "" {
-			name = fmt.Sprint(member.UserID)
-		}
-		if runes := []rune(name); len(runes) > 13 {
-			name = string(runes[:12]) + "…"
-		}
-		rank++
-		line := fmt.Sprintf("\n%2d  %-13s %5d  %s", rank, name, entry.Score, title.Name)
-		table.WriteString(html.EscapeString(line))
+	const memberColumn = "Участник"
+	width := utf8.RuneCountInString(memberColumn)
+	var names [limit]string
+	for i, entry := range entries {
+		names[i] = h.leaderboardName(msg.Chat.ID, entry.UserID)
+		width = max(width, utf8.RuneCountInString(names[i]))
 	}
-	if rank == 0 {
-		return h.reply(msg, "Ни у кого пока нет очков.")
+	var table strings.Builder
+	fmt.Fprintf(&table, "<b>у кого ещё что-то осталось...</b>\n<pre>%2s  %-*s  %9s", "№", width, memberColumn, "Репутация")
+	for i, entry := range entries {
+		name := names[i]
+		fmt.Fprintf(&table, "\n%2d  %s%*s  %9d", i+1, html.EscapeString(name), width-utf8.RuneCountInString(name), "", entry.Balance)
 	}
 	table.WriteString("</pre>")
 	return h.reply(msg, table.String())
 }
 
-// observedMember resolves a member from the persisted membership record.
-// The leaderboard is a read view and does not call Telegram.
-func (h *ReputationHandler) observedMember(chatID, userID int64) *membership.Member {
-	member, err := h.members.GetMember(context.Background(), userID, storage.AbsChatID(chatID))
-	if err != nil {
-		return nil
-	}
-	return member
-}
-
-// memberCurrent reports whether an observed membership is still current
-// without a live API call. Live verification is reserved for writes.
-func memberCurrent(member *membership.Member) bool {
-	switch member.Status {
-	case membership.StatusLeft, membership.StatusKicked:
-		return false
-	default:
-		return true
-	}
-}
-
-func (h *ReputationHandler) apply(msg telego.Message, kind reputation.Kind) error {
+func (h *ReputationHandler) apply(msg telego.Message, kind reputation.Kind, templates []string) error {
 	if msg.From == nil || msg.From.IsBot {
 		return nil
 	}
-
-	args := repCommandArgs(msg.Text)
-	reason := repReasonNone
-	if kind == reputation.KindPraise {
-		reason, args = parseRepReason(args)
-	}
-
-	target, err := h.target(msg, args)
+	target, err := h.target(msg)
 	if err != nil {
 		return h.reply(msg, "нужно ответить на сообщение или написать /"+reputationCommand(kind)+" @username...")
 	}
-	if target.IsBot {
-		return h.reply(msg, "ботам репутация не нужна...")
+	// Live Telegram membership check: an old replied-to message can
+	// outlive a missed leave event, and persisted membership can lie.
+	// Reject before any balance initialization or mutation.
+	if !h.isStillMember(msg.Chat.ID, target.UserID) {
+		return h.reply(msg, "его уже нет в чате... репутация тут больше не поможет.")
 	}
 	if msg.From.ID == target.UserID {
 		return h.reply(msg, "себе нельзя... даже так.")
 	}
-
-	// A write requires live membership: an old replied-to message can
-	// outlive a missed leave event, and persisted membership can lie.
-	if !h.isStillMember(msg.Chat.ID, msg.From.ID) {
-		return h.reply(msg, "не удалось проверить твоё участие... балансы не менялись.")
+	actorAdmin, ok := h.isAdmin(msg, msg.From.ID)
+	if !ok {
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
-	if !h.isStillMember(msg.Chat.ID, target.UserID) {
-		return h.reply(msg, "его уже нет в чате... репутация тут больше не поможет.")
+	targetAdmin, ok := h.isAdmin(msg, target.UserID)
+	if !ok {
+		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
-
-	result, err := h.store.Settle(context.Background(), reputation.SocialRequest{
-		ChatID:          msg.Chat.ID,
-		ActorID:         msg.From.ID,
-		TargetID:        target.UserID,
-		Kind:            kind,
-		Source:          reputation.SourceSlash,
-		SourceMessageID: msg.MessageID,
-	})
+	result, err := h.store.Apply(context.Background(), storage.AbsChatID(msg.Chat.ID), msg.From.ID, target.UserID, kind, actorAdmin, targetAdmin)
 	if err != nil {
 		return h.replyApplyError(msg, err)
 	}
-
+	body := strings.Replace(templates[rand.IntN(len(templates))], "%s", h.memberDisplay(target), 1)
 	actorLabel := h.actorDisplay(msg.From)
-	targetLabel := h.memberDisplay(target)
-	if kind == reputation.KindPraise {
-		line := praiseLine(msg.Chat.ID, reason)
-		return h.reply(msg, praiseReceipt(line, actorLabel, targetLabel, result))
+	delta := "+3"
+	if kind == reputation.KindPraise && targetAdmin {
+		delta = "+6"
 	}
-	return h.reply(msg, roastReceipt(actorLabel, targetLabel, result))
-}
-
-func praiseReceipt(line, actor, target string, result reputation.Result) string {
-	if line == "" {
-		line = "Плюс по адресу."
+	if kind == reputation.KindRoast {
+		return h.reply(msg, fmt.Sprintf("%s\n\nлови -1, чучело, от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>", body, actorLabel, actorLabel, result.ActorBalance, h.memberDisplay(target), result.TargetBalance))
 	}
-	return fmt.Sprintf("%s\n\n<b>%+d</b> к репе %s, <b>%+d</b> к счёту; <b>%+d</b> у %s.\n<i>Доступно: %s \u2014 %d, %s \u2014 %d. Счёт: %s \u2014 %d.</i>",
-		line,
-		result.TargetWalletDelta, target,
-		result.TargetScoreDelta,
-		result.ActorWalletDelta, actor,
-		actor, result.Actor.Available,
-		target, result.Target.Available,
-		target, result.Target.Score,
-	)
+	return h.reply(msg, fmt.Sprintf("%s\n\nдержи %s от %s.\n<i>(Баланс: %s: %d, %s: %d)</i>", body, delta, actorLabel, actorLabel, result.ActorBalance, h.memberDisplay(target), result.TargetBalance))
 }
 
-func roastReceipt(actor, target string, result reputation.Result) string {
-	return fmt.Sprintf("Минус по адресу.\n\n<b>%+d</b> к репе %s, <b>%+d</b> к счёту; <b>%+d</b> у %s.\n<i>Доступно: %s \u2014 %d, %s \u2014 %d. Счёт: %s \u2014 %d.</i>",
-		result.TargetWalletDelta, target,
-		result.TargetScoreDelta,
-		result.ActorWalletDelta, actor,
-		actor, result.Actor.Available,
-		target, result.Target.Available,
-		target, result.Target.Score,
-	)
-}
-
-// target resolves the explicit reason-stripped argument or the replied-to
-// human. Replies are never taken from bots.
-func (h *ReputationHandler) target(msg telego.Message, args string) (*membership.Member, error) {
-	arg := strings.TrimSpace(args)
+func (h *ReputationHandler) target(msg telego.Message) (*membership.Member, error) {
+	arg := strings.TrimSpace(commandArgs(msg.Text))
 	if arg != "" {
 		if i := strings.IndexFunc(arg, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' }); i >= 0 {
 			arg = arg[:i]
@@ -232,9 +162,21 @@ func (h *ReputationHandler) target(msg telego.Message, args string) (*membership
 	}
 	if msg.ReplyToMessage != nil && msg.ReplyToMessage.From != nil && !msg.ReplyToMessage.From.IsBot {
 		user := msg.ReplyToMessage.From
-		return &membership.Member{UserID: user.ID, Username: user.Username, FirstName: user.FirstName, IsBot: user.IsBot}, nil
+		return &membership.Member{UserID: user.ID, Username: user.Username, FirstName: user.FirstName}, nil
 	}
 	return nil, errReputationTarget
+}
+
+func (h *ReputationHandler) isAdmin(msg telego.Message, userID int64) (bool, bool) {
+	if h.admins == nil {
+		return false, true
+	}
+	isAdmin, err := h.admins.IsAdmin(storage.AbsChatID(msg.Chat.ID), userID)
+	if err != nil {
+		h.log.Warn("reputation admin check failed", "error", err, "chat_id", msg.Chat.ID, "user_id", userID)
+		return false, false
+	}
+	return isAdmin, true
 }
 
 func (h *ReputationHandler) replyApplyError(msg telego.Message, err error) error {
@@ -243,21 +185,17 @@ func (h *ReputationHandler) replyApplyError(msg telego.Message, err error) error
 		return h.reply(msg, "себе нельзя... даже так.")
 	case errors.Is(err, reputation.ErrInsufficientBalance):
 		return h.reply(msg, "у тебя ничего не осталось... раздавать больше нечего.")
-	case errors.Is(err, reputation.ErrPairLimit):
-		return h.reply(msg, "с этой парой уже считались сегодня... до следующих суток.")
-	case errors.Is(err, reputation.ErrSenderLimit):
-		return h.reply(msg, "три пересчёта в сутки... лимит исчерпан.")
-	case errors.Is(err, reputation.ErrDuplicateSource):
-		return h.reply(msg, "этот плюс уже учтён... повторно не спишется.")
+	case errors.Is(err, reputation.ErrTargetInsufficientBalance):
+		return h.reply(msg, "у него уже ноль... ниже некуда.")
 	default:
-		h.log.Warn("reputation settle failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
+		h.log.Warn("reputation apply failed", "error", err, "chat_id", msg.Chat.ID, "user_id", msg.From.ID)
 		return h.reply(msg, "что-то сломалось... балансы не менялись.")
 	}
 }
 
 // isStillMember returns true when Telegram confirms the user is
-// currently a chat member. Fail-closed on API error or nil result so an
-// unreachable API never mutates a possibly-departed user's balance.
+// currently a chat member. Fail-closed on API error or nil result so
+// an unreachable API never mutates a possibly-departed user's balance.
 func (h *ReputationHandler) isStillMember(chatID, userID int64) bool {
 	cm, err := h.bot.GetChatMember(context.Background(), &telego.GetChatMemberParams{
 		ChatID: telego.ChatID{ID: chatID},
@@ -270,14 +208,28 @@ func (h *ReputationHandler) isStillMember(chatID, userID int64) bool {
 	return cm.MemberIsMember()
 }
 
-// actorDisplay renders the actor's inert display name: handle without
-// '@', escaped for HTML, with numeric-ID fallback.
+// actorDisplay renders the actor's inert display name with the same
+// rules as memberDisplay: handle without '@', escaped for HTML, with
+// numeric-ID fallback when neither username nor first name is known.
 func (h *ReputationHandler) actorDisplay(from *telego.User) string {
 	display := shared.UserDisplay(from.Username, from.FirstName)
 	if display == "" {
 		return fmt.Sprintf("%d", from.ID)
 	}
 	return html.EscapeString(display)
+}
+
+func (h *ReputationHandler) leaderboardName(chatID, userID int64) string {
+	member, err := h.members.GetMember(context.Background(), userID, storage.AbsChatID(chatID))
+	if err == nil {
+		if member.Username != "" {
+			return member.Username
+		}
+		if name := strings.Join(strings.Fields(member.FirstName), " "); name != "" {
+			return name
+		}
+	}
+	return fmt.Sprint(userID)
 }
 
 func (h *ReputationHandler) memberDisplay(member *membership.Member) string {
@@ -290,10 +242,9 @@ func (h *ReputationHandler) memberDisplay(member *membership.Member) string {
 
 func (h *ReputationHandler) reply(msg telego.Message, body string) error {
 	_, err := h.bot.SendMessage(context.Background(), &telego.SendMessageParams{
-		ChatID:          telego.ChatID{ID: msg.Chat.ID},
-		MessageThreadID: msg.MessageThreadID,
-		Text:            body,
-		ParseMode:       telego.ModeHTML,
+		ChatID:    telego.ChatID{ID: msg.Chat.ID},
+		Text:      body,
+		ParseMode: telego.ModeHTML,
 		ReplyParameters: &telego.ReplyParameters{
 			MessageID: msg.MessageID,
 		},
@@ -309,17 +260,4 @@ func reputationCommand(kind reputation.Kind) string {
 		return "praise"
 	}
 	return "roast"
-}
-
-// repCommandArgs strips the slash command token (including a @botname
-// suffix) and returns the remaining arguments.
-func repCommandArgs(text string) string {
-	text = strings.TrimSpace(text)
-	if !strings.HasPrefix(text, "/") {
-		return text
-	}
-	if i := strings.IndexAny(text, " \t\n"); i >= 0 {
-		return strings.TrimSpace(text[i+1:])
-	}
-	return ""
 }
