@@ -10,6 +10,7 @@ import (
 	"github.com/mymmrac/telego"
 	"github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
+	bolt "go.etcd.io/bbolt"
 )
 
 // InlineRequestConstructor preserves cache_time=0, which telego v1.8
@@ -37,7 +38,9 @@ type InlineService struct {
 	// the inline package importing the games packages. Returns
 	// (results, true) when the command was handled; (nil, false) when
 	// the inline service should continue with the default filter.
-	gameRouter InlineGameRouter
+	gameRouter  InlineGameRouter
+	inactivity  *inactivityMenu
+	professions *professionsMenu
 }
 
 // InlineGameRouter is the contract a mini-game module implements to plug
@@ -55,6 +58,13 @@ func NewInlineService(log *slog.Logger) *InlineService {
 // SetGameRouter wires a router that handles dice/battle/quiz inline
 // queries. Idempotent; passing nil disables routing.
 func (s *InlineService) SetGameRouter(r InlineGameRouter) { s.gameRouter = r }
+
+// AttachMemberMenus enables the native inline menus before Run.
+func (a *App) AttachMemberMenus(db *bolt.DB) {
+	members := a.memberSvc.Store()
+	a.inlineSvc.inactivity = newInactivityMenu(a.sender, members, db)
+	a.inlineSvc.professions = newProfessionsMenu(a.sender, members, db)
+}
 
 // inlineCommand describes one offer the bot suggests when the user types
 // "@bidlobot ..." in any chat. All entries are read-only and fire a
@@ -168,11 +178,25 @@ func catalog() []inlineCommand {
 }
 
 // BuildResults dispatches a parsed query into the inline result list.
-// All results are read-only (stats variants, help, or catalog filter).
 func (s *InlineService) BuildResults(ctx context.Context, query telego.InlineQuery) []telego.InlineQueryResult {
 	q := strings.TrimSpace(query.Query)
+	var results []telego.InlineQueryResult
+	if s.inactivity != nil {
+		if entries, handled := s.inactivity.results(ctx, query); q == "" {
+			results = append(results, entries...)
+		} else if handled {
+			return entries
+		}
+	}
+	if s.professions != nil {
+		if entries, handled := s.professions.results(ctx, query); q == "" {
+			results = append(results, entries...)
+		} else if handled {
+			return entries
+		}
+	}
 	if q == "" {
-		return toResults(catalog())
+		return append(results, toResults(catalog())...)
 	}
 
 	parts := strings.Fields(q)
@@ -283,7 +307,7 @@ func (s *InlineService) Handler() th.InlineQueryHandler {
 			IsPersonal:    true,
 		})
 		if err != nil {
-			s.log.Warn("AnswerInlineQuery failed", "error", err, "query", query.Query, "user_id", query.From.ID)
+			s.log.Warn("AnswerInlineQuery failed", "error", err, "user_id", query.From.ID)
 		}
 		return nil
 	}

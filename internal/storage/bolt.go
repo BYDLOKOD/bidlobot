@@ -39,6 +39,8 @@ var buckets = []string{
 	"deferred_jobs",
 	"tiktok_videos",
 	"birthday_greeted",
+	"inactivity_settings",
+	"professions",
 }
 
 type BoltStore struct {

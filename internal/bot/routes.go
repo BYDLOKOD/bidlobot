@@ -147,6 +147,16 @@ func registerRoutes(
 
 	if a.inlineSvc != nil {
 		bh.HandleInlineQuery(a.inlineSvc.Handler())
+		if menu := a.inlineSvc.inactivity; menu != nil {
+			bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+				return menu.callback(ctx.Context(), query)
+			}, th.CallbackDataPrefix("ina:"))
+		}
+		if menu := a.inlineSvc.professions; menu != nil {
+			bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
+				return menu.callback(ctx.Context(), query)
+			}, th.CallbackDataPrefix("pro:"))
+		}
 	}
 
 	// Callback ordering matters: feature-specific predicates must precede

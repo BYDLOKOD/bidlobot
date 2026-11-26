@@ -11,7 +11,7 @@ touches:
   - internal/testutil/
   - internal/text/
 written: 2026-05-14
-updated: 2026-11-17
+updated: 2026-11-26
 ---
 
 # Architecture
@@ -106,7 +106,7 @@ internal/
 |     youtubeSanitizer -> tiktokReposter -> xpostReposter |
 |   cooldown-gated commands: /stats /flush /help          |
 |     /summarize+/итог /refs /refreg /refreport           |
-|   InlineService -> read-only catalog only               |
+|   InlineService -> catalog + native member menus       |
 |                                                         |
 |  fanouts:                                               |
 |   message_reaction -> battle observer + rep reactor     |
@@ -160,7 +160,7 @@ Side-effect axes:
   (nothing creates them anymore - dead surface, kept for the game
   callbacks that share the catch-all).
 
-## bbolt schema (`storage/bolt.go`, 29 buckets)
+## bbolt schema (`storage/bolt.go`)
 
 | Bucket | Key | Value |
 |--------|-----|-------|
@@ -189,6 +189,8 @@ Side-effect axes:
 | `deferred_jobs` | `dj:<zero-padded UnixNano>` | JSON `DeferredJob` (FIFO) |
 | `birthday_greeted` | `bg:<absChatID>:<YYYY-MM-DD>:<userID>` | 8-byte BE UTC timestamp; 48h TTL |
 | `tiktok_videos` | `tv:<absChatID>:<videoID>` | message id of the bot TikTok repost |
+| `inactivity_settings` | `c:<absChatID>` | inactivity threshold in elapsed hours |
+| `professions` | `c:<absChatID>` | JSON entries with a profession name and stable Telegram user IDs |
 
 `dm_sessions` was removed with the DM console (caa8f55). Buckets
 created idempotently in `storage.NewBoltStore`. `MigrateChatID`
@@ -203,7 +205,7 @@ migration (documented, not silently handled).
 1. **Membership is bottom-up.** No `getChatMembers`; the bot learns a
    user only from an observed event. No import path anymore (removed
    caa8f55).
-2. **Reactions count as activity.** `LastMessageAt OR LastReactionAt`.
+2. **Reactions count for the legacy activity lifecycle, not the inline inactivity list.** The inline list reads `LastMessageAt` only.
 3. **No moderation surface.** No public or DM moderation commands
    exist; the legacy `v1:` dispatcher is a dead path. Do not
    reintroduce public moderation, advertise it in

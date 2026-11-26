@@ -12,9 +12,12 @@ touches:
   - internal/bot/captcha.go
   - internal/domain/birthday/
   - internal/bot/routes.go
+  - internal/bot/inline.go
+  - internal/bot/inactivity.go
+  - internal/bot/professions.go
   - internal/storage/migrate.go
 written: 2026-05-14
-updated: 2026-10-27
+updated: 2026-11-26
 ---
 
 # Telegram API Reference
@@ -102,17 +105,40 @@ welcome animation with onboarding questions. Unanswered ->
 
 Bot does not process `edited_message` updates (not subscribed). Standard behavior.
 
-## Mentions without command
+## Inline member menus
 
-`@botname` without command -> no reaction.
+Type `@botname inactive` or `@botname professions` and follow the inline
+result descriptions. Choose a known supergroup explicitly: an
+`InlineQuery` has no source chat ID. No slash command or ordinary chat
+reply is involved.
+
+- **Inactivity ([#9](https://github.com/BYDLOKOD/bidlobot/issues/9)).**
+  Reuses the per-chat membership message count and last recorded message
+  time; no roster or history fetch. The default cutoff is 48 hours.
+  Administrators adjust it in hours using the same menu. The list
+  includes only people whose last recorded message is older than the
+  cutoff. Each page shows the count and independent flags for at least
+  7 and 30 elapsed days. A new message clears both on the next read.
+- **Professions ([#8](https://github.com/BYDLOKOD/bidlobot/issues/8)).**
+  Current members select and browse a chat's directory. An administrator
+  can add a profession and assign up to four known usernames in one
+  action. End inline input with `;` and return to the menu for the
+  private preview and confirmation; do not send the result to the chat.
+  Assignments use Telegram user IDs, so one person can have multiple
+  professions. Typing alone never changes the directory.
+
+Buttons edit the original inline message. The bot returns member lists
+and profession assignments in private callback answers, not in the
+shared message body. Inline results are personal and uncached. A live
+`getChatMember` check gates protected reads and writes.
 
 ## Callback queries
 
 Inline keyboards use `callback_data` (max 64 bytes). Bot must always call `answerCallbackQuery` to dismiss spinner, even on error.
 
-Callback ordering matters (first-match-wins): captcha `cap:` -> referral `rf:` -> owner chats `oc:` -> `v1:` catch-all dispatcher.
-
-Callback queries work from group messages - `callback_query.message.chat.id` contains the group ID. Timeout ~10-15s.
+Member-menu callbacks (`ina:`, `pro:`) use `inline_message_id` to edit
+the original message. Ordinary group-message callbacks instead have
+`callback_query.message.chat.id`.
 
 ## Rate limits
 

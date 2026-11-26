@@ -175,6 +175,7 @@ func main() {
 	app.SetBotOwnerID(cfg.BotOwnerID)
 	app.SetAdmissionAttemptStore(admissionAttemptRepo)
 	app.SetDeferredQueue(storage.NewDeferredRepo(db))
+	app.AttachMemberMenus(db)
 	if cfg.BirthdayEnabled {
 		app.AttachBirthdays(birthday.NewService(
 			memberSvc.Store(),
