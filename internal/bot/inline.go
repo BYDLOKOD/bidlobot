@@ -8,12 +8,28 @@ import (
 	"strings"
 
 	"github.com/mymmrac/telego"
+	"github.com/mymmrac/telego/telegoapi"
 	th "github.com/mymmrac/telego/telegohandler"
 )
 
-// InlineService backs HandleInlineQuery. All inline queries are read-only:
-// stats variants and help are matched explicitly; everything else falls
-// back to a prefix filter over the catalog.
+// InlineRequestConstructor preserves cache_time=0, which telego v1.8
+// omits even though Telegram interprets omission as a five-minute cache.
+type InlineRequestConstructor struct {
+	telegoapi.DefaultConstructor
+}
+
+func (c InlineRequestConstructor) JSONRequest(params any) (*telegoapi.RequestData, error) {
+	if p, ok := params.(*telego.AnswerInlineQueryParams); ok && p != nil {
+		return c.DefaultConstructor.JSONRequest(struct {
+			*telego.AnswerInlineQueryParams
+			CacheTime int `json:"cache_time"`
+		}{p, p.CacheTime})
+	}
+	return c.DefaultConstructor.JSONRequest(params)
+}
+
+// InlineService provides Telegram inline results. Mutations require a
+// callback; typing an inline query never changes persisted chat data.
 type InlineService struct {
 	log *slog.Logger
 	// gameRouter is consulted before the default catalog filter so

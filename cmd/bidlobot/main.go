@@ -81,7 +81,7 @@ func main() {
 	tgBot, err := telego.NewBot(cfg.Token, telego.WithFastHTTPClient(&fasthttp.Client{
 		ReadTimeout:  65 * time.Second,  // must exceed the 30s long poll
 		WriteTimeout: 240 * time.Second, // 50 MiB upload on a slow uplink
-	}))
+	}), telego.WithRequestConstructor(bot.InlineRequestConstructor{}))
 	if err != nil {
 		log.Error("create telegram bot", "error", err)
 		os.Exit(1)

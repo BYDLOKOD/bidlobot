@@ -510,17 +510,20 @@ func (c *Client) EditMessageText(ctx context.Context, params *telego.EditMessage
 		return nil, errors.New("tgclient: nil params")
 	}
 	var msg *telego.Message
-	err := c.runWrite(ctx, params.ChatID.ID, "editMessageText",
-		func(ctx context.Context) error {
-			m, e := c.bot.EditMessageText(ctx, params)
-			if e != nil {
-				return e
-			}
+	send := func(ctx context.Context) error {
+		m, err := c.bot.EditMessageText(ctx, params)
+		if err == nil {
 			msg = m
-			return nil
-		},
-		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} },
-	)
+		}
+		return err
+	}
+	if params.InlineMessageID != "" && params.ChatID.ID == 0 && params.ChatID.Username == "" {
+		// Telegram supplies no chat ID for inline edits. Do not queue all of them under chat 0.
+		err := retry.Do(ctx, c.retryPolicy, send)
+		return msg, err
+	}
+	err := c.runWrite(ctx, params.ChatID.ID, "editMessageText", send,
+		func(newSigned int64) { params.ChatID = telego.ChatID{ID: newSigned} })
 	return msg, err
 }
 
