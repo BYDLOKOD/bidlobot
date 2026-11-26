@@ -6,13 +6,12 @@
   uses stored message counts and timestamps. Admins select a supergroup,
   set its inactivity interval, and read private batches from one menu.
 - [#8](https://github.com/BYDLOKOD/bidlobot/issues/8): `@botname professions`
-  opens the directory. Current members browse it; admins create professions
-  and assign them by username using inline input and confirmation.
-- See [Telegram API Reference](50_telegram.md#inline-member-menus) for
-  the interaction and privacy rules. Neither feature has been deployed.
-- The targeted Go race tests cover persisted settings and assignments,
-  access checks, and the original-message edit through the Telegram
-  transport fixture. No live Telegram client was used.
+  browses the current group's directory. `professions set` and
+  `professions set-stack` edit the author's profile by toggling catalog
+  buttons and saving once. Existing profession assignments are preserved.
+- See [Telegram API Reference](50_telegram.md#inline-member-menus).
+  The redesigned flow has not been deployed. Live Telegram delivery of
+  the posted inline result with its keyboard still needs confirmation.
 
 ## Games and reputation rollback
 

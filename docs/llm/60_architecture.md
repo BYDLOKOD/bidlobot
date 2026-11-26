@@ -191,6 +191,7 @@ Side-effect axes:
 | `tiktok_videos` | `tv:<absChatID>:<videoID>` | message id of the bot TikTok repost |
 | `inactivity_settings` | `c:<absChatID>` | inactivity threshold in elapsed hours |
 | `professions` | `c:<absChatID>` | JSON entries with a profession name and stable Telegram user IDs |
+| `profession_stacks` | `mc:<absChatID>:<userID>` | JSON list of canonical technology names |
 
 `dm_sessions` was removed with the DM console (caa8f55). Buckets
 created idempotently in `storage.NewBoltStore`. `MigrateChatID`

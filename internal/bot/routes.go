@@ -84,6 +84,13 @@ func registerRoutes(
 	if a.repReactor != nil {
 		sgGroup.Use(repAuthorIndexMiddleware(a.repReactor))
 	}
+	if a.inlineSvc != nil && a.inlineSvc.professions != nil {
+		menu := a.inlineSvc.professions
+		sgGroup.Use(func(ctx *th.Context, update telego.Update) error {
+			menu.observe(update.Message, menu.botID)
+			return ctx.Next(update)
+		})
+	}
 	// Passive RAM recorder for the Pi/OMP summarization feature. Like
 	// the stats observer it must see the original human message, so it
 	// sits among the observers, before the YouTube sanitizer (which
@@ -155,7 +162,7 @@ func registerRoutes(
 		if menu := a.inlineSvc.professions; menu != nil {
 			bh.HandleCallbackQuery(func(ctx *th.Context, query telego.CallbackQuery) error {
 				return menu.callback(ctx.Context(), query)
-			}, th.CallbackDataPrefix("pro:"))
+			}, th.CallbackDataPrefix(professionsPrefix))
 		}
 	}
 

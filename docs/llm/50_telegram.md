@@ -15,6 +15,8 @@ touches:
   - internal/bot/inline.go
   - internal/bot/inactivity.go
   - internal/bot/professions.go
+  - internal/bot/professions_picker.go
+  - internal/bot/professions_store.go
   - internal/storage/migrate.go
 written: 2026-05-14
 updated: 2026-11-26
@@ -107,10 +109,8 @@ Bot does not process `edited_message` updates (not subscribed). Standard behavio
 
 ## Inline member menus
 
-Type `@botname inactive` or `@botname professions` and follow the inline
-result descriptions. Choose a known supergroup explicitly: an
-`InlineQuery` has no source chat ID. No slash command or ordinary chat
-reply is involved.
+Open either menu by selecting a Telegram inline result. The inactivity
+menu still requires choosing the source supergroup.
 
 - **Inactivity ([#9](https://github.com/BYDLOKOD/bidlobot/issues/9)).**
   Reuses the per-chat membership message count and last recorded message
@@ -120,17 +120,21 @@ reply is involved.
   cutoff. Each page shows the count and independent flags for at least
   7 and 30 elapsed days. A new message clears both on the next read.
 - **Professions ([#8](https://github.com/BYDLOKOD/bidlobot/issues/8)).**
-  Current members select and browse a chat's directory. An administrator
-  can add a profession and assign up to four known usernames in one
-  action. End inline input with `;` and return to the menu for the
-  private preview and confirmation; do not send the result to the chat.
-  Assignments use Telegram user IDs, so one person can have multiple
-  professions. Typing alone never changes the directory.
+  `@botname professions` opens the current supergroup's directory.
+  Browse known current members together or by profession. The posted
+  via-bot message binds the menu to its chat; the callback must match
+  that same post and author. An unbound menu cannot read or write.
+  `professions set` and `professions set-stack` open the member's own
+  picker. An optional prefix suggests catalog entries and opens their
+  page. Buttons toggle several selections across categories; Save
+  writes one field and Cancel leaves it unchanged. Built-in professions
+  and technologies need no setup. Existing profession assignments stay
+  readable. Menus expire after 30 minutes.
 
-Buttons edit the original inline message. The bot returns member lists
-and profession assignments in private callback answers, not in the
-shared message body. Inline results are personal and uncached. A live
-`getChatMember` check gates protected reads and writes.
+Buttons edit the original inline message. Checkmarks in the editor are
+visible in the chat; directory member names and profiles appear only in
+private callback answers. Inline results are personal and uncached.
+A live `getChatMember` check gates protected reads and writes.
 
 ## Callback queries
 

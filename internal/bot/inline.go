@@ -60,10 +60,11 @@ func NewInlineService(log *slog.Logger) *InlineService {
 func (s *InlineService) SetGameRouter(r InlineGameRouter) { s.gameRouter = r }
 
 // AttachMemberMenus enables the native inline menus before Run.
-func (a *App) AttachMemberMenus(db *bolt.DB) {
+func (a *App) AttachMemberMenus(db *bolt.DB, botID int64) {
 	members := a.memberSvc.Store()
 	a.inlineSvc.inactivity = newInactivityMenu(a.sender, members, db)
 	a.inlineSvc.professions = newProfessionsMenu(a.sender, members, db)
+	a.inlineSvc.professions.botID = botID
 }
 
 // inlineCommand describes one offer the bot suggests when the user types

@@ -41,6 +41,7 @@ var buckets = []string{
 	"birthday_greeted",
 	"inactivity_settings",
 	"professions",
+	"profession_stacks",
 }
 
 type BoltStore struct {

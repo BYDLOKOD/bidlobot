@@ -2,12 +2,14 @@ package bot
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mymmrac/telego"
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/veschin/bidlobot/internal/domain/membership"
 	"github.com/veschin/bidlobot/internal/storage"
@@ -37,24 +39,23 @@ func newProfessionsTest(t *testing.T) (*professionsTest, func()) {
 	api := testutil.NewMockAPI()
 	repo := storage.NewMembershipRepo(store.DB())
 	for _, chat := range []membership.Chat{
-		{AbsChatID: 100101, Title: "Первая группа", Type: telego.ChatTypeSupergroup, BotStatus: membership.StatusAdministrator},
-		{AbsChatID: 100102, Title: "Вторая группа", Type: telego.ChatTypeSupergroup, BotStatus: membership.StatusAdministrator},
+		{AbsChatID: -professionChatA, Type: telego.ChatTypeSupergroup, BotStatus: membership.StatusAdministrator},
+		{AbsChatID: -professionChatB, Type: telego.ChatTypeSupergroup, BotStatus: membership.StatusAdministrator},
 	} {
 		if err := repo.UpsertChat(ctx, chat); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for userID, username := range map[int64]string{7: "alice", 8: "bob_42", 9: "alice"} {
-		if _, err := repo.UpsertMember(ctx, membership.MemberPatch{AbsChatID: 100101, UserID: userID, Username: &username}); err != nil {
+	for userID, username := range map[int64]string{1: "owner", 7: "alice", 8: "bob_42"} {
+		if _, err := repo.UpsertMember(ctx, membership.MemberPatch{AbsChatID: -professionChatA, UserID: userID, Username: &username}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	api.ChatMembers["100101:1"] = telego.MemberStatusAdministrator
-	api.ChatMembers["100102:2"] = telego.MemberStatusLeft
-	api.ChatMemberUsers["100101:7"] = telego.User{Username: "alice", FirstName: "Алиса"}
-	api.ChatMemberUsers["100101:8"] = telego.User{Username: "bob_42", FirstName: "Борис"}
-	api.ChatMemberUsers["100101:9"] = telego.User{Username: "previous_alice", FirstName: "Тёзка"}
-	p := &professionsTest{t: t, menu: newProfessionsMenu(api, repo, store.DB()), api: api, board: "original-inline-message"}
+	api.ChatMemberUsers["1000000100101:1"] = telego.User{Username: "owner"}
+	api.ChatMemberUsers["1000000100101:7"] = telego.User{Username: "alice"}
+	api.ChatMemberUsers["1000000100101:8"] = telego.User{Username: "bob_42"}
+	api.ChatMemberUsers["1000000100102:1"] = telego.User{Username: "owner"}
+	p := &professionsTest{t: t, menu: newProfessionsMenu(api, repo, store.DB()), api: api}
 	return p, func() {
 		if err := store.Close(); err != nil {
 			t.Fatal(err)
@@ -64,17 +65,38 @@ func newProfessionsTest(t *testing.T) (*professionsTest, func()) {
 	}
 }
 
-func (p *professionsTest) article(actor int64, query string) *telego.InlineQueryResultArticle {
+const (
+	professionChatA int64 = -1000000100101
+	professionChatB int64 = -1000000100102
+)
+
+func professionTestID(chat int64, post int) string {
+	var raw [24]byte
+	binary.LittleEndian.PutUint32(raw[:], 2)
+	binary.LittleEndian.PutUint64(raw[4:], uint64(chat+1_000_000_000_000))
+	binary.LittleEndian.PutUint32(raw[12:], uint32(post))
+	return base64.RawURLEncoding.EncodeToString(raw[:])
+}
+
+func (p *professionsTest) article(actor int64, query, title string) *telego.InlineQueryResultArticle {
 	p.t.Helper()
 	results, handled := p.menu.results(context.Background(), telego.InlineQuery{From: telego.User{ID: actor}, Query: query})
-	if !handled || len(results) != 1 {
-		p.t.Fatalf("query %q: handled=%v, results=%+v", query, handled, results)
+	for _, result := range results {
+		article := result.(*telego.InlineQueryResultArticle)
+		if handled && article.Title == title {
+			return article
+		}
 	}
-	article := results[0].(*telego.InlineQueryResultArticle)
-	if article.Title != "Реестр профессий" {
-		p.t.Fatalf("unexpected registry title: %q", article.Title)
-	}
-	return article
+	p.t.Fatalf("query %q: no result %q, got %+v", query, title, results)
+	return nil
+}
+
+func (p *professionsTest) observe(actor, chat int64, post int, article *telego.InlineQueryResultArticle) {
+	p.menu.observe(&telego.Message{
+		Chat: telego.Chat{ID: chat, Type: telego.ChatTypeSupergroup}, MessageID: post,
+		From: &telego.User{ID: actor}, ViaBot: &telego.User{ID: 123, IsBot: true},
+		ReplyMarkup: article.ReplyMarkup,
+	}, 123)
 }
 
 func (p *professionsTest) press(actor int64, button telego.InlineKeyboardButton) (*telego.InlineKeyboardMarkup, string) {
@@ -92,12 +114,12 @@ func (p *professionsTest) press(actor int64, button telego.InlineKeyboardButton)
 			if args.InlineMessageID != p.board || args.MessageID != 0 || args.ChatID.ID != 0 {
 				p.t.Fatalf("updated wrong message: %+v", args)
 			}
-			if strings.Contains(args.Text, "alice") || strings.Contains(args.Text, "Аналитик") || strings.Contains(args.Text, "Первая группа") {
+			if strings.Contains(args.Text, "@alice") || strings.Contains(args.Text, "@owner") {
 				p.t.Fatalf("private data appeared in shared edit: %q", args.Text)
 			}
 			for _, row := range args.ReplyMarkup.InlineKeyboard {
 				for _, button := range row {
-					if strings.Contains(button.Text, "alice") || strings.Contains(button.Text, "Аналитик") || strings.Contains(button.Text, "Первая группа") {
+					if strings.Contains(button.Text, "@alice") || strings.Contains(button.Text, "@owner") {
 						p.t.Fatalf("private data appeared on shared button: %q", button.Text)
 					}
 				}
@@ -134,178 +156,132 @@ func professionsButton(t *testing.T, kb *telego.InlineKeyboardMarkup, text strin
 	return telego.InlineKeyboardButton{}
 }
 
-func (p *professionsTest) open(actor int64, choice string) (*telego.InlineKeyboardMarkup, string) {
+func (p *professionsTest) open(chat int64, post int, query, title string) *telego.InlineKeyboardMarkup {
 	p.t.Helper()
-	article := p.article(actor, "professions")
-	kb, _ := p.press(actor, professionsButton(p.t, article.ReplyMarkup, "Выбрать чат"))
-	return p.press(actor, professionsButton(p.t, kb, choice))
+	result := p.article(1, query, title)
+	p.observe(1, chat, post, result)
+	p.board = professionTestID(chat, post)
+	kb, _ := p.press(1, professionsButton(p.t, result.ReplyMarkup, "Открыть"))
+	return kb
 }
 
-func (p *professionsTest) start(kb *telego.InlineKeyboardMarkup, action string) (*telego.InlineKeyboardMarkup, string) {
+func (p *professionsTest) click(kb *telego.InlineKeyboardMarkup, label string) *telego.InlineKeyboardMarkup {
 	p.t.Helper()
-	kb, _ = p.press(1, professionsButton(p.t, kb, action))
-	entry := professionsButton(p.t, kb, "Ввести текст")
-	if entry.SwitchInlineQueryCurrentChat == nil {
-		p.t.Fatal("text entry did not use native inline mode")
-	}
-	return kb, *entry.SwitchInlineQueryCurrentChat
+	kb, _ = p.press(1, professionsButton(p.t, kb, label))
+	return kb
 }
 
-func (p *professionsTest) submit(kb *telego.InlineKeyboardMarkup, value string) (*telego.InlineKeyboardMarkup, string) {
-	p.t.Helper()
-	article := p.article(1, value)
-	if strings.Contains(article.InputMessageContent.(*telego.InputTextMessageContent).MessageText, "alice") {
-		p.t.Fatal("posting the suggestion would disclose a handle")
-	}
-	return p.press(1, professionsButton(p.t, kb, "Предпросмотр"))
-}
-
-func (p *professionsTest) save(kb *telego.InlineKeyboardMarkup, action, value string) {
-	p.t.Helper()
-	draft, entry := p.start(kb, action)
-	preview, answer := p.submit(draft, entry+value+";")
-	if !strings.Contains(strings.ToLower(answer), strings.ToLower(strings.Fields(value)[0])) {
-		p.t.Fatalf("preview %q did not identify %q", answer, value)
-	}
-	if _, answer := p.press(1, professionsButton(p.t, preview, "Сохранить")); answer != "Сохранено." {
-		p.t.Fatalf("save: %q", answer)
-	}
-}
-
-func TestProfessionsBrowseAndPersistAssignmentsByUserID(t *testing.T) {
+func TestProfessionsStackMultiSelectAndChatIsolation(t *testing.T) {
 	p, reopen := newProfessionsTest(t)
-	kb, answer := p.open(1, "1")
-	if !strings.Contains(answer, "пока нет") {
-		t.Fatalf("expected empty professions: %q", answer)
+	a := p.article(1, "professions set-stack", "Выбрать технологии")
+	b := p.article(1, "professions set-stack clo", "Clojure")
+	p.observe(1, professionChatB, 5, b)
+	p.observe(1, professionChatA, 5, a)
+	p.board = professionTestID(professionChatB, 5)
+	if kb, _ := p.press(1, professionsButton(t, a.ReplyMarkup, "Открыть")); kb != nil {
+		t.Fatal("a different group opened the first menu")
 	}
-	for _, name := range []string{"Аналитик", "Инженер"} {
-		p.save(kb, "Добавить профессию", name)
-		kb, _ = p.open(1, "1")
+	p.board = professionTestID(professionChatA, 5)
+	kb := p.click(a.ReplyMarkup, "Открыть")
+	kb = p.click(kb, "Python")
+	kb = p.click(kb, "Docker")
+	kb = p.click(kb, "Разделы")
+	kb = p.click(kb, "Инструменты и архитектура")
+	kb = p.click(kb, "C4")
+	kb = p.click(kb, "oh-my-pi")
+	kb = p.click(kb, "pi")
+	kb = p.click(kb, "Выбрано: 5")
+	kb = p.click(kb, "✓ Docker")
+	if kb, _ := p.press(7, professionsButton(t, kb, "Сохранить")); kb != nil {
+		t.Fatal("another member could save the author profile")
 	}
-	for number, handles := range map[string]string{"1": "@ALICE, bob_42", "2": "alice"} {
-		profession, _ := p.press(1, professionsButton(t, kb, number))
-		p.save(profession, "Назначить участников", handles)
+	if _, answer := p.press(1, professionsButton(t, kb, "Сохранить")); answer != "Сохранено." {
+		t.Fatalf("save: %q", answer)
 	}
-
+	p.board = professionTestID(professionChatB, 5)
+	kb = p.click(b.ReplyMarkup, "Открыть")
+	kb = p.click(kb, "Clojure")
+	p.click(kb, "Сохранить")
 	reopen()
-	p.api.ChatMemberUsers["100101:7"] = telego.User{Username: "new_alice"}
-	p.api.ChatMemberUsers["100101:8"] = telego.User{FirstName: "Борис & Co"}
-	kb, answer = p.open(2, "1")
-	if !strings.Contains(answer, "Аналитик") || !strings.Contains(answer, "Инженер") {
-		t.Fatalf("persistent directory missing: %q", answer)
+	kb = p.open(professionChatA, 6, "professions set-stack", "Выбрать технологии")
+	professionsButton(t, kb, "✓ Python")
+	professionsButton(t, kb, "Docker")
+	kb = p.click(kb, "Выбрано: 4")
+	for _, name := range []string{"✓ C4", "✓ oh-my-pi", "✓ pi"} {
+		professionsButton(t, kb, name)
 	}
-	for _, number := range []string{"1", "2"} {
-		_, answer := p.press(2, professionsButton(t, kb, number))
-		if !strings.Contains(answer, "new_alice") || strings.Contains(answer, "previous_alice") || strings.Contains(answer, "Борис & Co") != (number == "1") {
-			t.Fatalf("profession %s has wrong participants: %q", number, answer)
+	kb = p.open(professionChatB, 6, "professions set-stack", "Выбрать технологии")
+	kb = p.click(kb, "Выбрано: 1")
+	professionsButton(t, kb, "✓ Clojure")
+}
+
+func TestProfessionsKeepsRapidSelectionsFromOneKeyboard(t *testing.T) {
+	p, _ := newProfessionsTest(t)
+	kb := p.open(professionChatA, 9, "professions set-stack", "Выбрать технологии")
+	python := professionsButton(t, kb, "Python")
+	docker := professionsButton(t, kb, "Docker")
+	p.press(1, python)
+	p.press(1, python)
+	kb, _ = p.press(1, docker)
+	kb = p.click(kb, "Выбрано: 2")
+	professionsButton(t, kb, "✓ Python")
+	professionsButton(t, kb, "✓ Docker")
+}
+
+func TestProfessionsSelfAssignAndBrowsePrivately(t *testing.T) {
+	p, _ := newProfessionsTest(t)
+	if err := p.menu.db.Update(func(tx *bolt.Tx) error {
+		return tx.Bucket(professionsBucket).Put(storage.ChatKey(-professionChatA), []byte(`[{"name":"Аналитик","user_ids":[1]}]`))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	kb := p.open(professionChatA, 5, "professions set arch", "Software Architect")
+	kb = p.click(kb, "Software Architect")
+	kb = p.click(kb, "Full-Stack Developer")
+	p.click(kb, "Сохранить")
+	kb = p.open(professionChatA, 6, "professions set-stack invented-tool", "Выбрать технологии")
+	kb = p.click(kb, "Python")
+	p.click(kb, "Отмена")
+	kb = p.open(professionChatA, 7, "professions", "Реестр профессий")
+	kb, summary := p.press(1, professionsButton(t, kb, "Все участники"))
+	if !strings.Contains(summary, "@alice") || !strings.Contains(summary, "@owner") {
+		t.Fatalf("all participants: %q", summary)
+	}
+	kb = p.click(kb, "По профессиям")
+	kb, summary = p.press(1, professionsButton(t, kb, "Software Architect"))
+	if !strings.Contains(summary, "@owner") || strings.Contains(summary, "@alice") {
+		t.Fatalf("filtered participants: %q", summary)
+	}
+	kb, profile := p.press(1, professionsButton(t, kb, "Участник 1"))
+	for _, want := range []string{"Full-Stack Developer", "Аналитик"} {
+		if !strings.Contains(profile, want) {
+			t.Fatalf("profile %q does not contain %q", profile, want)
 		}
 	}
-	if _, answer := p.open(1, "2"); !strings.Contains(answer, "пока нет") {
-		t.Fatalf("first chat leaked into second directory: %q", answer)
+	_, profile = p.press(1, professionsButton(t, kb, "Далее ›"))
+	if !strings.Contains(profile, "Стек: не указан") {
+		t.Fatalf("second page lost stack state: %q", profile)
 	}
 }
 
-func TestProfessionsCallbacksRecheckAuthorizationAndOriginalMessage(t *testing.T) {
-	p, reopen := newProfessionsTest(t)
-	member, _ := p.open(2, "1")
-	for _, row := range member.InlineKeyboard {
-		for _, button := range row {
-			if button.Text == "Добавить профессию" {
-				t.Fatal("non-admin received a write button")
-			}
-		}
-	}
-	admin, _ := p.open(1, "1")
-	add := professionsButton(t, admin, "Добавить профессию")
-	if kb, _ := p.press(2, add); kb != nil {
-		t.Fatal("a different user could operate the menu")
-	}
-	draft, entry := p.start(admin, "Добавить профессию")
-	preview, _ := p.submit(draft, entry+"Аналитик;")
-	save := professionsButton(t, preview, "Сохранить")
-	p.board = "different-inline-message"
-	if kb, _ := p.press(1, save); kb != nil {
-		t.Fatal("confirmation worked on the wrong inline message")
-	}
-	p.board = "original-inline-message"
-	p.api.ChatMembers["100101:1"] = telego.MemberStatusMember
-	if kb, _ := p.press(1, save); kb != nil {
-		t.Fatal("confirmation worked after admin rights were revoked")
-	}
-	p.api.ChatMembers["100101:1"] = telego.MemberStatusAdministrator
-	reopen()
-	if kb, _ := p.press(1, save); kb != nil {
-		t.Fatal("confirmation worked after restart")
-	}
-	if _, answer := p.open(1, "1"); !strings.Contains(answer, "пока нет") {
-		t.Fatalf("unauthorized change persisted: %q", answer)
-	}
-	p.api.ChatMembers["100101:2"] = telego.MemberStatusLeft
-	readButton := professionsButton(t, member, "Список профессий")
-	if kb, answer := p.press(2, readButton); kb != nil || strings.Contains(answer, "пока нет") {
-		t.Fatalf("former member accessed directory: %q, %+v", answer, kb)
-	}
-}
-
-func TestProfessionsRejectUnknownAndFreezeExactPreview(t *testing.T) {
+func TestProfessionsDoesNotOpenUnboundOrReplayedPost(t *testing.T) {
 	p, _ := newProfessionsTest(t)
-	kb, _ := p.open(1, "1")
-	draft, entry := p.start(kb, "Добавить профессию")
-	p.article(1, entry+"Инженер;")
-	if preview, answer := p.submit(draft, entry+"Дизайнер;"); preview != nil || !strings.Contains(answer, "заново") {
-		t.Fatalf("conflicting final input was accepted: %+v, %q", preview, answer)
+	article := p.article(1, "professions", "Реестр профессий")
+	open := professionsButton(t, article.ReplyMarkup, "Открыть")
+	p.board = professionTestID(professionChatA, 12)
+	if kb, answer := p.press(1, open); kb != nil || !strings.Contains(answer, "не привязано") {
+		t.Fatalf("unbound menu: %q", answer)
 	}
-	p.press(1, professionsButton(t, draft, "Отмена"))
-	kb, _ = p.open(1, "1")
-	draft, entry = p.start(kb, "Добавить профессию")
-	preview, answer := p.submit(draft, entry+"Аналитик;")
-	if !strings.Contains(answer, "Аналитик") {
-		t.Fatalf("expected exact preview: %q", answer)
+	p.observe(1, professionChatA, 12, article)
+	p.observe(1, professionChatB, 13, article)
+	p.board = professionTestID(professionChatB, 13)
+	if kb, _ := p.press(1, open); kb != nil {
+		t.Fatal("second post rebound menu")
 	}
-	p.article(1, entry+"Инженер;")
-	p.press(1, professionsButton(t, preview, "Сохранить"))
-	kb, answer = p.open(1, "1")
-	if !strings.Contains(answer, "Аналитик") || strings.Contains(answer, "Инженер") {
-		t.Fatalf("late inline update changed preview: %q", answer)
-	}
-	profession, _ := p.press(1, professionsButton(t, kb, "1"))
-	draft, entry = p.start(profession, "Назначить участников")
-	if preview, answer := p.submit(draft, entry+"alice, alicia;"); preview != nil || !strings.Contains(answer, "alicia") || !strings.Contains(answer, "напишет") {
-		t.Fatalf("unknown handle lacked actionable rejection: %+v, %q", preview, answer)
-	}
-	p.press(1, professionsButton(t, draft, "Отмена"))
-	if _, answer := p.press(1, professionsButton(t, kb, "1")); !strings.Contains(answer, "пока нет") {
-		t.Fatalf("unknown handle caused a partial assignment: %q", answer)
-	}
-}
-
-func TestProfessionsRejectDepartedTargetsAndExpiredDrafts(t *testing.T) {
-	p, _ := newProfessionsTest(t)
-	kb, _ := p.open(1, "1")
-	p.save(kb, "Добавить профессию", "Аналитик")
-	kb, _ = p.open(1, "1")
-	profession, _ := p.press(1, professionsButton(t, kb, "1"))
-	draft, entry := p.start(profession, "Назначить участников")
-	preview, answer := p.submit(draft, entry+"alice, bob_42;")
-	if !strings.Contains(answer, "alice") || !strings.Contains(answer, "bob_42") {
-		t.Fatalf("expected both targets in preview: %q", answer)
-	}
-	if entries, err := p.menu.directory(100101); err != nil || len(entries) != 1 || len(entries[0].UserIDs) != 0 {
-		t.Fatalf("inline entry or preview wrote data: %+v, %v", entries, err)
-	}
-	save := professionsButton(t, preview, "Сохранить")
-	p.api.ChatMembers["100101:8"] = telego.MemberStatusLeft
-	if kb, answer := p.press(1, save); kb != nil || !strings.Contains(answer, "bob_42") {
-		t.Fatalf("confirmation accepted after departure: %+v, %q", kb, answer)
-	}
-	p.api.ChatMembers["100101:8"] = telego.MemberStatusMember
-	for _, pending := range p.menu.drafts {
-		pending.until = time.Now().Add(-time.Second)
-	}
-	if kb, answer := p.press(1, save); kb != nil || !strings.Contains(answer, "устарела") {
-		t.Fatalf("expired confirmation accepted: %+v, %q", kb, answer)
-	}
-	if _, answer := p.press(1, professionsButton(t, kb, "1")); !strings.Contains(answer, "пока нет") {
-		t.Fatalf("rejected confirmation caused a partial assignment: %q", answer)
+	p.board = professionTestID(professionChatA, 12)
+	kb := p.click(article.ReplyMarkup, "Открыть")
+	p.api.ChatMembers["1000000100101:1"] = telego.MemberStatusLeft
+	if edited, answer := p.press(1, professionsButton(t, kb, "Все участники")); edited != nil || !strings.Contains(answer, "не подтвердил") {
+		t.Fatalf("former member accessed the directory: %q", answer)
 	}
 }

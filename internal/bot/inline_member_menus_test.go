@@ -2,6 +2,8 @@ package bot
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -81,6 +83,8 @@ func TestNativeMemberMenusEditOriginalInlineMessage(t *testing.T) {
 					return nil, fmt.Errorf("invalid inline result type %q", result.Type)
 				}
 			}
+		case "getMe":
+			result = json.RawMessage(`{"id":123456,"is_bot":true,"first_name":"Bot","username":"fixture_bot"}`)
 		case "getChatMember":
 			var params telego.GetChatMemberParams
 			if err := json.Unmarshal(body, &params); err != nil {
@@ -123,8 +127,8 @@ func TestNativeMemberMenusEditOriginalInlineMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := NewApp(tgBot, sender, log, admin, nil, nil, memberSvc, NewInlineService(log))
-	a.AttachMemberMenus(store.DB())
+	a := NewApp(tgBot, sender, log, admin, stats.NewBuffer(nil, log), nil, memberSvc, NewInlineService(log))
+	a.AttachMemberMenus(store.DB(), tgBot.ID())
 	h, err := th.NewBotHandler(tgBot, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -152,6 +156,19 @@ func TestNativeMemberMenusEditOriginalInlineMessage(t *testing.T) {
 				t.Fatal("menu result sent a slash command")
 			}
 			messageID := "inline-message-" + feature
+			if feature == "professions" {
+				var wire [24]byte
+				binary.LittleEndian.PutUint32(wire[:], 2)
+				owner := int64(chatID + 1_000_000_000_000)
+				binary.LittleEndian.PutUint64(wire[4:], uint64(owner))
+				binary.LittleEndian.PutUint32(wire[12:], 123)
+				messageID = base64.RawURLEncoding.EncodeToString(wire[:])
+				dispatch(t, telego.Update{Message: &telego.Message{
+					MessageID: 123, Chat: telego.Chat{ID: chatID, Type: telego.ChatTypeSupergroup},
+					From: &actor, ViaBot: &telego.User{ID: tgBot.ID(), IsBot: true},
+					Text: results[0].Content.MessageText, ReplyMarkup: &results[0].ReplyMarkup,
+				}})
+			}
 			click := func(id, data string) {
 				t.Helper()
 				dispatch(t, telego.Update{CallbackQuery: &telego.CallbackQuery{
@@ -167,6 +184,11 @@ func TestNativeMemberMenusEditOriginalInlineMessage(t *testing.T) {
 			}
 			if strings.Contains(edits[0].Text, chatTitle) || strings.Contains(edits[0].Text, "inactive_member") {
 				t.Fatal("shared menu disclosed chat or participant identity")
+			}
+			if feature == "professions" {
+				for _, button := range []string{"Все участники", "По профессиям"} {
+					professionsButton(t, edits[0].ReplyMarkup, button)
+				}
 			}
 			if feature == "inactive" {
 				click("page", edits[0].ReplyMarkup.InlineKeyboard[0][0].CallbackData)
